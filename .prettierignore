@@ -1,0 +1,11 @@
+node_modules
+dist
+coverage
+*.md
+*.json
+*.yaml
+*.yml
+.git
+.husky
+tests/.test-output
+*.hbs

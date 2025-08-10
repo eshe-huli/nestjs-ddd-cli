@@ -7,13 +7,23 @@
     "ddd": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc && cp -r src/templates dist/",
+    "build": "tsc -p tsconfig.build.json && cp -r src/templates dist/",
+    "build:watch": "tsc --watch",
     "dev": "ts-node src/index.ts",
     "link": "npm run build && npm link",
     "unlink": "npm unlink -g nestjs-ddd-cli",
-    "prepublishOnly": "npm run clean && npm run build",
-    "clean": "rm -rf dist",
-    "test": "echo \"No test specified\" && exit 0"
+    "prepublishOnly": "npm run clean && npm run build && npm run test",
+    "clean": "rm -rf dist coverage",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:cov": "jest --coverage",
+    "test:e2e": "jest --config ./jest.e2e.config.js",
+    "lint": "eslint src --ext .ts",
+    "lint:fix": "eslint src --ext .ts --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "typecheck": "tsc --noEmit",
+    "prepare": "husky"
   },
   "keywords": [
     "nestjs",
@@ -48,18 +58,54 @@
   "dependencies": {
     "@nestjs/cqrs": "^11.0.3",
     "chalk": "^4.1.2",
+    "cli-spinners": "^3.2.0",
     "commander": "^11.1.0",
+    "cosmiconfig": "^9.0.0",
+    "dotenv": "^17.2.1",
+    "figlet": "^1.8.2",
     "fs-extra": "^11.2.0",
     "handlebars": "^4.7.8",
     "inquirer": "^8.2.6",
-    "pluralize": "^8.0.0"
+    "joi": "^18.0.0",
+    "ora": "^8.2.0",
+    "pluralize": "^8.0.0",
+    "yargs": "^17.7.2"
   },
   "devDependencies": {
+    "@jest/globals": "^30.0.5",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^11.0.3",
+    "@semantic-release/npm": "^12.0.2",
+    "@types/figlet": "^1.7.0",
     "@types/fs-extra": "^11.0.4",
     "@types/inquirer": "^9.0.7",
+    "@types/jest": "^30.0.0",
     "@types/node": "^20.10.5",
     "@types/pluralize": "^0.0.33",
+    "@typescript-eslint/eslint-plugin": "^8.39.0",
+    "@typescript-eslint/parser": "^8.39.0",
+    "eslint": "^9.33.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-jest": "^28.14.0",
+    "eslint-plugin-prettier": "^5.5.4",
+    "husky": "^9.1.7",
+    "jest": "^30.0.5",
+    "lint-staged": "^15.5.2",
+    "prettier": "^3.6.2",
+    "semantic-release": "^24.2.7",
+    "ts-jest": "^29.4.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
+  },
+  "lint-staged": {
+    "*.ts": [
+      "eslint --fix",
+      "prettier --write",
+      "jest --bail --findRelatedTests"
+    ],
+    "*.{json,md,yml,yaml}": [
+      "prettier --write"
+    ]
   }
 }

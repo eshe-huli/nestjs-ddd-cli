@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run clean:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm pack:*)",
+      "Bash(git add:*)",
+      "Bash(git push:*)",
+      "Bash(npm whoami:*)",
+      "Bash(npm publish:*)",
+      "Bash(npm view:*)",
+      "Bash(npm version:*)",
+      "Bash(git commit:*)",
+      "WebFetch(domain:www.npmjs.com)",
+      "Bash(git tag:*)",
+      "Bash(npm install:*)",
+      "Bash(npx husky init:*)",
+      "Bash(chmod:*)",
+      "Bash(mkdir:*)",
+      "Bash(rm:*)",
+      "Bash(mv:*)",
+      "Bash(npm run typecheck:*)",
+      "Bash(cp:*)",
+      "Bash(node:*)"
+    ],
+    "deny": []
+  }
+}
