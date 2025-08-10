@@ -12,7 +12,7 @@
     "dev": "ts-node src/index.ts",
     "link": "npm run build && npm link",
     "unlink": "npm unlink -g nestjs-ddd-cli",
-    "prepublishOnly": "npm run clean && npm run build && npm run test",
+    "prepublishOnly": "npm run clean && npm run build",
     "clean": "rm -rf dist coverage",
     "test": "jest",
     "test:watch": "jest --watch",

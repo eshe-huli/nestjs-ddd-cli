@@ -12,7 +12,7 @@ const program = new Command();
 program
   .name('ddd')
   .description('CLI for generating NestJS DDD boilerplate code')
-  .version('1.0.0');
+  .version('2.0.0');
 
 program
   .command('generate <type> <name>')
