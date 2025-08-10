@@ -1,0 +1,40 @@
+{
+  "name": "nestjs-ddd-cli",
+  "version": "1.0.0",
+  "description": "CLI for generating NestJS DDD boilerplate code",
+  "main": "dist/index.js",
+  "bin": {
+    "ddd": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc && cp -r src/templates dist/",
+    "dev": "ts-node src/index.ts",
+    "link": "npm run build && npm link",
+    "unlink": "npm unlink -g nestjs-ddd-cli"
+  },
+  "keywords": [
+    "nestjs",
+    "ddd",
+    "cli",
+    "generator"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@nestjs/cqrs": "^11.0.3",
+    "chalk": "^4.1.2",
+    "commander": "^11.1.0",
+    "fs-extra": "^11.2.0",
+    "handlebars": "^4.7.8",
+    "inquirer": "^8.2.6",
+    "pluralize": "^8.0.0"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.0.4",
+    "@types/inquirer": "^9.0.7",
+    "@types/node": "^20.10.5",
+    "@types/pluralize": "^0.0.33",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}

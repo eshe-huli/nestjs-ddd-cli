@@ -1,0 +1,9 @@
+{{#each exports}}
+import { {{this.name}} } from "./{{this.file}}";
+{{/each}}
+
+export const {{arrayName}} = [
+{{#each exports}}
+  {{this.name}},
+{{/each}}
+];

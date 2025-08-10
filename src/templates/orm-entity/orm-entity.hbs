@@ -1,0 +1,10 @@
+import { BaseOrmEntity } from "@core/infrastructure/persistence/orm-entities/base.orm-entity";
+import { Column, Entity } from "typeorm";
+
+@Entity("{{tableName}}")
+export class {{entityNamePascal}}OrmEntity extends BaseOrmEntity {
+  // Add your columns here
+  // Example:
+  // @Column()
+  // property_name: string;
+}

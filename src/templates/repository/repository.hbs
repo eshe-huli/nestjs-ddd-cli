@@ -1,0 +1,54 @@
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
+import { {{entityNamePascal}}Mapper } from "@modules/{{moduleNameKebab}}/infrastructure/mappers/{{entityNameKebab}}.mapper";
+import { {{entityNamePascal}}OrmEntity } from "@modules/{{moduleNameKebab}}/infrastructure/orm-entities/{{entityNameKebab}}.orm-entity";
+import { {{entityNamePascal}}Entity } from "@modules/{{moduleNameKebab}}/application/domain/entities/{{entityNameKebab}}.entity";
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class {{entityNamePascal}}Repository {
+  constructor(
+    @InjectRepository({{entityNamePascal}}OrmEntity)
+    private readonly repository: Repository<{{entityNamePascal}}OrmEntity>,
+    private readonly mapper: {{entityNamePascal}}Mapper,
+  ) {}
+
+  async create(entity: {{entityNamePascal}}Entity): Promise<{{entityNamePascal}}Entity> {
+    const ormEntity = this.mapper.toOrmEntity(entity);
+    const savedOrmEntity = await this.repository.save(ormEntity);
+    return this.mapper.toDomainEntity(savedOrmEntity);
+  }
+
+  async findById(id: string): Promise<{{entityNamePascal}}Entity | null> {
+    const ormEntity = await this.repository.findOne({
+      where: { id },
+    });
+    if (!ormEntity) {
+      return null;
+    }
+    return this.mapper.toDomainEntity(ormEntity);
+  }
+
+  async findAll(): Promise<{{entityNamePascal}}Entity[]> {
+    const ormEntities = await this.repository.find();
+    if (!ormEntities) {
+      return [];
+    }
+    return ormEntities.map((ormEntity) =>
+      this.mapper.toDomainEntity(ormEntity),
+    );
+  }
+
+  async update(
+    id: string,
+    entity: {{entityNamePascal}}Entity,
+  ): Promise<{{entityNamePascal}}Entity> {
+    const ormEntity = this.mapper.toOrmEntity(entity);
+    await this.repository.update(id, ormEntity);
+    return entity;
+  }
+
+  async delete(id: string): Promise<void> {
+    await this.repository.delete(id);
+  }
+}

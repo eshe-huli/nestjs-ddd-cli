@@ -1,0 +1,31 @@
+import { BaseMapper } from "@core/mappers/base.mapper";
+import { {{entityNamePascal}}OrmEntity } from "@modules/{{moduleNameKebab}}/infrastructure/orm-entities/{{entityNameKebab}}.orm-entity";
+import { {{entityNamePascal}}Entity } from "@modules/{{moduleNameKebab}}/application/domain/entities/{{entityNameKebab}}.entity";
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class {{entityNamePascal}}Mapper extends BaseMapper<
+  {{entityNamePascal}}Entity,
+  {{entityNamePascal}}OrmEntity
+> {
+  toOrmEntity(domainEntity: {{entityNamePascal}}Entity): {{entityNamePascal}}OrmEntity {
+    this.validateDomainEntity(domainEntity);
+
+    const ormEntity = new {{entityNamePascal}}OrmEntity(domainEntity.id);
+    ormEntity.id = domainEntity.id;
+    // Map your properties from camelCase to snake_case
+    // Example: ormEntity.property_name = domainEntity.propertyName;
+    
+    return ormEntity;
+  }
+
+  toDomainEntity(ormEntity: {{entityNamePascal}}OrmEntity): {{entityNamePascal}}Entity {
+    const entity = new {{entityNamePascal}}Entity({
+      id: ormEntity.id,
+      // Map your properties from snake_case to camelCase
+      // Example: propertyName: ormEntity.property_name,
+    });
+    
+    return entity;
+  }
+}

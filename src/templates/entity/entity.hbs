@@ -1,0 +1,19 @@
+import {
+  BaseDomainEntity,
+  BaseDomainEntityProps,
+} from "@core/entities/base-domain.entity";
+
+export interface {{entityNamePascal}}EntityProps extends BaseDomainEntityProps {
+  // Add your domain properties here
+  // Example: name: string;
+}
+
+export class {{entityNamePascal}}Entity extends BaseDomainEntity {
+  // Add your domain properties here
+  // Example: name: string;
+
+  constructor(props: {{entityNamePascal}}EntityProps) {
+    super();
+    Object.assign(this, props);
+  }
+}
