@@ -10,15 +10,40 @@
     "build": "tsc && cp -r src/templates dist/",
     "dev": "ts-node src/index.ts",
     "link": "npm run build && npm link",
-    "unlink": "npm unlink -g nestjs-ddd-cli"
+    "unlink": "npm unlink -g nestjs-ddd-cli",
+    "prepublishOnly": "npm run clean && npm run build",
+    "clean": "rm -rf dist",
+    "test": "echo \"No test specified\" && exit 0"
   },
   "keywords": [
     "nestjs",
     "ddd",
     "cli",
-    "generator"
+    "generator",
+    "domain-driven-design",
+    "cqrs",
+    "boilerplate",
+    "scaffolding",
+    "typescript",
+    "nestjs-cli"
   ],
-  "author": "",
+  "author": "Ben Ouattara ben.ouattara@outlook.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eshe-huli/nestjs-ddd-cli"
+  },
+  "bugs": {
+    "url": "https://github.com/eshe-huli/nestjs-ddd-cli/issues"
+  },
+  "homepage": "https://github.com/eshe-huli/nestjs-ddd-cli#readme",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "license": "MIT",
   "dependencies": {
     "@nestjs/cqrs": "^11.0.3",

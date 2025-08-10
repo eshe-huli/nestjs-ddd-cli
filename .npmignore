@@ -1,0 +1,40 @@
+# Source files
+src/
+*.ts
+!dist/**/*.d.ts
+
+# Config files
+tsconfig.json
+.gitignore
+install.sh
+
+# Development files
+node_modules/
+.git/
+.vscode/
+.idea/
+*.log
+*.swp
+.DS_Store
+
+# Test files
+*.spec.ts
+*.test.ts
+coverage/
+.nyc_output/
+
+# Documentation that shouldn't be in npm package
+docs/
+examples/
+*.md
+!README.md
+
+# Build artifacts not needed
+*.map
+!dist/**/*.map
+
+# Local development
+.env
+.env.local
+yarn.lock
+package-lock.json
