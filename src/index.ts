@@ -5,6 +5,9 @@ import chalk from 'chalk';
 import { generateModule } from './commands/generate-module';
 import { generateEntity } from './commands/generate-entity';
 import { generateUseCase } from './commands/generate-usecase';
+import { generateService } from './commands/generate-service';
+import { generateEvent } from './commands/generate-event';
+import { generateQuery } from './commands/generate-query';
 import { generateAll } from './commands/generate-all';
 
 const program = new Command();
@@ -17,7 +20,7 @@ program
 program
   .command('generate <type> <name>')
   .alias('g')
-  .description('Generate boilerplate code')
+  .description('Generate boilerplate code (types: module, entity, usecase, service, event, query, all)')
   .option('-m, --module <module>', 'Module name')
   .option('-p, --path <path>', 'Base path for generation', process.cwd())
   .option('--skip-orm', 'Skip ORM entity generation')
@@ -38,12 +41,21 @@ program
         case 'use-case':
           await generateUseCase(name, options);
           break;
+        case 'service':
+          await generateService(name, options);
+          break;
+        case 'event':
+          await generateEvent(name, options);
+          break;
+        case 'query':
+          await generateQuery(name, options);
+          break;
         case 'all':
           await generateAll(name, options);
           break;
         default:
           console.error(chalk.red(`Unknown type: ${type}`));
-          console.log(chalk.yellow('Available types: module, entity, usecase, all'));
+          console.log(chalk.yellow('Available types: module, entity, usecase, service, event, query, all'));
           process.exit(1);
       }
     } catch (error) {

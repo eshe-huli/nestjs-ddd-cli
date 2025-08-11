@@ -4,15 +4,15 @@ A CLI tool for generating NestJS boilerplate code following pragmatic DDD/CQRS p
 
 ## Installation
 
+**From NPM (Recommended):**
 ```bash
-cd nestjs-ddd-cli
-chmod +x install.sh
-./install.sh
+npm install -g nestjs-ddd-cli
 ```
 
-Or manually:
-
+**From Source:**
 ```bash
+git clone https://github.com/eshe-huli/nestjs-ddd-cli
+cd nestjs-ddd-cli
 npm install
 npm run build
 npm link
@@ -40,6 +40,15 @@ ddd generate entity User -m user-management
 # Generate a use case
 ddd generate usecase CreateUser -m user-management
 
+# Generate a domain service
+ddd generate service UserValidation -m user-management
+
+# Generate a domain event
+ddd generate event UserCreated -m user-management
+
+# Generate a query handler
+ddd generate query GetUser -m user-management
+
 # Generate everything for an entity within existing module
 ddd generate all User -m user-management
 ```
@@ -54,28 +63,41 @@ ddd generate all User -m user-management
 - `--with-events`: Include domain events
 - `--with-queries`: Include query handlers
 
+## Available Generators
+
+| Generator | Command | Description |
+|-----------|---------|-------------|
+| **Module** | `ddd generate module <name>` | Creates complete DDD module structure |
+| **Entity** | `ddd generate entity <name> -m <module>` | Domain entity with ORM mapping |
+| **Use Case** | `ddd generate usecase <name> -m <module>` | CQRS command handler |
+| **Domain Service** | `ddd generate service <name> -m <module>` | Domain service for business logic |
+| **Domain Event** | `ddd generate event <name> -m <module>` | Domain event for CQRS |
+| **Query Handler** | `ddd generate query <name> -m <module>` | CQRS query handler |
+| **Complete CRUD** | `ddd scaffold <name> -m <module>` | All files for an entity |
+| **All Entity Files** | `ddd generate all <name> -m <module>` | Entity + related files |
+
 ## Generated Structure
 
 ```
 modules/
 └── [module-name]/
     ├── application/
-    │   ├── commands/
-    │   ├── controllers/
+    │   ├── commands/           # CQRS command handlers
+    │   ├── controllers/        # REST controllers
     │   ├── domain/
-    │   │   ├── entities/
-    │   │   ├── events/
-    │   │   ├── services/
-    │   │   └── usecases/
+    │   │   ├── entities/       # Domain entities
+    │   │   ├── events/         # Domain events
+    │   │   ├── services/       # Domain services
+    │   │   └── usecases/       # Use cases/command handlers
     │   ├── dto/
-    │   │   ├── requests/
-    │   │   └── responses/
-    │   └── queries/
+    │   │   ├── requests/       # Request DTOs
+    │   │   └── responses/      # Response DTOs
+    │   └── queries/            # CQRS query handlers
     ├── infrastructure/
-    │   ├── mappers/
-    │   ├── orm-entities/
-    │   └── repositories/
-    └── [module-name].module.ts
+    │   ├── mappers/            # Domain ↔ ORM mappers
+    │   ├── orm-entities/       # Database entities
+    │   └── repositories/       # Repository implementations
+    └── [module-name].module.ts # NestJS module
 ```
 
 ## Examples
@@ -99,11 +121,20 @@ ddd scaffold Policy -m policies
 ddd generate all Coverage -m policies
 ```
 
-### Add a new use case to existing entity
+### Add individual DDD components
 
 ```bash
-# Generate a new use case for an existing entity
+# Generate a new use case
 ddd generate usecase ApproveCoverage -m policies
+
+# Generate a domain service for business logic
+ddd generate service PolicyValidation -m policies
+
+# Generate a domain event
+ddd generate event PolicyApproved -m policies
+
+# Generate a query handler
+ddd generate query GetPolicyDetails -m policies
 ```
 
 ## Philosophy

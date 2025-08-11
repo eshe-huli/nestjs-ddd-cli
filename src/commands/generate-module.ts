@@ -73,7 +73,7 @@ function getArrayNameFromPath(indexPath: string): string {
     'repositories': 'Repositories',
   };
   
-  return mapping[lastPart] || 'Exports';
+  return (lastPart && mapping[lastPart]) || 'Exports';
 }
 
 async function generateIndexFile(filePath: string, arrayName: string) {

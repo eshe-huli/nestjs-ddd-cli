@@ -1,0 +1,9 @@
+import { IEvent } from '@nestjs/cqrs';
+
+export class {{entityName}}Event implements IEvent {
+  constructor(
+    public readonly id: string,
+    public readonly data: any,
+    public readonly occurredAt: Date = new Date(),
+  ) {}
+}

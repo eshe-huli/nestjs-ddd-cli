@@ -1,0 +1,18 @@
+import { IQueryHandler, QueryHandler } from '@nestjs/cqrs';
+
+export class {{entityName}}Query {
+  constructor(
+    public readonly id: string,
+  ) {}
+}
+
+@QueryHandler({{entityName}}Query)
+export class {{entityName}}Handler implements IQueryHandler<{{entityName}}Query> {
+  constructor() {}
+
+  async execute(query: {{entityName}}Query): Promise<any> {
+    const { id } = query;
+    // Add your query logic here
+    return null;
+  }
+}
