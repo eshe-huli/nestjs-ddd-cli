@@ -25,7 +25,7 @@ describe('Command Generators', () => {
       await execAsync(`cd ${testDir} && node ${cliPath} generate module test-module`);
       await execAsync(`cd ${testDir} && node ${cliPath} generate service TestService -m test-module`);
       
-      const servicePath = path.join(testDir, 'src/modules/test-module/application/domain/services/test-service.service.ts');
+      const servicePath = path.join(testDir, 'src/modules/test-module/domain/services/test-service.service.ts');
       const serviceExists = await fs.pathExists(servicePath);
       
       expect(serviceExists).toBe(true);
@@ -45,7 +45,7 @@ describe('Command Generators', () => {
       await execAsync(`cd ${testDir} && node ${cliPath} generate module test-module`);
       await execAsync(`cd ${testDir} && node ${cliPath} generate event TestEvent -m test-module`);
       
-      const eventPath = path.join(testDir, 'src/modules/test-module/application/domain/events/test-event.event.ts');
+      const eventPath = path.join(testDir, 'src/modules/test-module/domain/events/test-event.event.ts');
       const eventExists = await fs.pathExists(eventPath);
       
       expect(eventExists).toBe(true);

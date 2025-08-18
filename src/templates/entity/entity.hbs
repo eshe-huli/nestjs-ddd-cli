@@ -1,19 +1,23 @@
-import {
-  BaseDomainEntity,
-  BaseDomainEntityProps,
-} from "@core/entities/base-domain.entity";
-
-export interface {{entityNamePascal}}EntityProps extends BaseDomainEntityProps {
+export interface {{entityNamePascal}}EntityProps {
+  id?: string;
+  isActive?: boolean;
+  createdAt?: Date;
+  updatedAt?: Date;
+  deletedAt?: Date;
   // Add your domain properties here
   // Example: name: string;
 }
 
-export class {{entityNamePascal}}Entity extends BaseDomainEntity {
+export class {{entityNamePascal}}Entity {
+  public readonly id?: string;
+  public readonly isActive?: boolean;
+  public readonly createdAt?: Date;
+  public readonly updatedAt?: Date;
+  public readonly deletedAt?: Date;
   // Add your domain properties here
-  // Example: name: string;
+  // Example: public readonly name: string;
 
   constructor(props: {{entityNamePascal}}EntityProps) {
-    super();
     Object.assign(this, props);
   }
 }

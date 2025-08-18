@@ -1,8 +1,22 @@
-import { BaseOrmEntity } from "@core/infrastructure/persistence/orm-entities/base.orm-entity";
-import { Column, Entity } from "typeorm";
+import { Column, Entity, PrimaryGeneratedColumn } from "typeorm";
 
 @Entity("{{tableName}}")
-export class {{entityNamePascal}}OrmEntity extends BaseOrmEntity {
+export class {{entityNamePascal}}OrmEntity {
+  @PrimaryGeneratedColumn("uuid")
+  id?: string;
+
+  @Column({ name: "is_active", default: true })
+  isActive?: boolean;
+
+  @Column({ name: "created_at", type: "timestamp", default: () => "CURRENT_TIMESTAMP" })
+  createdAt?: Date;
+
+  @Column({ name: "updated_at", type: "timestamp", default: () => "CURRENT_TIMESTAMP" })
+  updatedAt?: Date;
+
+  @Column({ name: "deleted_at", type: "timestamp", nullable: true })
+  deletedAt?: Date;
+
   // Add your columns here
   // Example:
   // @Column()

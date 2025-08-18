@@ -18,7 +18,7 @@ export async function generateEntity(entityName: string, options: any) {
   const entityTemplatePath = path.join(__dirname, '../templates/entity/entity.hbs');
   const entityOutputPath = path.join(
     modulePath,
-    'application/domain/entities',
+    'domain/entities',
     `${toKebabCase(entityName)}.entity.ts`
   );
   
@@ -71,11 +71,11 @@ export async function generateEntity(entityName: string, options: any) {
   console.log(chalk.green(`✅ Entity ${entityName} generated successfully!`));
 }
 
-async function updateIndexFiles(modulePath: string, entityName: string, options: any) {
+async function updateIndexFiles(_modulePath: string, _entityName: string, options: any) {
   // This would update the index.ts files to include the new exports
   // For now, we'll just log a reminder
   console.log(chalk.yellow(`\n⚠️  Remember to update the following index files:`));
-  console.log(`   - application/domain/entities/index.ts`);
+  console.log(`   - domain/entities/index.ts`);
   if (!options.skipOrm) {
     console.log(`   - infrastructure/orm-entities/index.ts`);
   }

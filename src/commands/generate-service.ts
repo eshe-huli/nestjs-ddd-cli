@@ -18,7 +18,7 @@ export async function generateService(serviceName: string, options: any) {
   const templatePath = path.join(__dirname, '../templates/service/domain-service.hbs');
   const outputPath = path.join(
     modulePath,
-    'application/domain/services',
+    'domain/services',
     `${toKebabCase(serviceName)}.service.ts`
   );
   

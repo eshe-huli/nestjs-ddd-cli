@@ -18,7 +18,7 @@ export async function generateEvent(eventName: string, options: any) {
   const templatePath = path.join(__dirname, '../templates/event/domain-event.hbs');
   const outputPath = path.join(
     modulePath,
-    'application/domain/events',
+    'domain/events',
     `${toKebabCase(eventName)}.event.ts`
   );
   

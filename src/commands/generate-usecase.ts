@@ -1,7 +1,7 @@
 import * as path from 'path';
 import chalk from 'chalk';
 import { getModulePath, prepareTemplateData, generateFromTemplate } from '../utils/file.utils';
-import { toKebabCase, toPascalCase } from '../utils/naming.utils';
+import { toKebabCase } from '../utils/naming.utils';
 
 export async function generateUseCase(useCaseName: string, options: any) {
   if (!options.module) {
@@ -21,7 +21,7 @@ export async function generateUseCase(useCaseName: string, options: any) {
   const useCaseTemplatePath = path.join(__dirname, '../templates/usecase/create-usecase.hbs');
   const useCaseOutputPath = path.join(
     modulePath,
-    'application/domain/usecases',
+    'application/usecases',
     `${toKebabCase(useCaseName)}.use-case.ts`
   );
   
@@ -49,7 +49,7 @@ export async function generateUseCase(useCaseName: string, options: any) {
   
   console.log(chalk.green(`✅ Use case ${useCaseName} generated successfully!`));
   console.log(chalk.yellow(`\n⚠️  Remember to update the following index files:`));
-  console.log(`   - application/domain/usecases/index.ts`);
+  console.log(`   - application/usecases/index.ts`);
   console.log(`   - application/commands/index.ts`);
   console.log(`   - application/dto/requests/index.ts`);
 }

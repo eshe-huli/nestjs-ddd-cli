@@ -24,7 +24,8 @@
       "Bash(node:*)",
       "Bash(npm test)",
       "Bash(npm test:*)",
-      "Bash(git rm:*)"
+      "Bash(git rm:*)",
+      "Bash(npm run lint)"
     ],
     "deny": []
   }
