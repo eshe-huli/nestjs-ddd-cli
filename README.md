@@ -6,6 +6,11 @@ Stop writing boilerplate. Start building business logic.
 
 Generate production-ready NestJS code following proven DDD/CQRS patterns with consistent structure and immutable architecture principles.
 
+✨ **New Features**:
+- Initialize new NestJS projects with DDD structure
+- Self-update functionality to keep the CLI up to date
+- Dependency management to check and update project dependencies
+
 ## Installation
 
 **From NPM (Recommended):**
@@ -24,6 +29,43 @@ npm link
 
 ## Usage
 
+### Initialize a New NestJS Project
+
+Create a new NestJS project with DDD structure:
+
+```bash
+ddd init my-project
+```
+
+Options:
+- `-p, --path <path>` - Path where the project will be created
+- `--skip-install` - Skip dependency installation
+- `--skip-update` - Skip CLI update check
+- `--with-ddd` - Set up DDD folder structure and install required dependencies (default: true)
+
+### Update the CLI
+
+Update the CLI to the latest version:
+
+```bash
+ddd update
+```
+
+Options:
+- `-f, --force` - Force update even if already on latest version
+
+### Update Project Dependencies
+
+Check and update project dependencies:
+
+```bash
+ddd update-deps
+```
+
+Options:
+- `-p, --path <path>` - Path to the project (default: current directory)
+- `-a, --all` - Update all outdated dependencies without prompting
+
 ### Generate Complete Scaffolding
 
 Generate all files for a new entity (entity, repository, mapper, use cases, controller, etc.):
@@ -31,6 +73,11 @@ Generate all files for a new entity (entity, repository, mapper, use cases, cont
 ```bash
 ddd scaffold Product -m inventory
 ```
+
+Options:
+- `-m, --module <module>` - Module name (will be created if not exists)
+- `-p, --path <path>` - Base path for generation
+- `--install-deps` - Install required dependencies
 
 ### Generate Individual Components
 
