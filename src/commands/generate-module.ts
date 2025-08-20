@@ -2,9 +2,16 @@ import * as path from 'path';
 import chalk from 'chalk';
 import { getModulePath, prepareTemplateData, generateFromTemplate, ensureDir } from '../utils/file.utils';
 import { toKebabCase } from '../utils/naming.utils';
+import { installDependencies } from '../utils/dependency.utils';
 
 export async function generateModule(moduleName: string, options: any) {
   console.log(chalk.blue(`Generating module: ${moduleName}`));
+  
+  // Check if we need to install dependencies
+  const requiredDeps = ['@nestjs/cqrs'];
+  if (options.installDeps) {
+    await installDependencies(options.path || process.cwd(), requiredDeps);
+  }
   
   const basePath = options.path || process.cwd();
   const modulePath = getModulePath(basePath, moduleName);

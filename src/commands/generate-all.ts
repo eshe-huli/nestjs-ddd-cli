@@ -5,9 +5,16 @@ import { generateEntity } from './generate-entity';
 import { generateUseCase } from './generate-usecase';
 import { getModulePath, prepareTemplateData, generateFromTemplate, fileExists } from '../utils/file.utils';
 import { toKebabCase } from '../utils/naming.utils';
+import { installDependencies } from '../utils/dependency.utils';
 
 export async function generateAll(entityName: string, options: any) {
   console.log(chalk.blue(`🚀 Generating complete scaffolding for: ${entityName}`));
+  
+  // Check if we need to install dependencies
+  const requiredDeps = ['@nestjs/cqrs', 'class-validator', 'class-transformer'];
+  if (options.installDeps) {
+    await installDependencies(options.path || process.cwd(), requiredDeps);
+  }
   
   const moduleName = options.module || entityName;
   const basePath = options.path || process.cwd();
