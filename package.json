@@ -1,6 +1,6 @@
 {
   "name": "nestjs-ddd-cli",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "CLI for generating NestJS DDD boilerplate code",
   "main": "dist/index.js",
   "bin": {
