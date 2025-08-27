@@ -1,6 +1,11 @@
 import pluralize from 'pluralize';
 
 export function toPascalCase(str: string): string {
+  // If the string is already PascalCase (starts with uppercase and has no separators), return as-is
+  if (/^[A-Z][a-zA-Z0-9]*$/.test(str) && !/[-_ ]/.test(str)) {
+    return str;
+  }
+  
   return str
     .split(/[-_ ]/)
     .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
