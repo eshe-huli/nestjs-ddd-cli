@@ -38,6 +38,9 @@ import { analyzePerformance } from './commands/perf-analyzer';
 import { initMonorepo, addWorkspace } from './commands/monorepo';
 import { aiAssist, configureAiAssist } from './commands/ai-assist';
 import { diffMigration } from './commands/migration-engine';
+import { generateFilterDSL } from './commands/filter-dsl';
+import { setupEventSourcingFramework } from './commands/event-sourcing-full';
+import { setupTestInfrastructure } from './commands/test-factory-full';
 
 const program = new Command();
 
@@ -702,6 +705,61 @@ program
       await diffMigration(options.path || process.cwd(), {
         orm: options.orm,
         dryRun: options.dryRun,
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Filter DSL generator
+program
+  .command('filter-dsl')
+  .description('Generate type-safe filter DSL with specification pattern')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('-m, --module <module>', 'Module name')
+  .option('-e, --entity <entity>', 'Entity name')
+  .action(async (options) => {
+    try {
+      await generateFilterDSL(options.path || process.cwd(), {
+        module: options.module,
+        entity: options.entity,
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Event sourcing framework
+program
+  .command('event-sourcing')
+  .description('Set up event sourcing infrastructure with aggregates and projections')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('--store <store>', 'Event store type (memory, postgres, mongodb)', 'postgres')
+  .option('--snapshot-threshold <threshold>', 'Snapshot threshold', '100')
+  .action(async (options) => {
+    try {
+      await setupEventSourcingFramework(options.path || process.cwd(), {
+        eventStore: options.store,
+        snapshotThreshold: parseInt(options.snapshotThreshold, 10),
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Test infrastructure
+program
+  .command('test-infra')
+  .description('Generate comprehensive test infrastructure with factories and fixtures')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('-o, --orm <orm>', 'ORM type (typeorm, prisma)', 'typeorm')
+  .action(async (options) => {
+    try {
+      await setupTestInfrastructure(options.path || process.cwd(), {
+        orm: options.orm,
       });
     } catch (error) {
       console.error(chalk.red('Error:'), (error as Error).message);
