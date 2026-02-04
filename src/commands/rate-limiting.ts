@@ -253,8 +253,101 @@ export class RateLimiterService {
    * Reset rate limit for a key
    */
   async reset(key: string): Promise<void> {
-    this.storage.delete(key);
-    this.logger.debug(\`Reset rate limit for: \${key}\`);
+    // Validate key to prevent injection
+    const sanitizedKey = key.replace(/[^a-zA-Z0-9:_\\-@.]/g, '').substring(0, 256);
+    this.storage.delete(sanitizedKey);
+    this.logger.debug(\`Reset rate limit for: \${sanitizedKey}\`);
+  }
+
+  /**
+   * Block an IP address temporarily (brute force protection)
+   */
+  async blockIp(ip: string, durationSeconds: number = 3600): Promise<void> {
+    const sanitizedIp = this.sanitizeIp(ip);
+    if (!sanitizedIp) {
+      this.logger.warn(\`Invalid IP address format: \${ip}\`);
+      return;
+    }
+
+    const blockKey = \`blocked_ip:\${sanitizedIp}\`;
+    this.storage.set(blockKey, {
+      requests: [],
+      createdAt: Date.now(),
+      blockedUntil: Date.now() + (durationSeconds * 1000),
+    } as BlockedEntry);
+
+    this.logger.warn(\`IP blocked for \${durationSeconds}s: \${sanitizedIp}\`);
+    this.metrics.recordIpBlock(sanitizedIp);
+  }
+
+  /**
+   * Check if an IP is blocked
+   */
+  async isIpBlocked(ip: string): Promise<boolean> {
+    const sanitizedIp = this.sanitizeIp(ip);
+    if (!sanitizedIp) return false;
+
+    const blockKey = \`blocked_ip:\${sanitizedIp}\`;
+    const entry = this.storage.get(blockKey) as BlockedEntry | undefined;
+
+    if (entry && entry.blockedUntil && entry.blockedUntil > Date.now()) {
+      return true;
+    }
+
+    // Clean up expired block
+    if (entry) {
+      this.storage.delete(blockKey);
+    }
+
+    return false;
+  }
+
+  /**
+   * Detect brute force and auto-block
+   */
+  async detectBruteForce(
+    ip: string,
+    endpoint: string,
+    config: { threshold: number; windowSeconds: number; blockDurationSeconds: number }
+  ): Promise<boolean> {
+    const sanitizedIp = this.sanitizeIp(ip);
+    if (!sanitizedIp) return false;
+
+    const key = \`brute_force:\${sanitizedIp}:\${endpoint}\`;
+    const result = await this.check({
+      key,
+      limit: config.threshold,
+      ttl: config.windowSeconds,
+    });
+
+    if (!result.allowed) {
+      await this.blockIp(sanitizedIp, config.blockDurationSeconds);
+      this.logger.warn(\`Brute force detected from \${sanitizedIp} on \${endpoint}\`);
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Sanitize and validate IP address
+   */
+  private sanitizeIp(ip: string): string | null {
+    if (!ip || typeof ip !== 'string') return null;
+
+    // Remove any port suffix
+    const cleanIp = ip.split(':')[0].trim();
+
+    // Basic IPv4 validation
+    const ipv4Regex = /^(\\d{1,3}\\.){3}\\d{1,3}$/;
+    // Basic IPv6 validation (simplified)
+    const ipv6Regex = /^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$/;
+
+    if (ipv4Regex.test(cleanIp) || ipv6Regex.test(cleanIp)) {
+      return cleanIp;
+    }
+
+    return null;
   }
 
   /**
@@ -311,6 +404,10 @@ interface TokenBucketEntry extends RateLimitEntry {
   lastRefill: number;
 }
 
+interface BlockedEntry extends RateLimitEntry {
+  blockedUntil?: number;
+}
+
 export interface RateLimitStatus {
   key: string;
   current: number;
@@ -348,6 +445,20 @@ export class RateLimitGuard implements CanActivate {
     const skipRateLimit = this.reflector.get<boolean>('skipRateLimit', context.getHandler());
     if (skipRateLimit) {
       return true;
+    }
+
+    const request = context.switchToHttp().getRequest();
+
+    // Check if IP is blocked (brute force protection)
+    const ip = this.extractIp(request);
+    if (ip && await this.rateLimiter.isIpBlocked(ip)) {
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.FORBIDDEN,
+          message: 'IP address temporarily blocked',
+        },
+        HttpStatus.FORBIDDEN,
+      );
     }
 
     // Check custom skip condition
@@ -399,15 +510,50 @@ export class RateLimitGuard implements CanActivate {
     }
 
     const request = context.switchToHttp().getRequest();
-    const ip = request.ip || request.connection.remoteAddress;
+    const ip = this.extractIp(request);
     const userId = request.user?.id;
     const path = request.path;
     const method = request.method;
 
     // Use user ID if authenticated, otherwise IP
-    const identifier = userId || ip;
+    const identifier = userId || ip || 'unknown';
 
-    return \`rate_limit:\${identifier}:\${method}:\${path}\`;
+    // Sanitize key components
+    const sanitizedPath = path.replace(/[^a-zA-Z0-9\\/\\-_]/g, '').substring(0, 100);
+    const sanitizedMethod = method.replace(/[^A-Z]/g, '').substring(0, 10);
+    const sanitizedIdentifier = identifier.replace(/[^a-zA-Z0-9:@.\\-_]/g, '').substring(0, 128);
+
+    return \`rate_limit:\${sanitizedIdentifier}:\${sanitizedMethod}:\${sanitizedPath}\`;
+  }
+
+  /**
+   * Extract real IP from request (handles proxies)
+   */
+  private extractIp(request: any): string | null {
+    // Check common proxy headers (in order of preference)
+    const forwardedFor = request.headers?.['x-forwarded-for'];
+    if (forwardedFor) {
+      // Take the first IP (client IP) from comma-separated list
+      const ips = forwardedFor.split(',').map((ip: string) => ip.trim());
+      const clientIp = ips[0];
+      // Basic validation
+      if (/^[\\d.:a-fA-F]+$/.test(clientIp)) {
+        return clientIp;
+      }
+    }
+
+    const realIp = request.headers?.['x-real-ip'];
+    if (realIp && /^[\\d.:a-fA-F]+$/.test(realIp)) {
+      return realIp;
+    }
+
+    // Fallback to direct connection IP
+    const ip = request.ip || request.connection?.remoteAddress;
+    if (ip && /^[\\d.:a-fA-F]+$/.test(ip)) {
+      return ip;
+    }
+
+    return null;
   }
 }
 `;

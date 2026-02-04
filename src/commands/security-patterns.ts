@@ -53,10 +53,11 @@ export async function setupSecurityPatterns(
 function generateEncryptionService(): string {
   return `/**
  * Encryption Service
- * AES-256 encryption for data at rest
+ * AES-256-GCM authenticated encryption for data at rest
+ * OWASP A02:2021 compliant
  */
 
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import * as crypto from 'crypto';
 
 export interface EncryptionOptions {
@@ -65,18 +66,40 @@ export interface EncryptionOptions {
   ivLength?: number;
 }
 
+// Minimum password/key requirements
+const MIN_KEY_LENGTH = 16;
+const MIN_PASSWORD_LENGTH = 8;
+const MAX_PLAINTEXT_LENGTH = 10 * 1024 * 1024; // 10MB max
+
 @Injectable()
 export class EncryptionService {
+  private readonly logger = new Logger(EncryptionService.name);
   private readonly algorithm = 'aes-256-gcm';
   private readonly keyLength = 32;
   private readonly ivLength = 16;
   private readonly tagLength = 16;
   private readonly saltLength = 32;
 
+  // PBKDF2 iterations - OWASP recommends at least 600,000 for SHA-256
+  private readonly pbkdf2Iterations = 600000;
+  private readonly passwordHashIterations = 310000;
+
   /**
    * Encrypt data with AES-256-GCM
+   * @throws Error if key is too short or plaintext too long
    */
   encrypt(plaintext: string, key: string): string {
+    // Input validation
+    if (!plaintext || typeof plaintext !== 'string') {
+      throw new Error('Plaintext must be a non-empty string');
+    }
+    if (!key || typeof key !== 'string' || key.length < MIN_KEY_LENGTH) {
+      throw new Error(\`Encryption key must be at least \${MIN_KEY_LENGTH} characters\`);
+    }
+    if (plaintext.length > MAX_PLAINTEXT_LENGTH) {
+      throw new Error(\`Plaintext exceeds maximum length of \${MAX_PLAINTEXT_LENGTH} bytes\`);
+    }
+
     const iv = crypto.randomBytes(this.ivLength);
     const salt = crypto.randomBytes(this.saltLength);
     const derivedKey = this.deriveKey(key, salt);
@@ -87,8 +110,9 @@ export class EncryptionService {
 
     const tag = cipher.getAuthTag();
 
-    // Format: salt:iv:tag:encrypted
+    // Format: version:salt:iv:tag:encrypted (version for future algorithm changes)
     return [
+      'v1',
       salt.toString('hex'),
       iv.toString('hex'),
       tag.toString('hex'),
@@ -98,95 +122,206 @@ export class EncryptionService {
 
   /**
    * Decrypt data
+   * @throws Error if decryption fails (tampered or wrong key)
    */
   decrypt(ciphertext: string, key: string): string {
-    const [saltHex, ivHex, tagHex, encrypted] = ciphertext.split(':');
+    if (!ciphertext || typeof ciphertext !== 'string') {
+      throw new Error('Ciphertext must be a non-empty string');
+    }
+    if (!key || typeof key !== 'string' || key.length < MIN_KEY_LENGTH) {
+      throw new Error(\`Decryption key must be at least \${MIN_KEY_LENGTH} characters\`);
+    }
 
-    const salt = Buffer.from(saltHex, 'hex');
-    const iv = Buffer.from(ivHex, 'hex');
-    const tag = Buffer.from(tagHex, 'hex');
-    const derivedKey = this.deriveKey(key, salt);
+    const parts = ciphertext.split(':');
 
-    const decipher = crypto.createDecipheriv(this.algorithm, derivedKey, iv);
-    decipher.setAuthTag(tag);
+    // Support versioned format
+    let saltHex: string, ivHex: string, tagHex: string, encrypted: string;
 
-    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
+    if (parts[0] === 'v1' && parts.length === 5) {
+      [, saltHex, ivHex, tagHex, encrypted] = parts;
+    } else if (parts.length === 4) {
+      // Legacy format without version
+      [saltHex, ivHex, tagHex, encrypted] = parts;
+    } else {
+      throw new Error('Invalid ciphertext format');
+    }
 
-    return decrypted;
+    try {
+      const salt = Buffer.from(saltHex, 'hex');
+      const iv = Buffer.from(ivHex, 'hex');
+      const tag = Buffer.from(tagHex, 'hex');
+      const derivedKey = this.deriveKey(key, salt);
+
+      const decipher = crypto.createDecipheriv(this.algorithm, derivedKey, iv);
+      decipher.setAuthTag(tag);
+
+      let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+      decrypted += decipher.final('utf8');
+
+      return decrypted;
+    } catch (error) {
+      // Don't reveal specific error details
+      this.logger.warn('Decryption failed - possibly tampered data or wrong key');
+      throw new Error('Decryption failed');
+    }
   }
 
   /**
-   * Hash password with Argon2-like PBKDF2
+   * Hash password using PBKDF2 with high iteration count
+   * OWASP recommendation: 310,000 iterations for PBKDF2-HMAC-SHA256
    */
   async hashPassword(password: string): Promise<string> {
+    if (!password || typeof password !== 'string') {
+      throw new Error('Password must be a non-empty string');
+    }
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      throw new Error(\`Password must be at least \${MIN_PASSWORD_LENGTH} characters\`);
+    }
+
     const salt = crypto.randomBytes(this.saltLength);
-    const iterations = 100000;
+    const iterations = this.passwordHashIterations;
 
     return new Promise((resolve, reject) => {
       crypto.pbkdf2(password, salt, iterations, 64, 'sha512', (err, key) => {
         if (err) reject(err);
-        resolve(\`\${salt.toString('hex')}:\${iterations}:\${key.toString('hex')}\`);
+        // Include algorithm info for future migration
+        resolve(\`pbkdf2:sha512:\${iterations}:\${salt.toString('hex')}:\${key.toString('hex')}\`);
       });
     });
   }
 
   /**
-   * Verify password
+   * Verify password with timing-safe comparison
    */
   async verifyPassword(password: string, hash: string): Promise<boolean> {
-    const [saltHex, iterationsStr, keyHex] = hash.split(':');
-    const salt = Buffer.from(saltHex, 'hex');
-    const iterations = parseInt(iterationsStr, 10);
-    const storedKey = Buffer.from(keyHex, 'hex');
+    if (!password || !hash) {
+      return false;
+    }
 
-    return new Promise((resolve, reject) => {
-      crypto.pbkdf2(password, salt, iterations, 64, 'sha512', (err, derivedKey) => {
-        if (err) reject(err);
-        resolve(crypto.timingSafeEqual(storedKey, derivedKey));
+    try {
+      const parts = hash.split(':');
+      let saltHex: string, keyHex: string, iterations: number;
+
+      // Support new format with algorithm prefix
+      if (parts[0] === 'pbkdf2' && parts.length === 5) {
+        [, , iterations, saltHex, keyHex] = [parts[0], parts[1], parseInt(parts[2], 10), parts[3], parts[4]] as [string, string, number, string, string];
+      } else if (parts.length === 3) {
+        // Legacy format
+        [saltHex, iterations, keyHex] = [parts[0], parseInt(parts[1], 10), parts[2]] as [string, number, string];
+      } else {
+        return false;
+      }
+
+      const salt = Buffer.from(saltHex, 'hex');
+      const storedKey = Buffer.from(keyHex, 'hex');
+
+      return new Promise((resolve, reject) => {
+        crypto.pbkdf2(password, salt, iterations, 64, 'sha512', (err, derivedKey) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          // Timing-safe comparison prevents timing attacks
+          try {
+            resolve(crypto.timingSafeEqual(storedKey, derivedKey));
+          } catch {
+            resolve(false);
+          }
+        });
       });
-    });
+    } catch {
+      return false;
+    }
   }
 
   /**
-   * Generate secure random token
+   * Generate cryptographically secure random token
    */
   generateToken(length: number = 32): string {
+    if (length < 16) {
+      throw new Error('Token length must be at least 16 bytes');
+    }
     return crypto.randomBytes(length).toString('hex');
   }
 
   /**
-   * Generate API key
+   * Generate API key with checksum
    */
   generateApiKey(prefix: string = 'sk'): string {
+    const sanitizedPrefix = prefix.replace(/[^a-zA-Z0-9]/g, '').substring(0, 10);
     const key = crypto.randomBytes(24).toString('base64url');
-    return \`\${prefix}_\${key}\`;
+    const checksum = this.hash(key).substring(0, 4);
+    return \`\${sanitizedPrefix}_\${key}_\${checksum}\`;
   }
 
   /**
-   * Hash data (one-way)
+   * Verify API key checksum
+   */
+  verifyApiKeyChecksum(apiKey: string): boolean {
+    const parts = apiKey.split('_');
+    if (parts.length !== 3) return false;
+
+    const [, key, checksum] = parts;
+    const expectedChecksum = this.hash(key).substring(0, 4);
+
+    return crypto.timingSafeEqual(
+      Buffer.from(checksum),
+      Buffer.from(expectedChecksum)
+    );
+  }
+
+  /**
+   * Hash data (one-way) - defaults to SHA-256
    */
   hash(data: string, algorithm: string = 'sha256'): string {
+    const allowedAlgorithms = ['sha256', 'sha384', 'sha512', 'sha3-256', 'sha3-512'];
+    if (!allowedAlgorithms.includes(algorithm)) {
+      throw new Error(\`Algorithm must be one of: \${allowedAlgorithms.join(', ')}\`);
+    }
     return crypto.createHash(algorithm).update(data).digest('hex');
   }
 
   /**
-   * HMAC signature
+   * HMAC signature using SHA-256
    */
   hmac(data: string, secret: string): string {
+    if (!secret || secret.length < MIN_KEY_LENGTH) {
+      throw new Error(\`HMAC secret must be at least \${MIN_KEY_LENGTH} characters\`);
+    }
     return crypto.createHmac('sha256', secret).update(data).digest('hex');
   }
 
   /**
-   * Verify HMAC
+   * Verify HMAC with timing-safe comparison
    */
   verifyHmac(data: string, signature: string, secret: string): boolean {
-    const expected = this.hmac(data, secret);
-    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+    try {
+      const expected = this.hmac(data, secret);
+      // Ensure both are same length for timing-safe comparison
+      if (signature.length !== expected.length) {
+        return false;
+      }
+      return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Securely compare two strings (timing-safe)
+   */
+  secureCompare(a: string, b: string): boolean {
+    if (typeof a !== 'string' || typeof b !== 'string') {
+      return false;
+    }
+    if (a.length !== b.length) {
+      return false;
+    }
+    return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
   }
 
   private deriveKey(password: string, salt: Buffer): Buffer {
-    return crypto.pbkdf2Sync(password, salt, 10000, this.keyLength, 'sha256');
+    return crypto.pbkdf2Sync(password, salt, this.pbkdf2Iterations, this.keyLength, 'sha256');
   }
 }
 
