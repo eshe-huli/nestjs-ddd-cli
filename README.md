@@ -4,16 +4,17 @@
 
 Stop writing boilerplate. Start building business logic.
 
-Generate production-ready NestJS code following proven DDD/CQRS patterns with consistent structure and immutable architecture principles.
+Generate production-ready, security-hardened NestJS code following proven DDD/CQRS patterns with consistent structure and immutable architecture principles.
 
-## What's New in v3.0
+## What's New in v3.2
 
-- **Field-Aware Generation**: Generate complete typed entities, DTOs, and migrations with `--fields`
-- **Recipe System**: Apply common patterns like JWT auth, caching, audit logging
-- **Shared Module**: Generate base classes, interceptors, filters, and utilities
-- **Test Generation**: Generate unit tests with `--with-tests`
-- **AI-Ready**: Generates `CLAUDE.md` context file for AI assistants
-- **Full CQRS**: Complete command/query handlers with pagination
+- **Security-Hardened Generation**: 25 security iterations following OWASP Top 10
+- **Enterprise Patterns**: Circuit breaker, distributed tracing, feature flags
+- **Advanced Caching**: Cache-aside, write-through, invalidation strategies
+- **Observability**: OpenTelemetry tracing, Prometheus metrics, Grafana dashboards
+- **Database Optimization**: DataLoader, query analysis, connection pooling
+- **Kubernetes-Ready**: Health probes, graceful shutdown, liveness/readiness
+- **GraphQL Subscriptions**: Real-time with PubSub and connection management
 
 ## Installation
 
@@ -33,117 +34,121 @@ ddd scaffold User -m users --fields "name:string email:string:unique age:number:
 # Apply authentication recipe
 ddd recipe auth-jwt --install-deps
 
-# Generate shared utilities
-ddd shared
+# Set up security patterns
+ddd security-patterns
+
+# Add observability
+ddd observability
 ```
 
 ## Commands
 
-### Initialize Project
+### Core Commands
+
+| Command | Description |
+|---------|-------------|
+| `ddd init <name>` | Initialize new NestJS project with DDD structure |
+| `ddd scaffold <entity> -m <module>` | Generate complete CRUD with all layers |
+| `ddd generate <type> <name> -m <module>` | Generate individual components |
+| `ddd recipe [name]` | Apply common patterns (auth, caching, etc.) |
+| `ddd shared` | Generate shared utilities and base classes |
+
+### Enterprise Commands
+
+| Command | Description |
+|---------|-------------|
+| `ddd security-patterns` | RBAC, encryption, OWASP middleware, JWT security |
+| `ddd circuit-breaker` | Resilience patterns (retry, timeout, fallback) |
+| `ddd observability` | OpenTelemetry distributed tracing |
+| `ddd feature-flags` | Feature flags with A/B testing support |
+| `ddd caching-advanced` | Multi-layer caching strategies |
+| `ddd db-optimization` | DataLoader, query analyzer, connection pooling |
+| `ddd database-seeding` | Seed runner with fixture factories |
+| `ddd health-probes` | Kubernetes liveness/readiness/startup probes |
+| `ddd metrics-prometheus` | Prometheus metrics with Grafana dashboard |
+| `ddd graphql-subscriptions` | Real-time GraphQL with PubSub |
+
+### Utility Commands
+
+| Command | Description |
+|---------|-------------|
+| `ddd update` | Update CLI to latest version |
+| `ddd update-deps` | Update project dependencies |
+
+## Field-Aware Generation
+
+Generate complete typed entities, DTOs, and migrations:
 
 ```bash
-ddd init <projectName> [options]
+ddd scaffold Product -m inventory --fields "name:string price:number:optional sku:string:unique"
 ```
-
-Options:
-- `-p, --path <path>` - Project location
-- `--skip-install` - Skip npm install
-- `--with-ddd` - Set up DDD structure (default: true)
-
-Creates a NestJS project with:
-- DDD folder structure
-- Path aliases (`@modules/*`, `@shared/*`)
-- Configuration file (`.dddrc.json`)
-- AI context file (`CLAUDE.md`)
-
-### Generate Scaffolding
-
-```bash
-ddd scaffold <entityName> -m <module> [options]
-```
-
-Options:
-- `-m, --module <module>` - Module name (required)
-- `-f, --fields <fields>` - Entity fields
-- `--with-tests` - Generate test files
-- `--dry-run` - Preview without writing
-- `--install-deps` - Install dependencies
 
 **Field Format:** `name:type:modifier1:modifier2`
 
-Types: `string`, `number`, `boolean`, `date`, `uuid`, `enum`, `json`, `text`
+| Types | Modifiers |
+|-------|-----------|
+| `string`, `text` | `optional` |
+| `number`, `int`, `float`, `decimal` | `unique` |
+| `boolean` | `relation` |
+| `date`, `datetime`, `timestamp` | `OneToOne`, `OneToMany`, `ManyToOne`, `ManyToMany` |
+| `uuid`, `json`, `enum` | |
 
-Modifiers: `optional`, `unique`, `relation`
-
-Examples:
+**Relations:**
 ```bash
-# Basic entity
-ddd scaffold Product -m inventory
+# ManyToOne relation
+ddd scaffold Order -m orders --fields "customer:relation:Customer:ManyToOne"
 
-# With fields
-ddd scaffold User -m users --fields "name:string email:string:unique role:enum:admin,user"
-
-# With tests
-ddd scaffold Order -m orders --fields "total:number status:string" --with-tests
+# OneToMany relation
+ddd scaffold Customer -m customers --fields "orders:relation:Order:OneToMany:customer"
 ```
 
-### Generate Individual Components
+## Security Features
+
+The CLI generates security-hardened code following OWASP Top 10:
+
+### Generated Security Patterns
 
 ```bash
-ddd generate <type> <name> -m <module>
+ddd security-patterns
 ```
 
-Types:
-- `module` - NestJS module with DDD structure
-- `entity` - Domain entity + ORM entity + mapper + repository
-- `usecase` - Use case with command handler
-- `service` - Domain service
-- `event` - Domain event
-- `query` - Query handler
+Creates:
+- **Encryption Service** - AES-256-GCM with PBKDF2 (600,000 iterations)
+- **RBAC/ABAC Service** - Role and attribute-based access control
+- **OWASP Middleware** - XSS, SQL injection, path traversal prevention
+- **JWT Security** - Algorithm confusion prevention, claim validation
+- **CORS Configuration** - Strict origin validation
+- **Cookie Security** - HttpOnly, Secure, SameSite flags
+- **Security Headers** - CSP, HSTS, X-Frame-Options, Permissions-Policy
+- **Input Sanitizer** - HTML, shell, filename, URL sanitization
+- **Secret Vault** - Encrypted secret storage with rotation
 
-### Apply Recipes
+### Built-in Protections
+
+- Path traversal prevention in all file operations
+- Input validation with MaxLength on all string fields
+- Sensitive data masking in logs (credit cards, SSN, tokens)
+- Secure error handling (hides internals in production)
+- Brute force detection with IP blocking
+- CSRF token validation
+
+## Recipes
 
 ```bash
-ddd recipe [recipeName] [options]
-```
+# List available recipes
+ddd recipe
 
-Available recipes:
+# Apply with dependency installation
+ddd recipe auth-jwt --install-deps
+```
 
 | Recipe | Description |
 |--------|-------------|
 | `auth-jwt` | JWT authentication with guards and decorators |
 | `pagination` | Shared pagination DTOs and utilities |
 | `soft-delete` | Base entity and repository with soft delete |
-| `audit-log` | Entity change tracking |
+| `audit-log` | Entity change tracking with sensitive data masking |
 | `caching` | Redis caching with decorators |
-
-```bash
-# List available recipes
-ddd recipe
-
-# Apply with auto-install
-ddd recipe auth-jwt --install-deps
-```
-
-### Generate Shared Module
-
-```bash
-ddd shared
-```
-
-Generates:
-- Base ORM and domain entities
-- Exception filters
-- Transform and logging interceptors
-- Validation pipe
-- Date and string utilities
-
-### CLI Management
-
-```bash
-ddd update              # Update CLI to latest version
-ddd update-deps         # Update project dependencies
-```
 
 ## Generated Structure
 
@@ -156,20 +161,24 @@ src/
 │       │   ├── commands/           # CQRS commands
 │       │   ├── queries/            # CQRS queries (paginated)
 │       │   ├── controllers/        # REST endpoints
-│       │   ├── dto/
-│       │   │   ├── requests/       # Input DTOs with validation
-│       │   │   └── responses/      # Output DTOs
-│       │   └── domain/
-│       │       ├── entities/       # Domain entities
-│       │       ├── events/         # Domain events
-│       │       ├── services/       # Domain services
-│       │       └── usecases/       # Business logic
+│       │   └── dto/
+│       │       ├── requests/       # Input DTOs with validation
+│       │       └── responses/      # Output DTOs
+│       └── domain/
+│           ├── entities/           # Domain entities
+│           ├── events/             # Domain events
+│           ├── services/           # Domain services
+│           └── usecases/           # Business logic
 │       └── infrastructure/
 │           ├── repositories/       # Data access
 │           ├── orm-entities/       # Database schemas
 │           └── mappers/            # Entity mapping
-├── shared/                         # Shared utilities
-└── migrations/                     # Database migrations
+├── shared/
+│   ├── security/                   # Security services
+│   ├── observability/              # Tracing, metrics
+│   ├── resilience/                 # Circuit breaker, retry
+│   └── infrastructure/             # Base classes, utilities
+└── migrations/
 ```
 
 ## Configuration
@@ -202,6 +211,57 @@ Create `.dddrc.json` in your project root:
 }
 ```
 
+## Real-World Examples
+
+### E-commerce with Security
+
+```bash
+ddd init ecommerce-api
+cd ecommerce-api
+
+# Core security
+ddd security-patterns
+ddd recipe auth-jwt --install-deps
+
+# Domain modules
+ddd scaffold Product -m inventory --fields "name:string price:decimal sku:string:unique stock:int"
+ddd scaffold Order -m orders --fields "total:decimal status:enum:pending,paid,shipped customerId:uuid"
+ddd scaffold Customer -m customers --fields "email:string:unique name:string"
+
+# Enterprise features
+ddd circuit-breaker
+ddd observability
+ddd caching-advanced
+```
+
+### Microservice with Observability
+
+```bash
+ddd init payment-service
+cd payment-service
+
+# Infrastructure
+ddd security-patterns
+ddd observability
+ddd metrics-prometheus
+ddd health-probes
+
+# Domain
+ddd scaffold Transaction -m payments --fields "amount:decimal currency:string status:enum:pending,completed,failed"
+ddd circuit-breaker
+```
+
+### GraphQL API with Real-time
+
+```bash
+ddd init realtime-api
+cd realtime-api
+
+ddd scaffold Message -m chat --fields "content:text senderId:uuid roomId:uuid"
+ddd graphql-subscriptions
+ddd caching-advanced
+```
+
 ## AI Integration
 
 The CLI generates a `CLAUDE.md` file with project context for AI assistants:
@@ -209,11 +269,12 @@ The CLI generates a `CLAUDE.md` file with project context for AI assistants:
 - CLI command reference
 - Naming conventions
 - Architecture rules
+- Security patterns
 - Common patterns
 
 ## API Conventions
 
-All generated APIs follow RESTful conventions:
+All generated APIs follow RESTful conventions with security:
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -244,33 +305,12 @@ Response:
 }
 ```
 
-## Real-World Examples
-
-### E-commerce
-
-```bash
-ddd scaffold Product -m inventory --fields "name:string price:number sku:string:unique stock:number"
-ddd scaffold Order -m orders --fields "total:number status:enum:pending,paid,shipped customerId:uuid"
-ddd generate service PriceCalculator -m orders
-ddd generate event OrderPaid -m orders
-```
-
-### User Management
-
-```bash
-ddd scaffold User -m users --fields "email:string:unique name:string role:enum:admin,user" --with-tests
-ddd recipe auth-jwt --install-deps
-```
-
-### Multi-tenant SaaS
-
-```bash
-ddd scaffold Tenant -m tenants --fields "name:string subdomain:string:unique"
-ddd scaffold User -m users --fields "email:string:unique name:string tenantId:uuid"
-ddd recipe audit-log
-```
-
 ## Philosophy
+
+### Security First
+- OWASP Top 10 compliance built-in
+- Secure defaults, not optional add-ons
+- Production-ready from day one
 
 ### Immutable Architecture
 - Each generated component remains unchanged after creation
