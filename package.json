@@ -1,13 +1,13 @@
 {
   "name": "nestjs-ddd-cli",
-  "version": "3.2.1",
+  "version": "3.2.2",
   "description": "CLI for generating NestJS DDD boilerplate code",
   "main": "dist/index.js",
   "bin": {
     "ddd": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && cp -r src/templates dist/",
+    "build": "tsc -p tsconfig.build.json && cp -r src/templates dist/ && chmod +x dist/index.js",
     "build:watch": "tsc --watch",
     "dev": "ts-node src/index.ts",
     "link": "npm run build && npm link",
