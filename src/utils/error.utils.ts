@@ -253,81 +253,163 @@ export function createErrorHandler(options: { verbose?: boolean } = {}): ErrorHa
 /**
  * Domain Exception Templates
  * These are templates for generated domain exceptions
+ * SECURITY: Designed to prevent information disclosure (OWASP A01:2021)
  */
 export const DomainExceptionTemplates = {
   entityNotFound: (entityName: string) => `
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, Logger } from '@nestjs/common';
 
 export class ${entityName}NotFoundException extends NotFoundException {
+  private readonly logger = new Logger(${entityName}NotFoundException.name);
+
   constructor(id: string) {
-    super(\`${entityName} with id \${id} not found\`);
+    // Don't expose internal IDs in production
+    const isProduction = process.env.NODE_ENV === 'production';
+    const message = isProduction
+      ? '${entityName} not found'
+      : \`${entityName} with id \${id} not found\`;
+
+    super(message);
+
+    // Log the actual ID for debugging
+    this.logger.debug(\`${entityName} not found: \${id}\`);
   }
 }
 `,
 
   entityAlreadyExists: (entityName: string) => `
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, Logger } from '@nestjs/common';
 
 export class ${entityName}AlreadyExistsException extends ConflictException {
+  private readonly logger = new Logger(${entityName}AlreadyExistsException.name);
+
   constructor(identifier: string) {
-    super(\`${entityName} with identifier \${identifier} already exists\`);
+    // Don't expose which field/value conflicts in production
+    const isProduction = process.env.NODE_ENV === 'production';
+    const message = isProduction
+      ? '${entityName} already exists'
+      : \`${entityName} with identifier \${identifier} already exists\`;
+
+    super(message);
+    this.logger.debug(\`${entityName} conflict: \${identifier}\`);
   }
 }
 `,
 
   validationFailed: (entityName: string) => `
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, Logger } from '@nestjs/common';
 
 export class ${entityName}ValidationException extends BadRequestException {
+  private readonly logger = new Logger(${entityName}ValidationException.name);
+
   constructor(errors: string[]) {
-    super({
-      message: '${entityName} validation failed',
-      errors,
-    });
+    // In production, provide generic message; in dev, show field errors
+    const isProduction = process.env.NODE_ENV === 'production';
+    const message = isProduction
+      ? { message: 'Validation failed', errorCount: errors.length }
+      : { message: '${entityName} validation failed', errors };
+
+    super(message);
+    this.logger.debug(\`Validation errors: \${errors.join(', ')}\`);
   }
 }
 `,
 
   operationFailed: (entityName: string) => `
-import { InternalServerErrorException } from '@nestjs/common';
+import { InternalServerErrorException, Logger } from '@nestjs/common';
 
 export class ${entityName}OperationFailedException extends InternalServerErrorException {
+  private readonly logger = new Logger(${entityName}OperationFailedException.name);
+
   constructor(operation: string, reason?: string) {
-    super(\`${entityName} \${operation} failed\${reason ? ': ' + reason : ''}\`);
+    // NEVER expose internal error details to client in production
+    const isProduction = process.env.NODE_ENV === 'production';
+    const clientMessage = isProduction
+      ? 'An error occurred processing your request'
+      : \`${entityName} \${operation} failed\`;
+
+    super(clientMessage);
+
+    // Log the actual reason for debugging
+    this.logger.error(\`${entityName} \${operation} failed: \${reason || 'unknown'}\`);
   }
 }
 `,
 
   domainException: (entityName: string) => `
-import { HttpException, HttpStatus } from '@nestjs/common';
+import { HttpException, HttpStatus, Logger } from '@nestjs/common';
 
+/**
+ * Base domain exception with secure error handling
+ * Does not expose internal details in production
+ */
 export abstract class ${entityName}DomainException extends HttpException {
-  constructor(message: string, status: HttpStatus = HttpStatus.BAD_REQUEST) {
-    super(message, status);
+  protected readonly logger = new Logger(${entityName}DomainException.name);
+  protected readonly isProduction = process.env.NODE_ENV === 'production';
+
+  constructor(
+    publicMessage: string,
+    internalMessage: string,
+    status: HttpStatus = HttpStatus.BAD_REQUEST
+  ) {
+    // Use generic message in production
+    super(
+      process.env.NODE_ENV === 'production' ? publicMessage : internalMessage,
+      status
+    );
+
+    // Always log the internal message for debugging
+    this.logger.debug(internalMessage);
   }
 }
 
 export class ${entityName}NotFoundException extends ${entityName}DomainException {
   constructor(id: string) {
-    super(\`${entityName} with id \${id} not found\`, HttpStatus.NOT_FOUND);
+    super(
+      '${entityName} not found',
+      \`${entityName} with id \${id} not found\`,
+      HttpStatus.NOT_FOUND
+    );
   }
 }
 
 export class ${entityName}AlreadyExistsException extends ${entityName}DomainException {
   constructor(field: string, value: string) {
-    super(\`${entityName} with \${field} '\${value}' already exists\`, HttpStatus.CONFLICT);
+    super(
+      '${entityName} already exists',
+      \`${entityName} with \${field} '\${value}' already exists\`,
+      HttpStatus.CONFLICT
+    );
   }
 }
 
 export class ${entityName}ValidationException extends ${entityName}DomainException {
   constructor(errors: string[]) {
-    super(\`Validation failed: \${errors.join(', ')}\`, HttpStatus.BAD_REQUEST);
+    super(
+      'Validation failed',
+      \`Validation failed: \${errors.join(', ')}\`,
+      HttpStatus.BAD_REQUEST
+    );
   }
 }
 
 export class ${entityName}InvalidStateException extends ${entityName}DomainException {
   constructor(currentState: string, expectedState: string) {
-    super(\`Cannot perform operation: ${entityName} is in '\${currentState}' state, expected '\${expectedState}'\`);
+    super(
+      'Operation not allowed',
+      \`Cannot perform operation: ${entityName} is in '\${currentState}' state, expected '\${expectedState}'\`,
+      HttpStatus.UNPROCESSABLE_ENTITY
+    );
+  }
+}
+
+export class ${entityName}UnauthorizedException extends ${entityName}DomainException {
+  constructor(action: string) {
+    super(
+      'Unauthorized',
+      \`Unauthorized to \${action} ${entityName}\`,
+      HttpStatus.FORBIDDEN
+    );
   }
 }
 `,

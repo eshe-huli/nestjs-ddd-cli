@@ -102,12 +102,64 @@ export function prepareTemplateData(entityName: string, moduleName: string, fiel
   };
 }
 
+/**
+ * Validate that a path is safe and within allowed bounds
+ * Prevents path traversal attacks (OWASP A01:2021)
+ */
+function validatePath(targetPath: string, basePath?: string): void {
+  if (!targetPath || typeof targetPath !== 'string') {
+    throw new Error('Path must be a non-empty string');
+  }
+
+  // Check for null bytes (can bypass security checks)
+  if (targetPath.includes('\0')) {
+    throw new Error('Path contains null byte');
+  }
+
+  // Check for path traversal patterns
+  const normalizedPath = path.normalize(targetPath);
+  if (normalizedPath.includes('..')) {
+    // After normalization, if .. still exists, it's going above root
+    const resolvedPath = path.resolve(targetPath);
+    const cwdPath = basePath || process.cwd();
+
+    if (!resolvedPath.startsWith(cwdPath)) {
+      throw new Error('Path traversal detected: path escapes base directory');
+    }
+  }
+
+  // Block access to sensitive system directories
+  const blockedPatterns = [
+    /^\/etc\//i,
+    /^\/proc\//i,
+    /^\/sys\//i,
+    /^\/dev\//i,
+    /^\/root\//i,
+    /^C:\\Windows/i,
+    /^C:\\Program Files/i,
+    /\.env$/i,
+    /\.git\//i,
+    /\.ssh\//i,
+    /id_rsa/i,
+    /\.pem$/i,
+    /\.key$/i,
+  ];
+
+  for (const pattern of blockedPatterns) {
+    if (pattern.test(normalizedPath)) {
+      throw new Error(`Access to path is blocked: ${normalizedPath}`);
+    }
+  }
+}
+
 export async function ensureDir(dirPath: string): Promise<void> {
+  validatePath(dirPath);
   await fs.ensureDir(dirPath);
 }
 
 export async function fileExists(filePath: string): Promise<boolean> {
   try {
+    validatePath(filePath);
     await fs.access(filePath);
     return true;
   } catch {
@@ -116,11 +168,35 @@ export async function fileExists(filePath: string): Promise<boolean> {
 }
 
 export async function writeFile(filePath: string, content: string): Promise<void> {
+  validatePath(filePath);
+
+  // Validate content size (prevent DoS via huge files)
+  const maxContentSize = 10 * 1024 * 1024; // 10MB max
+  if (content && content.length > maxContentSize) {
+    throw new Error(`Content exceeds maximum size of ${maxContentSize} bytes`);
+  }
+
   await ensureDir(path.dirname(filePath));
   await fs.writeFile(filePath, content, 'utf-8');
 }
 
 export async function readTemplate(templatePath: string): Promise<string> {
+  validatePath(templatePath);
+
+  // Get file stats to check size before reading
+  try {
+    const stats = await fs.stat(templatePath);
+    const maxTemplateSize = 1024 * 1024; // 1MB max for templates
+    if (stats.size > maxTemplateSize) {
+      throw new Error(`Template file exceeds maximum size of ${maxTemplateSize} bytes`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`Template file not found: ${templatePath}`);
+    }
+    throw error;
+  }
+
   return fs.readFile(templatePath, 'utf-8');
 }
 
