@@ -47,6 +47,18 @@ export async function setupSecurityPatterns(
   fs.writeFileSync(path.join(sharedPath, 'security.module.ts'), generateSecurityModule());
   console.log(chalk.green(`  ✓ Created security module`));
 
+  fs.writeFileSync(path.join(sharedPath, 'cors.config.ts'), generateCorsConfig());
+  console.log(chalk.green(`  ✓ Created CORS configuration`));
+
+  fs.writeFileSync(path.join(sharedPath, 'cookie.config.ts'), generateCookieConfig());
+  console.log(chalk.green(`  ✓ Created cookie security configuration`));
+
+  fs.writeFileSync(path.join(sharedPath, 'jwt.security.ts'), generateJwtSecurity());
+  console.log(chalk.green(`  ✓ Created JWT security service`));
+
+  fs.writeFileSync(path.join(sharedPath, 'security-headers.config.ts'), generateSecurityHeadersConfig());
+  console.log(chalk.green(`  ✓ Created security headers configuration`));
+
   console.log(chalk.bold.green('\n✅ Security patterns ready!\n'));
 }
 
@@ -1366,6 +1378,784 @@ export function Sanitize(type: 'html' | 'sql' | 'filename' | 'url'): PropertyDec
 `;
 }
 
+function generateCorsConfig(): string {
+  return `/**
+ * Secure CORS Configuration
+ * OWASP A05:2021 - Security Misconfiguration prevention
+ */
+
+import { CorsOptions } from '@nestjs/common/interfaces/external/cors-options.interface';
+import { Logger } from '@nestjs/common';
+
+const logger = new Logger('CorsConfig');
+
+/**
+ * Create secure CORS configuration
+ * - Strict origin validation (no wildcards in production)
+ * - Explicit allowed methods
+ * - Credentials handling with origin check
+ */
+export function createSecureCorsConfig(options: {
+  allowedOrigins: string[];
+  isProduction?: boolean;
+}): CorsOptions {
+  const { allowedOrigins, isProduction = process.env.NODE_ENV === 'production' } = options;
+
+  // Validate origins
+  if (isProduction && allowedOrigins.includes('*')) {
+    throw new Error('CORS: Wildcard origin (*) not allowed in production');
+  }
+
+  // Normalize origins to prevent bypass (e.g., trailing slashes)
+  const normalizedOrigins = allowedOrigins.map(origin => {
+    if (origin === '*') return origin;
+    return origin.replace(/\\/+$/, '').toLowerCase();
+  });
+
+  return {
+    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+      // Allow requests with no origin (like mobile apps or Postman)
+      // In production, you may want to be stricter
+      if (!origin) {
+        if (isProduction) {
+          logger.warn('Request with no origin header - consider blocking in production');
+        }
+        callback(null, true);
+        return;
+      }
+
+      const normalizedOrigin = origin.replace(/\\/+$/, '').toLowerCase();
+
+      // Check against whitelist
+      if (normalizedOrigins.includes('*') || normalizedOrigins.includes(normalizedOrigin)) {
+        callback(null, true);
+        return;
+      }
+
+      // Check for subdomain matching (if pattern like *.example.com is allowed)
+      for (const allowed of normalizedOrigins) {
+        if (allowed.startsWith('*.')) {
+          const domain = allowed.slice(2);
+          if (normalizedOrigin.endsWith(domain)) {
+            callback(null, true);
+            return;
+          }
+        }
+      }
+
+      logger.warn(\`CORS blocked origin: \${origin}\`);
+      callback(new Error('Not allowed by CORS'));
+    },
+
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+
+    // Only expose safe headers
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'X-Requested-With',
+      'Accept',
+      'Origin',
+      'X-CSRF-Token',
+    ],
+
+    // Credentials require explicit origin (not *)
+    credentials: true,
+
+    // Cache preflight for 24 hours
+    maxAge: 86400,
+
+    // Limit exposed headers to prevent information leak
+    exposedHeaders: ['X-Request-Id', 'X-RateLimit-Remaining'],
+
+    // Don't allow OPTIONS to continue to route handlers
+    preflightContinue: false,
+
+    // Return 204 for OPTIONS
+    optionsSuccessStatus: 204,
+  };
+}
+
+/**
+ * Validate origin against allowed list
+ * Use for manual CORS checks
+ */
+export function isOriginAllowed(origin: string, allowedOrigins: string[]): boolean {
+  if (!origin) return false;
+
+  const normalizedOrigin = origin.replace(/\\/+$/, '').toLowerCase();
+
+  for (const allowed of allowedOrigins) {
+    const normalizedAllowed = allowed.replace(/\\/+$/, '').toLowerCase();
+
+    if (normalizedAllowed === '*') return true;
+    if (normalizedAllowed === normalizedOrigin) return true;
+
+    // Subdomain matching
+    if (normalizedAllowed.startsWith('*.')) {
+      const domain = normalizedAllowed.slice(2);
+      if (normalizedOrigin.endsWith('.' + domain) || normalizedOrigin === domain) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+`;
+}
+
+function generateCookieConfig(): string {
+  return `/**
+ * Secure Cookie Configuration
+ * OWASP A07:2021 - Authentication best practices
+ */
+
+import { CookieOptions } from 'express';
+import { Logger } from '@nestjs/common';
+
+const logger = new Logger('CookieConfig');
+
+export interface SecureCookieOptions {
+  name: string;
+  isProduction?: boolean;
+  domain?: string;
+  maxAgeSeconds?: number;
+}
+
+/**
+ * Create secure cookie options
+ * - HttpOnly to prevent XSS access
+ * - Secure flag for HTTPS-only
+ * - SameSite to prevent CSRF
+ * - Proper path and domain scoping
+ */
+export function createSecureCookieOptions(options: SecureCookieOptions): CookieOptions {
+  const {
+    isProduction = process.env.NODE_ENV === 'production',
+    domain,
+    maxAgeSeconds = 3600, // 1 hour default
+  } = options;
+
+  return {
+    // Prevent JavaScript access (XSS protection)
+    httpOnly: true,
+
+    // Only send over HTTPS in production
+    secure: isProduction,
+
+    // Strict SameSite prevents CSRF
+    // Use 'lax' if you need cross-site GET requests (e.g., OAuth redirects)
+    sameSite: 'strict',
+
+    // Scope to specific path
+    path: '/',
+
+    // Domain scoping (omit to use current domain only)
+    domain: domain,
+
+    // Set explicit expiry
+    maxAge: maxAgeSeconds * 1000, // Express uses milliseconds
+
+    // Signed cookies for integrity (requires cookie-parser with secret)
+    signed: true,
+  };
+}
+
+/**
+ * Session cookie configuration
+ */
+export function createSessionCookieOptions(options: {
+  isProduction?: boolean;
+  sessionMaxAgeHours?: number;
+}): CookieOptions {
+  const {
+    isProduction = process.env.NODE_ENV === 'production',
+    sessionMaxAgeHours = 24,
+  } = options;
+
+  return {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: 'strict',
+    path: '/',
+    maxAge: sessionMaxAgeHours * 60 * 60 * 1000,
+    signed: true,
+  };
+}
+
+/**
+ * Authentication token cookie options
+ * More restrictive for auth tokens
+ */
+export function createAuthCookieOptions(options: {
+  isProduction?: boolean;
+  tokenMaxAgeMinutes?: number;
+  domain?: string;
+}): CookieOptions {
+  const {
+    isProduction = process.env.NODE_ENV === 'production',
+    tokenMaxAgeMinutes = 15, // Short-lived for security
+    domain,
+  } = options;
+
+  return {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: 'strict',
+    path: '/',
+    domain,
+    maxAge: tokenMaxAgeMinutes * 60 * 1000,
+    signed: true,
+  };
+}
+
+/**
+ * Refresh token cookie options
+ * Longer lived but more restricted
+ */
+export function createRefreshTokenCookieOptions(options: {
+  isProduction?: boolean;
+  maxAgeDays?: number;
+  domain?: string;
+}): CookieOptions {
+  const {
+    isProduction = process.env.NODE_ENV === 'production',
+    maxAgeDays = 7,
+    domain,
+  } = options;
+
+  return {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: 'strict',
+    // Restrict refresh token to specific path
+    path: '/auth/refresh',
+    domain,
+    maxAge: maxAgeDays * 24 * 60 * 60 * 1000,
+    signed: true,
+  };
+}
+
+/**
+ * Clear cookie securely
+ */
+export function clearCookieOptions(isProduction: boolean = process.env.NODE_ENV === 'production'): CookieOptions {
+  return {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: 'strict',
+    path: '/',
+    maxAge: 0,
+    expires: new Date(0),
+  };
+}
+
+/**
+ * Cookie name constants with prefix for clarity
+ */
+export const CookieNames = {
+  SESSION: '__Host-session',      // __Host- prefix requires Secure and Path=/
+  ACCESS_TOKEN: '__Host-access',
+  REFRESH_TOKEN: '__Host-refresh',
+  CSRF: '__Host-csrf',
+} as const;
+
+/**
+ * Validate cookie name follows security best practices
+ * __Host- prefix ensures Secure, no Domain, Path=/
+ * __Secure- prefix ensures Secure
+ */
+export function validateCookieName(name: string, isProduction: boolean): void {
+  if (isProduction) {
+    if (name.startsWith('__Host-') || name.startsWith('__Secure-')) {
+      return; // Valid secure prefix
+    }
+    logger.warn(\`Cookie "\${name}" should use __Host- or __Secure- prefix in production\`);
+  }
+}
+`;
+}
+
+function generateJwtSecurity(): string {
+  return `/**
+ * JWT Security Service
+ * OWASP A07:2021 - Identification and Authentication Failures prevention
+ */
+
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import * as crypto from 'crypto';
+
+export interface JwtHeader {
+  alg: string;
+  typ: string;
+  kid?: string;
+}
+
+export interface JwtPayload {
+  iss?: string;  // Issuer
+  sub?: string;  // Subject
+  aud?: string | string[];  // Audience
+  exp?: number;  // Expiration
+  nbf?: number;  // Not Before
+  iat?: number;  // Issued At
+  jti?: string;  // JWT ID (for revocation)
+  [key: string]: any;
+}
+
+export interface JwtValidationOptions {
+  issuer?: string;
+  audience?: string | string[];
+  algorithms?: string[];
+  clockTolerance?: number;
+  maxAge?: number;
+}
+
+// Secure algorithm whitelist - block 'none' and weak algorithms
+const ALLOWED_ALGORITHMS = ['HS256', 'HS384', 'HS512', 'RS256', 'RS384', 'RS512', 'ES256', 'ES384', 'ES512'];
+const WEAK_ALGORITHMS = ['none', 'HS1', 'RS1'];
+
+@Injectable()
+export class JwtSecurityService {
+  private readonly logger = new Logger(JwtSecurityService.name);
+  private readonly revokedTokens = new Set<string>();
+  private readonly usedJtis = new Map<string, number>(); // jti -> expiry timestamp
+
+  /**
+   * Validate JWT structure and claims
+   * Checks for common JWT attacks:
+   * - Algorithm confusion (none attack, weak algorithms)
+   * - Token replay (jti tracking)
+   * - Expired/not-yet-valid tokens
+   * - Issuer/audience mismatch
+   */
+  validateToken(token: string, options: JwtValidationOptions = {}): { header: JwtHeader; payload: JwtPayload } {
+    if (!token || typeof token !== 'string') {
+      throw new UnauthorizedException('Token is required');
+    }
+
+    // Split and decode
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      throw new UnauthorizedException('Invalid token format');
+    }
+
+    let header: JwtHeader;
+    let payload: JwtPayload;
+
+    try {
+      header = JSON.parse(this.base64UrlDecode(parts[0]));
+      payload = JSON.parse(this.base64UrlDecode(parts[1]));
+    } catch {
+      throw new UnauthorizedException('Invalid token encoding');
+    }
+
+    // Validate algorithm
+    this.validateAlgorithm(header.alg, options.algorithms);
+
+    // Validate claims
+    this.validateClaims(payload, options);
+
+    // Check if token is revoked
+    if (payload.jti && this.revokedTokens.has(payload.jti)) {
+      throw new UnauthorizedException('Token has been revoked');
+    }
+
+    // Check for replay (same jti used before expiry)
+    if (payload.jti) {
+      const existingExpiry = this.usedJtis.get(payload.jti);
+      if (existingExpiry && Date.now() < existingExpiry) {
+        // Potential replay - same jti, not expired
+        this.logger.warn(\`Potential JWT replay detected: jti=\${payload.jti}\`);
+        // Note: In some cases, legitimate retries may reuse tokens
+        // Consider your use case before throwing here
+      }
+      if (payload.exp) {
+        this.usedJtis.set(payload.jti, payload.exp * 1000);
+      }
+    }
+
+    return { header, payload };
+  }
+
+  /**
+   * Validate algorithm is allowed
+   * Prevents algorithm confusion attacks
+   */
+  private validateAlgorithm(alg: string, allowedAlgorithms?: string[]): void {
+    // Check against weak algorithms
+    if (WEAK_ALGORITHMS.includes(alg.toLowerCase())) {
+      this.logger.error(\`JWT with weak/dangerous algorithm detected: \${alg}\`);
+      throw new UnauthorizedException('Invalid token algorithm');
+    }
+
+    // Check against allowed list
+    const allowed = allowedAlgorithms?.length ? allowedAlgorithms : ALLOWED_ALGORITHMS;
+    if (!allowed.includes(alg)) {
+      throw new UnauthorizedException('Token algorithm not allowed');
+    }
+  }
+
+  /**
+   * Validate JWT claims
+   */
+  private validateClaims(payload: JwtPayload, options: JwtValidationOptions): void {
+    const now = Math.floor(Date.now() / 1000);
+    const clockTolerance = options.clockTolerance || 30; // 30 seconds tolerance
+
+    // Check expiration
+    if (payload.exp !== undefined) {
+      if (now > payload.exp + clockTolerance) {
+        throw new UnauthorizedException('Token has expired');
+      }
+    } else {
+      // Tokens without expiration are risky
+      this.logger.warn('JWT without expiration claim');
+      if (options.maxAge) {
+        throw new UnauthorizedException('Token missing required exp claim');
+      }
+    }
+
+    // Check not before
+    if (payload.nbf !== undefined) {
+      if (now < payload.nbf - clockTolerance) {
+        throw new UnauthorizedException('Token not yet valid');
+      }
+    }
+
+    // Check issued at (with max age)
+    if (options.maxAge && payload.iat !== undefined) {
+      if (now - payload.iat > options.maxAge) {
+        throw new UnauthorizedException('Token exceeds maximum age');
+      }
+    }
+
+    // Check issuer
+    if (options.issuer && payload.iss !== options.issuer) {
+      throw new UnauthorizedException('Invalid token issuer');
+    }
+
+    // Check audience
+    if (options.audience) {
+      const expectedAudiences = Array.isArray(options.audience) ? options.audience : [options.audience];
+      const tokenAudiences = Array.isArray(payload.aud) ? payload.aud : payload.aud ? [payload.aud] : [];
+
+      const hasValidAudience = expectedAudiences.some(aud => tokenAudiences.includes(aud));
+      if (!hasValidAudience) {
+        throw new UnauthorizedException('Invalid token audience');
+      }
+    }
+  }
+
+  /**
+   * Revoke a token by jti
+   */
+  revokeToken(jti: string): void {
+    this.revokedTokens.add(jti);
+    this.logger.log(\`Token revoked: jti=\${jti}\`);
+  }
+
+  /**
+   * Generate a secure, unique JWT ID
+   */
+  generateJti(): string {
+    return crypto.randomUUID();
+  }
+
+  /**
+   * Clean up expired jti tracking
+   * Call periodically to prevent memory bloat
+   */
+  cleanupExpiredJtis(): void {
+    const now = Date.now();
+    let cleaned = 0;
+
+    for (const [jti, expiry] of this.usedJtis.entries()) {
+      if (now > expiry) {
+        this.usedJtis.delete(jti);
+        this.revokedTokens.delete(jti);
+        cleaned++;
+      }
+    }
+
+    if (cleaned > 0) {
+      this.logger.debug(\`Cleaned up \${cleaned} expired JWT IDs\`);
+    }
+  }
+
+  /**
+   * Create secure token payload with required claims
+   */
+  createSecurePayload(options: {
+    subject: string;
+    issuer: string;
+    audience: string | string[];
+    expiresInSeconds?: number;
+    data?: Record<string, any>;
+  }): JwtPayload {
+    const now = Math.floor(Date.now() / 1000);
+    const expiresIn = options.expiresInSeconds || 900; // 15 minutes default
+
+    return {
+      sub: options.subject,
+      iss: options.issuer,
+      aud: options.audience,
+      iat: now,
+      nbf: now,
+      exp: now + expiresIn,
+      jti: this.generateJti(),
+      ...options.data,
+    };
+  }
+
+  private base64UrlDecode(str: string): string {
+    // Add padding if needed
+    let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+    while (base64.length % 4) {
+      base64 += '=';
+    }
+    return Buffer.from(base64, 'base64').toString('utf-8');
+  }
+}
+
+/**
+ * Secure JWT configuration recommendations
+ */
+export const JwtSecurityRecommendations = {
+  // Use RS256 or ES256 in production (asymmetric)
+  RECOMMENDED_ALGORITHM: 'RS256',
+
+  // Short token lifetime (15 min for access, longer for refresh)
+  ACCESS_TOKEN_LIFETIME: 15 * 60,     // 15 minutes
+  REFRESH_TOKEN_LIFETIME: 7 * 24 * 60 * 60, // 7 days
+
+  // Always include these claims
+  REQUIRED_CLAIMS: ['iss', 'sub', 'aud', 'exp', 'iat', 'jti'],
+
+  // Key rotation recommendation
+  KEY_ROTATION_DAYS: 90,
+};
+`;
+}
+
+function generateSecurityHeadersConfig(): string {
+  return `/**
+ * Comprehensive Security Headers Configuration
+ * OWASP A05:2021 - Security Misconfiguration prevention
+ */
+
+import { Response } from 'express';
+
+export interface SecurityHeadersOptions {
+  isProduction?: boolean;
+  contentSecurityPolicy?: ContentSecurityPolicyOptions;
+  permissionsPolicy?: PermissionsPolicyOptions;
+  reportUri?: string;
+}
+
+export interface ContentSecurityPolicyOptions {
+  defaultSrc?: string[];
+  scriptSrc?: string[];
+  styleSrc?: string[];
+  imgSrc?: string[];
+  fontSrc?: string[];
+  connectSrc?: string[];
+  frameSrc?: string[];
+  objectSrc?: string[];
+  mediaSrc?: string[];
+  workerSrc?: string[];
+  frameAncestors?: string[];
+  formAction?: string[];
+  baseUri?: string[];
+  upgradeInsecureRequests?: boolean;
+  blockAllMixedContent?: boolean;
+  reportUri?: string;
+}
+
+export interface PermissionsPolicyOptions {
+  accelerometer?: string;
+  camera?: string;
+  geolocation?: string;
+  gyroscope?: string;
+  magnetometer?: string;
+  microphone?: string;
+  payment?: string;
+  usb?: string;
+  fullscreen?: string;
+  [key: string]: string | undefined;
+}
+
+/**
+ * Set all security headers on a response
+ */
+export function setSecurityHeaders(res: Response, options: SecurityHeadersOptions = {}): void {
+  const isProduction = options.isProduction ?? process.env.NODE_ENV === 'production';
+
+  // Clickjacking protection
+  res.setHeader('X-Frame-Options', 'DENY');
+
+  // XSS protection (legacy but still useful)
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+
+  // Prevent MIME type sniffing
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+
+  // HTTPS strict transport
+  if (isProduction) {
+    // 2 years, include subdomains, allow preloading
+    res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
+  }
+
+  // Referrer policy - strict for security, relaxed for internal analytics
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+
+  // Content Security Policy
+  const csp = buildContentSecurityPolicy(options.contentSecurityPolicy);
+  if (isProduction) {
+    res.setHeader('Content-Security-Policy', csp);
+  } else {
+    // Report-only in development for debugging
+    res.setHeader('Content-Security-Policy-Report-Only', csp);
+  }
+
+  // Permissions Policy (formerly Feature-Policy)
+  res.setHeader('Permissions-Policy', buildPermissionsPolicy(options.permissionsPolicy));
+
+  // Cross-Origin policies
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+
+  // Prevent Adobe products from cross-domain requests
+  res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+
+  // Prevent caching of sensitive data
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Surrogate-Control', 'no-store');
+
+  // Clear site data on logout (set this header on logout endpoint)
+  // res.setHeader('Clear-Site-Data', '"cache", "cookies", "storage"');
+}
+
+/**
+ * Build Content Security Policy header value
+ */
+function buildContentSecurityPolicy(options: ContentSecurityPolicyOptions = {}): string {
+  const directives: string[] = [];
+
+  const addDirective = (name: string, values: string[] | undefined, defaultValue: string[]) => {
+    const finalValues = values ?? defaultValue;
+    if (finalValues.length > 0) {
+      directives.push(\`\${name} \${finalValues.join(' ')}\`);
+    }
+  };
+
+  // Restrictive defaults
+  addDirective('default-src', options.defaultSrc, ["'self'"]);
+  addDirective('script-src', options.scriptSrc, ["'self'"]);
+  addDirective('style-src', options.styleSrc, ["'self'"]);
+  addDirective('img-src', options.imgSrc, ["'self'", 'data:', 'https:']);
+  addDirective('font-src', options.fontSrc, ["'self'"]);
+  addDirective('connect-src', options.connectSrc, ["'self'"]);
+  addDirective('frame-src', options.frameSrc, ["'none'"]);
+  addDirective('object-src', options.objectSrc, ["'none'"]);
+  addDirective('media-src', options.mediaSrc, ["'self'"]);
+  addDirective('worker-src', options.workerSrc, ["'self'"]);
+  addDirective('frame-ancestors', options.frameAncestors, ["'none'"]);
+  addDirective('form-action', options.formAction, ["'self'"]);
+  addDirective('base-uri', options.baseUri, ["'self'"]);
+
+  if (options.upgradeInsecureRequests !== false) {
+    directives.push('upgrade-insecure-requests');
+  }
+
+  if (options.blockAllMixedContent !== false) {
+    directives.push('block-all-mixed-content');
+  }
+
+  if (options.reportUri) {
+    directives.push(\`report-uri \${options.reportUri}\`);
+  }
+
+  return directives.join('; ');
+}
+
+/**
+ * Build Permissions Policy header value
+ */
+function buildPermissionsPolicy(options: PermissionsPolicyOptions = {}): string {
+  const defaultPolicy: PermissionsPolicyOptions = {
+    accelerometer: '()',
+    camera: '()',
+    geolocation: '()',
+    gyroscope: '()',
+    magnetometer: '()',
+    microphone: '()',
+    payment: '()',
+    usb: '()',
+    fullscreen: '(self)',
+    ...options,
+  };
+
+  return Object.entries(defaultPolicy)
+    .filter(([_, value]) => value !== undefined)
+    .map(([key, value]) => \`\${key}=\${value}\`)
+    .join(', ');
+}
+
+/**
+ * Security headers for API responses (less restrictive CSP)
+ */
+export function setApiSecurityHeaders(res: Response, options: SecurityHeadersOptions = {}): void {
+  const isProduction = options.isProduction ?? process.env.NODE_ENV === 'production';
+
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+
+  if (isProduction) {
+    res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains');
+  }
+
+  // API-specific: prevent caching by default
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Pragma', 'no-cache');
+
+  // Prevent embedding
+  res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+}
+
+/**
+ * Headers to set on logout for session cleanup
+ */
+export function setLogoutHeaders(res: Response): void {
+  // Clear all site data
+  res.setHeader('Clear-Site-Data', '"cache", "cookies", "storage"');
+}
+
+/**
+ * Security headers middleware factory
+ */
+export function securityHeadersMiddleware(options: SecurityHeadersOptions = {}) {
+  return (req: any, res: Response, next: () => void) => {
+    setSecurityHeaders(res, options);
+    next();
+  };
+}
+
+/**
+ * API security headers middleware factory
+ */
+export function apiSecurityHeadersMiddleware(options: SecurityHeadersOptions = {}) {
+  return (req: any, res: Response, next: () => void) => {
+    setApiSecurityHeaders(res, options);
+    next();
+  };
+}
+`;
+}
+
 function generateSecurityModule(): string {
   return `import { Module, Global, DynamicModule, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
@@ -1375,11 +2165,14 @@ import { RolesGuard, PermissionsGuard } from './rbac.decorator';
 import { OwaspMiddleware, CsrfMiddleware } from './owasp.middleware';
 import { SecretVaultService } from './secret-vault.service';
 import { InputSanitizer } from './input-sanitizer';
+import { JwtSecurityService } from './jwt.security';
+import { securityHeadersMiddleware } from './security-headers.config';
 
 export interface SecurityModuleOptions {
   enableRbac?: boolean;
   enableOwasp?: boolean;
   enableCsrf?: boolean;
+  enableSecurityHeaders?: boolean;
 }
 
 @Global()
@@ -1396,6 +2189,7 @@ export class SecurityModule implements NestModule {
       AbacService,
       SecretVaultService,
       InputSanitizer,
+      JwtSecurityService,
       CsrfMiddleware,
     ];
 
@@ -1415,6 +2209,7 @@ export class SecurityModule implements NestModule {
         AbacService,
         SecretVaultService,
         InputSanitizer,
+        JwtSecurityService,
       ],
     };
   }
@@ -1425,6 +2220,9 @@ export class SecurityModule implements NestModule {
     }
     if (SecurityModule.options.enableCsrf) {
       consumer.apply(CsrfMiddleware).forRoutes('*');
+    }
+    if (SecurityModule.options.enableSecurityHeaders !== false) {
+      consumer.apply(securityHeadersMiddleware()).forRoutes('*');
     }
   }
 }
