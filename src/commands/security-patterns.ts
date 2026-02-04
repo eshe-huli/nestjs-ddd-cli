@@ -703,12 +703,34 @@ export class OwaspMiddleware implements NestMiddleware {
 
   private checkXss(req: Request): void {
     const xssPatterns = [
+      // Script tags and attributes
       /<script\\b[^>]*>/i,
+      /<\\/script>/i,
+      // JavaScript protocol
       /javascript:/i,
+      /vbscript:/i,
+      // Event handlers
       /on\\w+\\s*=/i,
+      // Dangerous HTML elements
       /<iframe/i,
       /<object/i,
       /<embed/i,
+      /<svg[^>]*onload/i,
+      /<img[^>]*onerror/i,
+      /<body[^>]*onload/i,
+      // Data URIs with HTML/Script
+      /data:\\s*text\\/html/i,
+      /data:\\s*application\\/javascript/i,
+      // CSS injection
+      /expression\\s*\\(/i,
+      /-moz-binding/i,
+      // HTML5 attack vectors
+      /<math/i,
+      /<video[^>]*on/i,
+      /<audio[^>]*on/i,
+      // Template injection
+      /\\{\\{.*\\}\\}/,
+      /\\$\\{.*\\}/,
     ];
 
     const checkValue = (value: any): void => {
@@ -979,16 +1001,22 @@ function generateInputSanitizer(): string {
   return `/**
  * Input Sanitizer
  * Clean and validate user input
+ * OWASP A03:2021 compliant
  */
 
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 
 @Injectable()
 export class InputSanitizer {
+  private readonly logger = new Logger(InputSanitizer.name);
+
   /**
-   * Sanitize string for HTML output
+   * Sanitize string for HTML output - prevents XSS
+   * Includes complete entity encoding for all dangerous characters
    */
   sanitizeHtml(input: string): string {
+    if (!input || typeof input !== 'string') return '';
+
     const map: Record<string, string> = {
       '&': '&amp;',
       '<': '&lt;',
@@ -996,43 +1024,78 @@ export class InputSanitizer {
       '"': '&quot;',
       "'": '&#x27;',
       '/': '&#x2F;',
+      '\`': '&#x60;', // Backtick for template literals
+      '=': '&#x3D;',  // Equals sign
     };
-    return input.replace(/[&<>"'/]/g, char => map[char]);
+    return input.replace(/[&<>"'/\`=]/g, char => map[char] || char);
   }
 
   /**
-   * Sanitize for SQL (prefer parameterized queries)
+   * @deprecated NEVER use this for SQL injection prevention!
+   * Always use parameterized queries/prepared statements instead.
+   * This method only exists for legacy compatibility.
    */
   sanitizeSql(input: string): string {
+    this.logger.warn('sanitizeSql is deprecated! Use parameterized queries instead.');
+    // This is NOT safe - always use parameterized queries
     return input.replace(/['";\\\\]/g, '');
   }
 
   /**
-   * Sanitize for shell commands
+   * Sanitize for shell commands using WHITELIST approach
+   * Only allows alphanumeric, hyphen, underscore, and dot
+   * For complex shell operations, prefer using spawn with args array
    */
   sanitizeShell(input: string): string {
-    return input.replace(/[;&|$\`\\\\(){}\\[\\]<>\\n\\r]/g, '');
+    if (!input || typeof input !== 'string') return '';
+
+    // Strict whitelist - only allow safe characters
+    const sanitized = input.replace(/[^a-zA-Z0-9_\\-.]/g, '');
+
+    // Check for path traversal
+    if (sanitized.includes('..')) {
+      this.logger.warn(\`Shell sanitization blocked path traversal attempt: \${input}\`);
+      return sanitized.replace(/\\.\\.+/g, '');
+    }
+
+    return sanitized;
   }
 
   /**
-   * Sanitize filename
+   * Sanitize filename - prevents path traversal and invalid chars
    */
   sanitizeFilename(input: string): string {
+    if (!input || typeof input !== 'string') return '';
+
     return input
-      .replace(/[/\\\\?%*:|"<>]/g, '-')
-      .replace(/\\.\\./g, '-')
-      .substring(0, 255);
+      .replace(/\\.\\./g, '')            // Remove path traversal
+      .replace(/[/\\\\]/g, '')           // Remove path separators
+      .replace(/[?%*:|"<>\\x00-\\x1f]/g, '-') // Remove invalid chars
+      .replace(/^[-_.]+|[-_.]+$/g, '')   // Trim leading/trailing special chars
+      .substring(0, 255);                // Limit length
   }
 
   /**
-   * Sanitize URL
+   * Sanitize URL - validates protocol and structure
    */
   sanitizeUrl(input: string): string {
+    if (!input || typeof input !== 'string') return '';
+
     try {
       const url = new URL(input);
+
+      // Only allow http/https protocols
       if (!['http:', 'https:'].includes(url.protocol)) {
-        throw new Error('Invalid protocol');
+        this.logger.warn(\`URL sanitization blocked invalid protocol: \${url.protocol}\`);
+        return '';
       }
+
+      // Block javascript: and data: URIs (case-insensitive)
+      if (/^(javascript|data|vbscript):/i.test(input)) {
+        this.logger.warn(\`URL sanitization blocked dangerous scheme: \${input}\`);
+        return '';
+      }
+
       return url.toString();
     } catch {
       return '';
@@ -1040,33 +1103,68 @@ export class InputSanitizer {
   }
 
   /**
-   * Strip all HTML tags
+   * Strip all HTML tags - for plain text extraction
    */
   stripHtml(input: string): string {
-    return input.replace(/<[^>]*>/g, '');
+    if (!input || typeof input !== 'string') return '';
+
+    // Remove script and style content entirely
+    let result = input
+      .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '')
+      .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '');
+
+    // Then strip remaining tags
+    result = result.replace(/<[^>]*>/g, '');
+
+    // Decode entities
+    const entities: Record<string, string> = {
+      '&amp;': '&',
+      '&lt;': '<',
+      '&gt;': '>',
+      '&quot;': '"',
+      '&#x27;': "'",
+      '&nbsp;': ' ',
+    };
+    for (const [entity, char] of Object.entries(entities)) {
+      result = result.replace(new RegExp(entity, 'g'), char);
+    }
+
+    return result;
   }
 
   /**
    * Normalize whitespace
    */
   normalizeWhitespace(input: string): string {
-    return input.replace(/\\s+/g, ' ').trim();
+    if (!input || typeof input !== 'string') return '';
+    return input.replace(/[\\s\\u200B-\\u200D\\uFEFF]+/g, ' ').trim();
   }
 
   /**
-   * Sanitize JSON
+   * Sanitize JSON - prevents XSS in JSON values and prototype pollution
    */
-  sanitizeJson(input: any): any {
+  sanitizeJson(input: any, depth = 0): any {
+    // Prevent infinite recursion
+    if (depth > 10) {
+      this.logger.warn('JSON sanitization max depth exceeded');
+      return null;
+    }
+
     if (typeof input === 'string') {
       return this.sanitizeHtml(input);
     }
     if (Array.isArray(input)) {
-      return input.map(item => this.sanitizeJson(item));
+      return input.map(item => this.sanitizeJson(item, depth + 1));
     }
     if (typeof input === 'object' && input !== null) {
       const result: Record<string, any> = {};
       for (const [key, value] of Object.entries(input)) {
-        result[this.sanitizeHtml(key)] = this.sanitizeJson(value);
+        // Block prototype pollution attacks
+        if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+          this.logger.warn(\`JSON sanitization blocked prototype pollution key: \${key}\`);
+          continue;
+        }
+        result[this.sanitizeHtml(key)] = this.sanitizeJson(value, depth + 1);
       }
       return result;
     }
@@ -1077,7 +1175,14 @@ export class InputSanitizer {
    * Validate and sanitize email
    */
   sanitizeEmail(input: string): string | null {
+    if (!input || typeof input !== 'string') return null;
+
     const email = input.toLowerCase().trim();
+
+    // RFC 5321 max length
+    if (email.length > 254) return null;
+
+    // Basic email regex (more permissive to allow valid emails)
     const emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;
     return emailRegex.test(email) ? email : null;
   }
@@ -1086,7 +1191,32 @@ export class InputSanitizer {
    * Sanitize phone number
    */
   sanitizePhone(input: string): string {
-    return input.replace(/[^0-9+]/g, '');
+    if (!input || typeof input !== 'string') return '';
+    const sanitized = input.replace(/[^0-9+\\-() ]/g, '');
+    // E.164 max length is 15 digits plus '+'
+    return sanitized.substring(0, 20);
+  }
+
+  /**
+   * Validate field name for database queries
+   * Prevents SQL injection via dynamic column names
+   */
+  validateFieldName(fieldName: string, allowedFields: string[]): string {
+    if (!fieldName || typeof fieldName !== 'string') {
+      throw new Error('Invalid field name');
+    }
+
+    // Must be in allowed list
+    if (!allowedFields.includes(fieldName)) {
+      throw new Error(\`Field "\${fieldName}" not allowed. Allowed: \${allowedFields.join(', ')}\`);
+    }
+
+    // Additional safety check - must match safe pattern
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(fieldName)) {
+      throw new Error(\`Field name format invalid: \${fieldName}\`);
+    }
+
+    return fieldName;
   }
 }
 
