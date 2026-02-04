@@ -51,6 +51,16 @@ import { setupAuditLogging } from './commands/audit-logging';
 import { setupI18n } from './commands/i18n-setup';
 import { setupAggregateValidator } from './commands/aggregate-validator';
 import { setupApiContracts } from './commands/api-contracts';
+import { setupResiliencePatterns } from './commands/resilience-patterns';
+import { setupObservability } from './commands/observability-tracing';
+import { setupFeatureFlags } from './commands/feature-flags';
+import { setupCachingStrategies } from './commands/caching-strategies';
+import { setupSecurityPatterns } from './commands/security-patterns';
+import { setupDbOptimization } from './commands/db-optimization';
+import { setupDatabaseSeeding } from './commands/database-seeding';
+import { setupHealthProbesAdvanced } from './commands/health-probes-advanced';
+import { setupMetricsPrometheus } from './commands/metrics-prometheus';
+import { setupGraphQLSubscriptions } from './commands/graphql-subscriptions';
 
 const program = new Command();
 
@@ -993,6 +1003,212 @@ program
     try {
       await setupApiContracts(options.path || process.cwd(), {
         format: options.format,
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Resilience patterns
+program
+  .command('resilience')
+  .description('Set up resilience patterns (circuit breaker, retry, timeout, fallback)')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('--circuit-breaker', 'Include circuit breaker', true)
+  .option('--retry', 'Include retry strategy', true)
+  .option('--timeout', 'Include timeout handling', true)
+  .option('--fallback', 'Include fallback pattern', true)
+  .option('--bulkhead', 'Include bulkhead pattern', true)
+  .action(async (options) => {
+    try {
+      await setupResiliencePatterns(options.path || process.cwd(), {
+        includeCircuitBreaker: options.circuitBreaker,
+        includeRetry: options.retry,
+        includeTimeout: options.timeout,
+        includeFallback: options.fallback,
+        includeBulkhead: options.bulkhead,
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Observability tracing
+program
+  .command('tracing')
+  .description('Set up distributed tracing with OpenTelemetry')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('--provider <provider>', 'Trace provider (jaeger, zipkin, datadog, otlp)', 'otlp')
+  .option('--service-name <name>', 'Service name for traces')
+  .action(async (options) => {
+    try {
+      await setupObservability(options.path || process.cwd(), {
+        provider: options.provider,
+        serviceName: options.serviceName,
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Feature flags
+program
+  .command('feature-flags')
+  .description('Set up feature flag management with A/B testing')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('--provider <provider>', 'Flag provider (memory, database, redis, launchdarkly)', 'database')
+  .action(async (options) => {
+    try {
+      await setupFeatureFlags(options.path || process.cwd(), {
+        provider: options.provider,
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Caching strategies
+program
+  .command('caching')
+  .description('Set up advanced caching strategies (cache-aside, write-through, etc.)')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('--provider <provider>', 'Cache provider (memory, redis, memcached)', 'redis')
+  .action(async (options) => {
+    try {
+      await setupCachingStrategies(options.path || process.cwd(), {
+        provider: options.provider,
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Security patterns
+program
+  .command('security')
+  .description('Set up comprehensive security patterns (RBAC, ABAC, encryption, OWASP)')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('--rbac', 'Include RBAC (role-based access control)', true)
+  .option('--encryption', 'Include encryption service', true)
+  .option('--owasp', 'Include OWASP protections', true)
+  .action(async (options) => {
+    try {
+      await setupSecurityPatterns(options.path || process.cwd(), {
+        includeRbac: options.rbac,
+        includeEncryption: options.encryption,
+        includeOwasp: options.owasp,
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Database optimization
+program
+  .command('db-optimize')
+  .description('Set up database optimization (DataLoader, query analyzer, connection pool)')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('-m, --module <module>', 'Module name', 'shared')
+  .option('-o, --orm <orm>', 'ORM type (typeorm, prisma, mikro-orm)', 'typeorm')
+  .option('--dataloader', 'Include DataLoader for N+1 prevention', true)
+  .option('--analyzer', 'Include query analyzer', true)
+  .action(async (options) => {
+    try {
+      await setupDbOptimization(options.path || process.cwd(), {
+        module: options.module,
+        orm: options.orm,
+        includeDataLoader: options.dataloader,
+        includeQueryAnalyzer: options.analyzer,
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Database seeding
+program
+  .command('seeding')
+  .description('Set up database seeding infrastructure with fixtures')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('-m, --module <module>', 'Module name', 'shared')
+  .option('-o, --orm <orm>', 'ORM type (typeorm, prisma, mikro-orm)', 'typeorm')
+  .option('-e, --entities <entities>', 'Entity names (comma-separated)')
+  .action(async (options) => {
+    try {
+      await setupDatabaseSeeding(options.path || process.cwd(), {
+        module: options.module,
+        orm: options.orm,
+        entities: options.entities ? options.entities.split(',') : undefined,
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Advanced health probes
+program
+  .command('health-probes')
+  .description('Set up advanced health probes for Kubernetes')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('-m, --module <module>', 'Module name', 'shared')
+  .option('-d, --dependencies <deps>', 'Dependencies to check (comma-separated)', 'database,redis,external-api')
+  .option('--k8s', 'Include Kubernetes configuration', true)
+  .action(async (options) => {
+    try {
+      await setupHealthProbesAdvanced(options.path || process.cwd(), {
+        module: options.module,
+        dependencies: options.dependencies.split(','),
+        includeKubernetes: options.k8s,
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Prometheus metrics
+program
+  .command('metrics')
+  .description('Set up Prometheus metrics with custom business metrics')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('-m, --module <module>', 'Module name', 'shared')
+  .option('--default-metrics', 'Include default Node.js metrics', true)
+  .option('--custom <metrics>', 'Custom metrics to include (comma-separated)')
+  .action(async (options) => {
+    try {
+      await setupMetricsPrometheus(options.path || process.cwd(), {
+        module: options.module,
+        includeDefaultMetrics: options.defaultMetrics,
+        customMetrics: options.custom ? options.custom.split(',') : undefined,
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// GraphQL subscriptions
+program
+  .command('graphql-subscriptions')
+  .description('Set up GraphQL subscriptions with real-time events')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('-m, --module <module>', 'Module name', 'shared')
+  .option('-e, --events <events>', 'Event types (comma-separated)', 'created,updated,deleted')
+  .option('--redis', 'Use Redis for distributed pub/sub', true)
+  .action(async (options) => {
+    try {
+      await setupGraphQLSubscriptions(options.path || process.cwd(), {
+        module: options.module,
+        events: options.events.split(','),
+        useRedis: options.redis,
       });
     } catch (error) {
       console.error(chalk.red('Error:'), (error as Error).message);
