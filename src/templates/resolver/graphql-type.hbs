@@ -1,0 +1,58 @@
+import { Field, ID, ObjectType } from "@nestjs/graphql";
+
+@ObjectType()
+export class {{entityNamePascal}}Type {
+  @Field(() => ID)
+  id: string;
+
+{{#if hasFields}}
+{{#each fields}}
+  @Field({{#if this.isOptional}}{ nullable: true }{{/if}})
+  {{this.camelCase}}{{#if this.isOptional}}?{{/if}}: {{this.tsType}};
+
+{{/each}}
+{{else}}
+  // Add your GraphQL fields here
+  // Example:
+  // @Field()
+  // name: string;
+{{/if}}
+  @Field()
+  isActive: boolean;
+
+  @Field()
+  createdAt: Date;
+
+  @Field()
+  updatedAt: Date;
+}
+
+@ObjectType()
+export class PaginationMetaType {
+  @Field()
+  total: number;
+
+  @Field()
+  page: number;
+
+  @Field()
+  limit: number;
+
+  @Field()
+  totalPages: number;
+
+  @Field()
+  hasNextPage: boolean;
+
+  @Field()
+  hasPreviousPage: boolean;
+}
+
+@ObjectType()
+export class Paginated{{entityNamePluralPascal}}Type {
+  @Field(() => [{{entityNamePascal}}Type])
+  items: {{entityNamePascal}}Type[];
+
+  @Field(() => PaginationMetaType)
+  meta: PaginationMetaType;
+}

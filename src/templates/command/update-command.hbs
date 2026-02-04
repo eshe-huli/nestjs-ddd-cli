@@ -1,0 +1,24 @@
+import { CommandHandler, ICommandHandler } from "@nestjs/cqrs";
+import { NotFoundException } from "@nestjs/common";
+import { Update{{entityNamePascal}}UseCase } from "@modules/{{moduleNameKebab}}/application/usecases/update-{{entityNameKebab}}.use-case";
+import { Update{{entityNamePascal}}Dto } from "@modules/{{moduleNameKebab}}/application/dto/requests/update-{{entityNameKebab}}.dto";
+import { {{entityNamePascal}}ResponseDto } from "@modules/{{moduleNameKebab}}/application/dto/responses/{{entityNameKebab}}.response.dto";
+
+export class Update{{entityNamePascal}}Command {
+  constructor(
+    public readonly id: string,
+    public readonly data: Update{{entityNamePascal}}Dto,
+  ) {}
+}
+
+@CommandHandler(Update{{entityNamePascal}}Command)
+export class Update{{entityNamePascal}}Handler
+  implements ICommandHandler<Update{{entityNamePascal}}Command, {{entityNamePascal}}ResponseDto>
+{
+  constructor(private readonly useCase: Update{{entityNamePascal}}UseCase) {}
+
+  async execute(command: Update{{entityNamePascal}}Command): Promise<{{entityNamePascal}}ResponseDto> {
+    const { id, data } = command;
+    return this.useCase.execute(id, data);
+  }
+}

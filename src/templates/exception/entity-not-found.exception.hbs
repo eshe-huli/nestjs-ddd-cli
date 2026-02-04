@@ -1,0 +1,7 @@
+import { NotFoundException } from "@nestjs/common";
+
+export class {{entityNamePascal}}NotFoundException extends NotFoundException {
+  constructor(id: string) {
+    super(`{{entityNamePascal}} with id '${id}' was not found`);
+  }
+}

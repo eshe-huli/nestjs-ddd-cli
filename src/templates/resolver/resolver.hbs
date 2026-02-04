@@ -1,0 +1,62 @@
+import { Args, ID, Mutation, Query, Resolver } from "@nestjs/graphql";
+import { CommandBus, QueryBus } from "@nestjs/cqrs";
+import { Create{{entityNamePascal}}Command } from "@modules/{{moduleNameKebab}}/application/commands/create-{{entityNameKebab}}.command";
+import { Update{{entityNamePascal}}Command } from "@modules/{{moduleNameKebab}}/application/commands/update-{{entityNameKebab}}.command";
+import { Delete{{entityNamePascal}}Command } from "@modules/{{moduleNameKebab}}/application/commands/delete-{{entityNameKebab}}.command";
+import { Get{{entityNamePascal}}ByIdQuery } from "@modules/{{moduleNameKebab}}/application/queries/get-{{entityNameKebab}}-by-id.query";
+import { GetAll{{entityNamePluralPascal}}Query } from "@modules/{{moduleNameKebab}}/application/queries/get-all-{{entityNamePluralKebab}}.query";
+import { Create{{entityNamePascal}}Input } from "./inputs/create-{{entityNameKebab}}.input";
+import { Update{{entityNamePascal}}Input } from "./inputs/update-{{entityNameKebab}}.input";
+import { {{entityNamePascal}}Type } from "./types/{{entityNameKebab}}.type";
+import { Paginated{{entityNamePluralPascal}}Type } from "./types/paginated-{{entityNamePluralKebab}}.type";
+import { PaginationArgs } from "./args/pagination.args";
+
+@Resolver(() => {{entityNamePascal}}Type)
+export class {{entityNamePascal}}Resolver {
+  constructor(
+    private readonly commandBus: CommandBus,
+    private readonly queryBus: QueryBus,
+  ) {}
+
+  @Query(() => {{entityNamePascal}}Type, { name: "{{entityNameCamel}}" })
+  async get{{entityNamePascal}}(
+    @Args("id", { type: () => ID }) id: string,
+  ): Promise<{{entityNamePascal}}Type> {
+    const query = new Get{{entityNamePascal}}ByIdQuery(id);
+    return this.queryBus.execute(query);
+  }
+
+  @Query(() => Paginated{{entityNamePluralPascal}}Type, { name: "{{entityNamePluralCamel}}" })
+  async get{{entityNamePluralPascal}}(
+    @Args() pagination: PaginationArgs,
+  ): Promise<Paginated{{entityNamePluralPascal}}Type> {
+    const query = new GetAll{{entityNamePluralPascal}}Query(pagination);
+    return this.queryBus.execute(query);
+  }
+
+  @Mutation(() => {{entityNamePascal}}Type)
+  async create{{entityNamePascal}}(
+    @Args("input") input: Create{{entityNamePascal}}Input,
+  ): Promise<{{entityNamePascal}}Type> {
+    const command = new Create{{entityNamePascal}}Command(input);
+    return this.commandBus.execute(command);
+  }
+
+  @Mutation(() => {{entityNamePascal}}Type)
+  async update{{entityNamePascal}}(
+    @Args("id", { type: () => ID }) id: string,
+    @Args("input") input: Update{{entityNamePascal}}Input,
+  ): Promise<{{entityNamePascal}}Type> {
+    const command = new Update{{entityNamePascal}}Command(id, input);
+    return this.commandBus.execute(command);
+  }
+
+  @Mutation(() => Boolean)
+  async delete{{entityNamePascal}}(
+    @Args("id", { type: () => ID }) id: string,
+  ): Promise<boolean> {
+    const command = new Delete{{entityNamePascal}}Command(id);
+    await this.commandBus.execute(command);
+    return true;
+  }
+}

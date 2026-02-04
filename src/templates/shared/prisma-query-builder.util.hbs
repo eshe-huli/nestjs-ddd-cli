@@ -1,0 +1,189 @@
+/**
+ * Query builder utilities for Prisma
+ */
+
+export type FilterOperator =
+  | "eq"
+  | "ne"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "in"
+  | "nin"
+  | "contains"
+  | "startsWith"
+  | "endsWith"
+  | "isNull";
+
+export interface FilterCondition {
+  field: string;
+  operator: FilterOperator;
+  value?: any;
+}
+
+export interface QueryOptions {
+  page?: number;
+  limit?: number;
+  sortBy?: string;
+  sortOrder?: "asc" | "desc";
+  search?: string;
+  searchFields?: string[];
+  filters?: Record<string, any>;
+}
+
+/**
+ * Parse filter parameters from query string to Prisma where conditions
+ */
+export function parseFiltersToPrismaWhere(query: Record<string, any>): Record<string, any> {
+  const where: Record<string, any> = {};
+
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || value === null || value === "") continue;
+
+    // Skip pagination and sort params
+    if (["page", "limit", "sortBy", "sortOrder", "search", "searchFields"].includes(key)) {
+      continue;
+    }
+
+    // Check for operator suffix (field__operator)
+    const parts = key.split("__");
+    const field = parts[0];
+    const operator = parts[1] || "eq";
+
+    // Convert to Prisma where condition
+    where[field] = convertToPrismaCondition(operator, value);
+  }
+
+  return where;
+}
+
+/**
+ * Convert operator and value to Prisma condition
+ */
+function convertToPrismaCondition(operator: string, value: any): any {
+  switch (operator) {
+    case "eq":
+      return value;
+    case "ne":
+      return { not: value };
+    case "gt":
+      return { gt: value };
+    case "gte":
+      return { gte: value };
+    case "lt":
+      return { lt: value };
+    case "lte":
+      return { lte: value };
+    case "in":
+      return { in: Array.isArray(value) ? value : value.split(",") };
+    case "nin":
+      return { notIn: Array.isArray(value) ? value : value.split(",") };
+    case "contains":
+    case "like":
+      return { contains: value, mode: "insensitive" };
+    case "startsWith":
+      return { startsWith: value, mode: "insensitive" };
+    case "endsWith":
+      return { endsWith: value, mode: "insensitive" };
+    case "isNull":
+      return value === "true" || value === true ? null : { not: null };
+    case "between":
+      const [min, max] = Array.isArray(value) ? value : value.split(",");
+      return { gte: min, lte: max };
+    default:
+      return value;
+  }
+}
+
+/**
+ * Build search conditions for multiple fields
+ */
+export function buildPrismaSearchCondition(
+  search: string,
+  searchFields: string[]
+): Record<string, any> {
+  if (!search || searchFields.length === 0) return {};
+
+  return {
+    OR: searchFields.map((field) => ({
+      [field]: { contains: search, mode: "insensitive" },
+    })),
+  };
+}
+
+/**
+ * Build complete Prisma query options
+ */
+export function buildPrismaQueryOptions(options: QueryOptions): {
+  where: Record<string, any>;
+  skip: number;
+  take: number;
+  orderBy: Record<string, any>;
+} {
+  const {
+    page = 1,
+    limit = 10,
+    sortBy = "created_at",
+    sortOrder = "desc",
+    filters = {},
+    search,
+    searchFields = [],
+  } = options;
+
+  // Build where conditions
+  const filterWhere = parseFiltersToPrismaWhere(filters);
+  const searchWhere = search ? buildPrismaSearchCondition(search, searchFields) : {};
+
+  // Combine where conditions
+  const where: Record<string, any> = {
+    ...filterWhere,
+    deleted_at: null, // Default soft delete filter
+  };
+
+  if (Object.keys(searchWhere).length > 0) {
+    where.AND = [...(where.AND || []), searchWhere];
+  }
+
+  return {
+    where,
+    skip: (page - 1) * limit,
+    take: limit,
+    orderBy: { [sortBy]: sortOrder },
+  };
+}
+
+/**
+ * Execute filtered query with Prisma
+ */
+export async function executeFilteredPrismaQuery<T>(
+  model: any,
+  options: QueryOptions,
+  defaultSearchFields: string[] = []
+): Promise<[T[], number]> {
+  const queryOptions = buildPrismaQueryOptions({
+    ...options,
+    searchFields: options.searchFields || defaultSearchFields,
+  });
+
+  const [items, total] = await Promise.all([
+    model.findMany(queryOptions),
+    model.count({ where: queryOptions.where }),
+  ]);
+
+  return [items, total];
+}
+
+/**
+ * Helper to build dynamic includes for relations
+ */
+export function buildPrismaIncludes(
+  includeFields?: string[]
+): Record<string, boolean> | undefined {
+  if (!includeFields || includeFields.length === 0) return undefined;
+
+  return includeFields.reduce((acc, field) => {
+    acc[field] = true;
+    return acc;
+  }, {} as Record<string, boolean>);
+}

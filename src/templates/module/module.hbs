@@ -1,25 +1,49 @@
 import { Module } from "@nestjs/common";
 import { CqrsModule } from "@nestjs/cqrs";
-import { Repositories } from "@modules/{{moduleNameKebab}}/infrastructure/repositories";
-import { Queries } from "@modules/{{moduleNameKebab}}/application/queries";
-import { Mappers } from "@modules/{{moduleNameKebab}}/infrastructure/mappers";
-import { UseCases } from "@modules/{{moduleNameKebab}}/application/domain/usecases";
-import { Controllers } from "@modules/{{moduleNameKebab}}/application/controllers";
-import { CommandHandlers } from "@modules/{{moduleNameKebab}}/application/commands";
-import { OrmEntities } from "@modules/{{moduleNameKebab}}/infrastructure/orm-entities";
 import { TypeOrmModule } from "@nestjs/typeorm";
+
+// Infrastructure
+import { OrmEntities } from "@modules/{{moduleNameKebab}}/infrastructure/orm-entities";
+import { Repositories } from "@modules/{{moduleNameKebab}}/infrastructure/repositories";
+import { Mappers } from "@modules/{{moduleNameKebab}}/infrastructure/mappers";
+
+// Application - Commands
+import { CommandHandlers } from "@modules/{{moduleNameKebab}}/application/commands";
+
+// Application - Queries
+import { Queries } from "@modules/{{moduleNameKebab}}/application/queries";
+
+// Application - Use Cases
+import { UseCases } from "@modules/{{moduleNameKebab}}/application/domain/usecases";
+
+// Application - Services
 import { Services } from "@modules/{{moduleNameKebab}}/application/domain/services";
 
+// Application - Controllers
+import { Controllers } from "@modules/{{moduleNameKebab}}/application/controllers";
+
 @Module({
-  imports: [TypeOrmModule.forFeature([...OrmEntities]), CqrsModule],
-  providers: [
-    ...CommandHandlers,
-    ...Queries,
-    ...Repositories,
-    ...Mappers,
-    ...UseCases,
-    ...Services,
+  imports: [
+    TypeOrmModule.forFeature([...OrmEntities]),
+    CqrsModule,
   ],
   controllers: [...Controllers],
+  providers: [
+    // CQRS handlers
+    ...CommandHandlers,
+    ...Queries,
+    // Domain layer
+    ...UseCases,
+    ...Services,
+    // Infrastructure layer
+    ...Repositories,
+    ...Mappers,
+  ],
+  exports: [
+    // Export repositories for use in other modules
+    ...Repositories,
+    // Export mappers for use in other modules
+    ...Mappers,
+  ],
 })
-export class {{moduleName}}Module {}
+export class {{moduleNamePascal}}Module {}

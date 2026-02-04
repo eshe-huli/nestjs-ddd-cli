@@ -1,0 +1,116 @@
+import { Test, TestingModule } from "@nestjs/testing";
+import { NotFoundException } from "@nestjs/common";
+import { Create{{entityNamePascal}}UseCase } from "../create-{{entityNameKebab}}.use-case";
+import { Update{{entityNamePascal}}UseCase } from "../update-{{entityNameKebab}}.use-case";
+import { Delete{{entityNamePascal}}UseCase } from "../delete-{{entityNameKebab}}.use-case";
+import { {{entityNamePascal}}Repository } from "@modules/{{moduleNameKebab}}/infrastructure/repositories/{{entityNameKebab}}.repository";
+import { {{entityNamePascal}}Mapper } from "@modules/{{moduleNameKebab}}/infrastructure/mappers/{{entityNameKebab}}.mapper";
+import { {{entityNamePascal}}Entity } from "@modules/{{moduleNameKebab}}/domain/entities/{{entityNameKebab}}.entity";
+
+describe("{{entityNamePascal}} Use Cases", () => {
+  let createUseCase: Create{{entityNamePascal}}UseCase;
+  let updateUseCase: Update{{entityNamePascal}}UseCase;
+  let deleteUseCase: Delete{{entityNamePascal}}UseCase;
+  let repository: jest.Mocked<{{entityNamePascal}}Repository>;
+  let mapper: jest.Mocked<{{entityNamePascal}}Mapper>;
+
+  const mockEntity = new {{entityNamePascal}}Entity({
+    id: "test-uuid",
+    isActive: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  const mockResponseDto = {
+    id: "test-uuid",
+    isActive: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        Create{{entityNamePascal}}UseCase,
+        Update{{entityNamePascal}}UseCase,
+        Delete{{entityNamePascal}}UseCase,
+        {
+          provide: {{entityNamePascal}}Repository,
+          useValue: {
+            create: jest.fn(),
+            findById: jest.fn(),
+            update: jest.fn(),
+            delete: jest.fn(),
+          },
+        },
+        {
+          provide: {{entityNamePascal}}Mapper,
+          useValue: {
+            toResponseDto: jest.fn(),
+          },
+        },
+      ],
+    }).compile();
+
+    createUseCase = module.get<Create{{entityNamePascal}}UseCase>(Create{{entityNamePascal}}UseCase);
+    updateUseCase = module.get<Update{{entityNamePascal}}UseCase>(Update{{entityNamePascal}}UseCase);
+    deleteUseCase = module.get<Delete{{entityNamePascal}}UseCase>(Delete{{entityNamePascal}}UseCase);
+    repository = module.get({{entityNamePascal}}Repository);
+    mapper = module.get({{entityNamePascal}}Mapper);
+  });
+
+  describe("Create{{entityNamePascal}}UseCase", () => {
+    it("should create a new {{entityNameCamel}} and return response DTO", async () => {
+      const createDto = {};
+      repository.create.mockResolvedValue(mockEntity);
+      mapper.toResponseDto.mockReturnValue(mockResponseDto as any);
+
+      const result = await createUseCase.execute(createDto as any);
+
+      expect(repository.create).toHaveBeenCalled();
+      expect(mapper.toResponseDto).toHaveBeenCalledWith(mockEntity);
+      expect(result).toEqual(mockResponseDto);
+    });
+  });
+
+  describe("Update{{entityNamePascal}}UseCase", () => {
+    it("should update an existing {{entityNameCamel}}", async () => {
+      const updateDto = {};
+      repository.findById.mockResolvedValue(mockEntity);
+      repository.update.mockResolvedValue(mockEntity);
+      mapper.toResponseDto.mockReturnValue(mockResponseDto as any);
+
+      const result = await updateUseCase.execute("test-uuid", updateDto as any);
+
+      expect(repository.findById).toHaveBeenCalledWith("test-uuid");
+      expect(repository.update).toHaveBeenCalled();
+      expect(result).toEqual(mockResponseDto);
+    });
+
+    it("should throw NotFoundException when {{entityNameCamel}} does not exist", async () => {
+      repository.findById.mockResolvedValue(null);
+
+      await expect(updateUseCase.execute("non-existent", {} as any)).rejects.toThrow(
+        NotFoundException
+      );
+    });
+  });
+
+  describe("Delete{{entityNamePascal}}UseCase", () => {
+    it("should delete an existing {{entityNameCamel}}", async () => {
+      repository.findById.mockResolvedValue(mockEntity);
+      repository.delete.mockResolvedValue(undefined);
+
+      await deleteUseCase.execute("test-uuid");
+
+      expect(repository.findById).toHaveBeenCalledWith("test-uuid");
+      expect(repository.delete).toHaveBeenCalledWith("test-uuid");
+    });
+
+    it("should throw NotFoundException when {{entityNameCamel}} does not exist", async () => {
+      repository.findById.mockResolvedValue(null);
+
+      await expect(deleteUseCase.execute("non-existent")).rejects.toThrow(NotFoundException);
+    });
+  });
+});

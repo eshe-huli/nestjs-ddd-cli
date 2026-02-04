@@ -1,0 +1,50 @@
+import { IQueryHandler, QueryHandler } from "@nestjs/cqrs";
+import { {{entityNamePascal}}Repository } from "@modules/{{moduleNameKebab}}/infrastructure/repositories/{{entityNameKebab}}.repository";
+import { {{entityNamePascal}}Mapper } from "@modules/{{moduleNameKebab}}/infrastructure/mappers/{{entityNameKebab}}.mapper";
+import { {{entityNamePascal}}ResponseDto } from "@modules/{{moduleNameKebab}}/application/dto/responses/{{entityNameKebab}}.response.dto";
+import { PaginatedResponseDto } from "@modules/{{moduleNameKebab}}/application/dto/responses/paginated.response.dto";
+import { PaginationQueryDto } from "@modules/{{moduleNameKebab}}/application/dto/requests/pagination.query.dto";
+
+export class GetAll{{entityNamePluralPascal}}Query {
+  constructor(public readonly pagination: PaginationQueryDto) {}
+}
+
+@QueryHandler(GetAll{{entityNamePluralPascal}}Query)
+export class GetAll{{entityNamePluralPascal}}Handler
+  implements IQueryHandler<GetAll{{entityNamePluralPascal}}Query, PaginatedResponseDto<{{entityNamePascal}}ResponseDto>>
+{
+  constructor(
+    private readonly repository: {{entityNamePascal}}Repository,
+    private readonly mapper: {{entityNamePascal}}Mapper,
+  ) {}
+
+  async execute(
+    query: GetAll{{entityNamePluralPascal}}Query,
+  ): Promise<PaginatedResponseDto<{{entityNamePascal}}ResponseDto>> {
+    const { pagination } = query;
+    const { page = 1, limit = 10, sortBy = "createdAt", sortOrder = "DESC" } = pagination;
+
+    const skip = (page - 1) * limit;
+
+    const [entities, total] = await this.repository.findAllPaginated({
+      skip,
+      take: limit,
+      orderBy: sortBy,
+      orderDirection: sortOrder,
+    });
+
+    const items = entities.map((entity) => this.mapper.toResponseDto(entity));
+
+    return {
+      items,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        hasNextPage: page * limit < total,
+        hasPreviousPage: page > 1,
+      },
+    };
+  }
+}

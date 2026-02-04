@@ -4,8 +4,14 @@ export interface {{entityNamePascal}}EntityProps {
   createdAt?: Date;
   updatedAt?: Date;
   deletedAt?: Date;
+{{#if hasFields}}
+{{#each fields}}
+  {{this.camelCase}}{{#if this.isOptional}}?{{/if}}: {{this.tsType}};
+{{/each}}
+{{else}}
   // Add your domain properties here
   // Example: name: string;
+{{/if}}
 }
 
 export class {{entityNamePascal}}Entity {
@@ -14,10 +20,35 @@ export class {{entityNamePascal}}Entity {
   public readonly createdAt?: Date;
   public readonly updatedAt?: Date;
   public readonly deletedAt?: Date;
+{{#if hasFields}}
+{{#each fields}}
+  public readonly {{this.camelCase}}{{#if this.isOptional}}?{{/if}}: {{this.tsType}};
+{{/each}}
+{{else}}
   // Add your domain properties here
   // Example: public readonly name: string;
+{{/if}}
 
   constructor(props: {{entityNamePascal}}EntityProps) {
     Object.assign(this, props);
+  }
+
+  /**
+   * Create a copy of the entity with updated properties
+   */
+  public update(props: Partial<{{entityNamePascal}}EntityProps>): {{entityNamePascal}}Entity {
+    return new {{entityNamePascal}}Entity({
+      ...this,
+      ...props,
+      updatedAt: new Date(),
+    });
+  }
+
+  /**
+   * Check if the entity is valid for persistence
+   */
+  public isValid(): boolean {
+    // Add your validation logic here
+    return true;
   }
 }

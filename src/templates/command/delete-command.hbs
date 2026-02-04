@@ -1,0 +1,19 @@
+import { CommandHandler, ICommandHandler } from "@nestjs/cqrs";
+import { NotFoundException } from "@nestjs/common";
+import { Delete{{entityNamePascal}}UseCase } from "@modules/{{moduleNameKebab}}/application/usecases/delete-{{entityNameKebab}}.use-case";
+
+export class Delete{{entityNamePascal}}Command {
+  constructor(public readonly id: string) {}
+}
+
+@CommandHandler(Delete{{entityNamePascal}}Command)
+export class Delete{{entityNamePascal}}Handler
+  implements ICommandHandler<Delete{{entityNamePascal}}Command, void>
+{
+  constructor(private readonly useCase: Delete{{entityNamePascal}}UseCase) {}
+
+  async execute(command: Delete{{entityNamePascal}}Command): Promise<void> {
+    const { id } = command;
+    return this.useCase.execute(id);
+  }
+}

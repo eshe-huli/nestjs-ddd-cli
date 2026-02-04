@@ -1,506 +1,305 @@
 # NestJS DDD CLI
 
-🏗️ **An opinionated CLI for pragmatic Domain-Driven Design with NestJS**
+**An opinionated CLI for pragmatic Domain-Driven Design with NestJS**
 
 Stop writing boilerplate. Start building business logic.
 
 Generate production-ready NestJS code following proven DDD/CQRS patterns with consistent structure and immutable architecture principles.
 
-✨ **New Features**:
-- Initialize new NestJS projects with DDD structure
-- Self-update functionality to keep the CLI up to date
-- Dependency management to check and update project dependencies
+## What's New in v3.0
+
+- **Field-Aware Generation**: Generate complete typed entities, DTOs, and migrations with `--fields`
+- **Recipe System**: Apply common patterns like JWT auth, caching, audit logging
+- **Shared Module**: Generate base classes, interceptors, filters, and utilities
+- **Test Generation**: Generate unit tests with `--with-tests`
+- **AI-Ready**: Generates `CLAUDE.md` context file for AI assistants
+- **Full CQRS**: Complete command/query handlers with pagination
 
 ## Installation
 
-**From NPM (Recommended):**
 ```bash
 npm install -g nestjs-ddd-cli
 ```
 
-**From Source:**
+## Quick Start
+
+```bash
+# Initialize a new project
+ddd init my-project
+
+# Generate complete CRUD with typed fields
+ddd scaffold User -m users --fields "name:string email:string:unique age:number:optional"
+
+# Apply authentication recipe
+ddd recipe auth-jwt --install-deps
+
+# Generate shared utilities
+ddd shared
+```
+
+## Commands
+
+### Initialize Project
+
+```bash
+ddd init <projectName> [options]
+```
+
+Options:
+- `-p, --path <path>` - Project location
+- `--skip-install` - Skip npm install
+- `--with-ddd` - Set up DDD structure (default: true)
+
+Creates a NestJS project with:
+- DDD folder structure
+- Path aliases (`@modules/*`, `@shared/*`)
+- Configuration file (`.dddrc.json`)
+- AI context file (`CLAUDE.md`)
+
+### Generate Scaffolding
+
+```bash
+ddd scaffold <entityName> -m <module> [options]
+```
+
+Options:
+- `-m, --module <module>` - Module name (required)
+- `-f, --fields <fields>` - Entity fields
+- `--with-tests` - Generate test files
+- `--dry-run` - Preview without writing
+- `--install-deps` - Install dependencies
+
+**Field Format:** `name:type:modifier1:modifier2`
+
+Types: `string`, `number`, `boolean`, `date`, `uuid`, `enum`, `json`, `text`
+
+Modifiers: `optional`, `unique`, `relation`
+
+Examples:
+```bash
+# Basic entity
+ddd scaffold Product -m inventory
+
+# With fields
+ddd scaffold User -m users --fields "name:string email:string:unique role:enum:admin,user"
+
+# With tests
+ddd scaffold Order -m orders --fields "total:number status:string" --with-tests
+```
+
+### Generate Individual Components
+
+```bash
+ddd generate <type> <name> -m <module>
+```
+
+Types:
+- `module` - NestJS module with DDD structure
+- `entity` - Domain entity + ORM entity + mapper + repository
+- `usecase` - Use case with command handler
+- `service` - Domain service
+- `event` - Domain event
+- `query` - Query handler
+
+### Apply Recipes
+
+```bash
+ddd recipe [recipeName] [options]
+```
+
+Available recipes:
+
+| Recipe | Description |
+|--------|-------------|
+| `auth-jwt` | JWT authentication with guards and decorators |
+| `pagination` | Shared pagination DTOs and utilities |
+| `soft-delete` | Base entity and repository with soft delete |
+| `audit-log` | Entity change tracking |
+| `caching` | Redis caching with decorators |
+
+```bash
+# List available recipes
+ddd recipe
+
+# Apply with auto-install
+ddd recipe auth-jwt --install-deps
+```
+
+### Generate Shared Module
+
+```bash
+ddd shared
+```
+
+Generates:
+- Base ORM and domain entities
+- Exception filters
+- Transform and logging interceptors
+- Validation pipe
+- Date and string utilities
+
+### CLI Management
+
+```bash
+ddd update              # Update CLI to latest version
+ddd update-deps         # Update project dependencies
+```
+
+## Generated Structure
+
+```
+src/
+├── modules/
+│   └── [module-name]/
+│       ├── [module].module.ts
+│       ├── application/
+│       │   ├── commands/           # CQRS commands
+│       │   ├── queries/            # CQRS queries (paginated)
+│       │   ├── controllers/        # REST endpoints
+│       │   ├── dto/
+│       │   │   ├── requests/       # Input DTOs with validation
+│       │   │   └── responses/      # Output DTOs
+│       │   └── domain/
+│       │       ├── entities/       # Domain entities
+│       │       ├── events/         # Domain events
+│       │       ├── services/       # Domain services
+│       │       └── usecases/       # Business logic
+│       └── infrastructure/
+│           ├── repositories/       # Data access
+│           ├── orm-entities/       # Database schemas
+│           └── mappers/            # Entity mapping
+├── shared/                         # Shared utilities
+└── migrations/                     # Database migrations
+```
+
+## Configuration
+
+Create `.dddrc.json` in your project root:
+
+```json
+{
+  "$schema": "https://unpkg.com/nestjs-ddd-cli/ddd.schema.json",
+  "orm": "typeorm",
+  "database": "postgres",
+  "naming": {
+    "table": "snake_case",
+    "dto": "snake_case",
+    "file": "kebab-case"
+  },
+  "features": {
+    "swagger": true,
+    "pagination": true,
+    "softDelete": true,
+    "timestamps": true,
+    "tests": false,
+    "events": false
+  },
+  "paths": {
+    "modules": "src/modules",
+    "migrations": "src/migrations",
+    "shared": "src/shared"
+  }
+}
+```
+
+## AI Integration
+
+The CLI generates a `CLAUDE.md` file with project context for AI assistants:
+- Project structure documentation
+- CLI command reference
+- Naming conventions
+- Architecture rules
+- Common patterns
+
+## API Conventions
+
+All generated APIs follow RESTful conventions:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/entities` | List with pagination |
+| GET | `/entities/:id` | Get single entity |
+| POST | `/entities` | Create new entity |
+| PUT | `/entities/:id` | Update entity |
+| DELETE | `/entities/:id` | Soft delete entity |
+
+### Pagination
+
+```
+GET /entities?page=1&limit=10&sortBy=createdAt&sortOrder=DESC
+```
+
+Response:
+```json
+{
+  "items": [...],
+  "meta": {
+    "total": 100,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 10,
+    "hasNextPage": true,
+    "hasPreviousPage": false
+  }
+}
+```
+
+## Real-World Examples
+
+### E-commerce
+
+```bash
+ddd scaffold Product -m inventory --fields "name:string price:number sku:string:unique stock:number"
+ddd scaffold Order -m orders --fields "total:number status:enum:pending,paid,shipped customerId:uuid"
+ddd generate service PriceCalculator -m orders
+ddd generate event OrderPaid -m orders
+```
+
+### User Management
+
+```bash
+ddd scaffold User -m users --fields "email:string:unique name:string role:enum:admin,user" --with-tests
+ddd recipe auth-jwt --install-deps
+```
+
+### Multi-tenant SaaS
+
+```bash
+ddd scaffold Tenant -m tenants --fields "name:string subdomain:string:unique"
+ddd scaffold User -m users --fields "email:string:unique name:string tenantId:uuid"
+ddd recipe audit-log
+```
+
+## Philosophy
+
+### Immutable Architecture
+- Each generated component remains unchanged after creation
+- New requirements create new use cases, never modify existing ones
+- Predictable structure enables instant developer onboarding
+
+### Opinionated by Design
+- Zero configuration fatigue - one way to do things
+- Consistent naming across all projects
+- Battle-tested patterns from enterprise applications
+
+### CQRS Compliance
+- Commands for writes, queries for reads
+- Clear separation of concerns
+- Testable by default
+
+## Contributing
+
 ```bash
 git clone https://github.com/eshe-huli/nestjs-ddd-cli
 cd nestjs-ddd-cli
 npm install
 npm run build
 npm link
+
+# Test locally
+ddd scaffold Test -m test-module --fields "name:string"
 ```
-
-## Usage
-
-### Initialize a New NestJS Project
-
-Create a new NestJS project with DDD structure:
-
-```bash
-ddd init my-project
-```
-
-Options:
-- `-p, --path <path>` - Path where the project will be created
-- `--skip-install` - Skip dependency installation
-- `--skip-update` - Skip CLI update check
-- `--with-ddd` - Set up DDD folder structure and install required dependencies (default: true)
-
-### Update the CLI
-
-Update the CLI to the latest version:
-
-```bash
-ddd update
-```
-
-Options:
-- `-f, --force` - Force update even if already on latest version
-
-### Update Project Dependencies
-
-Check and update project dependencies:
-
-```bash
-ddd update-deps
-```
-
-Options:
-- `-p, --path <path>` - Path to the project (default: current directory)
-- `-a, --all` - Update all outdated dependencies without prompting
-
-### Generate Complete Scaffolding
-
-Generate all files for a new entity (entity, repository, mapper, use cases, controller, etc.):
-
-```bash
-ddd scaffold Product -m inventory
-```
-
-Options:
-- `-m, --module <module>` - Module name (will be created if not exists)
-- `-p, --path <path>` - Base path for generation
-- `--install-deps` - Install required dependencies
-
-### Generate Individual Components
-
-```bash
-# Generate a module
-ddd generate module user-management
-
-# Generate an entity
-ddd generate entity User -m user-management
-
-# Generate a use case
-ddd generate usecase CreateUser -m user-management
-
-# Generate a domain service
-ddd generate service UserValidation -m user-management
-
-# Generate a domain event
-ddd generate event UserCreated -m user-management
-
-# Generate a query handler
-ddd generate query GetUser -m user-management
-
-# Generate everything for an entity within existing module
-ddd generate all User -m user-management
-```
-
-### Options
-
-- `-m, --module <name>`: Specify the module name
-- `-p, --path <path>`: Base path for generation (defaults to current directory)
-- `--skip-orm`: Skip ORM entity generation
-- `--skip-mapper`: Skip mapper generation
-- `--skip-repo`: Skip repository generation
-- `--with-events`: Include domain events
-- `--with-queries`: Include query handlers
-
-## Available Generators
-
-| Generator | Command | Description |
-|-----------|---------|-------------|
-| **Module** | `ddd generate module <name>` | Creates complete DDD module structure |
-| **Entity** | `ddd generate entity <name> -m <module>` | Domain entity with ORM mapping |
-| **Use Case** | `ddd generate usecase <name> -m <module>` | CQRS command handler |
-| **Domain Service** | `ddd generate service <name> -m <module>` | Domain service for business logic |
-| **Domain Event** | `ddd generate event <name> -m <module>` | Domain event for CQRS |
-| **Query Handler** | `ddd generate query <name> -m <module>` | CQRS query handler |
-| **Complete CRUD** | `ddd scaffold <name> -m <module>` | All files for an entity |
-| **All Entity Files** | `ddd generate all <name> -m <module>` | Entity + related files |
-
-## Quick Start
-
-### 🚀 **Generate Your First Feature**
-
-```bash
-# 1. Create complete scaffolding for a User management feature
-ddd scaffold User -m user-management
-
-# 2. Add business logic to the generated files
-# 3. Update index.ts exports
-# 4. Run migrations  
-# 5. Import module in app.module.ts
-```
-
-**What you get in seconds:**
-```
-📁 modules/user-management/
-├── 📄 user-management.module.ts      ✅ NestJS module configured
-├── 📁 application/
-│   ├── 📁 controllers/
-│   │   └── 📄 user.controller.ts     ✅ REST endpoints (GET, POST, PUT, DELETE)
-│   ├── 📁 domain/
-│   │   ├── 📁 entities/
-│   │   │   └── 📄 user.entity.ts     ✅ Domain entity with interfaces
-│   │   └── 📁 usecases/
-│   │       ├── 📄 create-user.usecase.ts ✅ Business logic for creation
-│   │       ├── 📄 update-user.usecase.ts ✅ Business logic for updates  
-│   │       └── 📄 delete-user.usecase.ts ✅ Business logic for deletion
-│   └── 📁 dto/
-│       ├── 📁 requests/
-│       │   ├── 📄 create-user.dto.ts ✅ Request validation schemas
-│       │   └── 📄 update-user.dto.ts ✅ Update validation schemas
-│       └── 📁 responses/
-│           └── 📄 user.response.ts   ✅ Response data contracts
-└── 📁 infrastructure/
-    ├── 📁 repositories/
-    │   └── 📄 user.repository.ts     ✅ CRUD operations + custom queries
-    ├── 📁 orm-entities/
-    │   └── 📄 user.orm-entity.ts     ✅ Database schema (TypeORM)
-    └── 📁 mappers/
-        └── 📄 user.mapper.ts         ✅ Domain ↔ Database mapping
-```
-
-> **🚀 From zero to production-ready in under 30 seconds**
-
-## Real-World Examples
-
-### 🏢 **E-commerce Platform**
-
-```bash
-# Generate order management
-ddd scaffold Order -m orders
-
-# Add payment processing
-ddd generate service PaymentProcessor -m orders
-ddd generate event OrderPaid -m orders
-
-# Add inventory checking  
-ddd generate query CheckStock -m inventory
-ddd generate service StockValidator -m inventory
-```
-
-**Result:** Complete order system with payment processing and inventory management
-```
-📁 modules/orders/
-├── 📄 orders.module.ts
-├── 📁 application/domain/services/
-│   └── 📄 payment-processor.service.ts  🆕 Payment business logic
-├── 📁 application/domain/events/  
-│   └── 📄 order-paid.event.ts          🆕 Order payment event
-└── ... (all CRUD operations)
-
-📁 modules/inventory/
-├── 📁 application/queries/
-│   └── 📄 check-stock.handler.ts       🆕 Stock checking query
-├── 📁 application/domain/services/
-│   └── 📄 stock-validator.service.ts   🆕 Stock validation logic
-└── ... (all CRUD operations)
-```
-
-### 🏥 **Healthcare System**
-
-```bash
-# Patient management
-ddd scaffold Patient -m patients
-
-# Medical records with events
-ddd scaffold MedicalRecord -m medical-records
-ddd generate event RecordCreated -m medical-records
-ddd generate event RecordUpdated -m medical-records
-
-# Appointment scheduling
-ddd generate query FindAvailableSlots -m appointments
-ddd generate service AppointmentScheduler -m appointments
-```
-
-### 🎓 **Learning Management System**
-
-```bash
-# Course management
-ddd scaffold Course -m courses
-ddd generate service CourseEnrollment -m courses
-ddd generate event StudentEnrolled -m courses
-
-# Progress tracking
-ddd generate query GetStudentProgress -m progress
-ddd generate service ProgressCalculator -m progress
-```
-
-> **🎯 Each example follows identical patterns** - Learn once, apply everywhere.
-
-## Philosophy & Principles
-
-This CLI embodies **pragmatic Domain-Driven Design** with unwavering consistency:
-
-### 🔒 **Immutable Architecture**
-- **"Code once, never touch"** - Each generated component remains unchanged after creation
-- **Evolution over modification** - New requirements create new use cases, never modify existing ones
-- **Predictable structure** - Every project follows identical patterns, enabling instant developer onboarding
-
-### 🎯 **Opinionated by Design**
-- **Zero configuration fatigue** - One way to do things, the right way
-- **Consistent naming** - PascalCase entities, kebab-case modules, predictable file names
-- **Proven patterns** - Battle-tested DDD/CQRS structure from real-world enterprise applications
-
-### 🚀 **Developer Experience First**
-- **No bikeshedding** - Spend time on business logic, not folder structure debates
-- **IDE-friendly** - Barrel exports, clear interfaces, TypeScript-first approach
-- **Team consistency** - Every developer generates identical code structure
-
-### 🏗️ **Enterprise Ready**
-- **Separation of concerns** - Domain logic isolated from infrastructure
-- **CQRS compliance** - Commands for writes, queries for reads
-- **Testable by default** - Clean interfaces enable easy unit testing
-
-## What Makes This Different?
-
-### 🎨 **Structure That Scales**
-
-Every module follows this **identical, battle-tested structure**:
-
-```
-modules/
-└── [feature-name]/                           # 🏠 Feature boundary
-    ├── [feature-name].module.ts              # 🔧 NestJS module wiring
-    ├── application/                          # 📋 Application layer
-    │   ├── commands/                         # ✍️  CQRS commands (writes)
-    │   │   ├── create-[entity].command.ts    #    └─ Create operations
-    │   │   ├── update-[entity].command.ts    #    └─ Update operations  
-    │   │   ├── delete-[entity].command.ts    #    └─ Delete operations
-    │   │   └── index.ts                      #    └─ Barrel exports
-    │   ├── controllers/                      # 🌐 HTTP/GraphQL endpoints
-    │   │   ├── [entity].controller.ts        #    └─ REST API endpoints
-    │   │   └── index.ts                      #    └─ Barrel exports
-    │   ├── domain/                           # 🧠 Pure business logic
-    │   │   ├── entities/                     # 📦 Business objects
-    │   │   │   ├── [entity].entity.ts        #    └─ Domain entity
-    │   │   │   └── index.ts                  #    └─ Barrel exports
-    │   │   ├── events/                       # 🎯 Domain events
-    │   │   │   ├── [entity]-created.event.ts #    └─ Event definitions
-    │   │   │   └── index.ts                  #    └─ Barrel exports
-    │   │   ├── services/                     # ⚙️  Domain services
-    │   │   │   ├── [entity].service.ts       #    └─ Business rules
-    │   │   │   └── index.ts                  #    └─ Barrel exports
-    │   │   └── usecases/                     # 🎬 Use case operations
-    │   │       ├── create-[entity].usecase.ts#    └─ Create business logic
-    │   │       ├── update-[entity].usecase.ts#    └─ Update business logic
-    │   │       ├── delete-[entity].usecase.ts#    └─ Delete business logic
-    │   │       └── index.ts                  #    └─ Barrel exports
-    │   ├── dto/                              # 📄 Data contracts
-    │   │   ├── requests/                     # 📤 Inbound data
-    │   │   │   ├── create-[entity].dto.ts    #    └─ Create request
-    │   │   │   ├── update-[entity].dto.ts    #    └─ Update request
-    │   │   │   └── index.ts                  #    └─ Barrel exports
-    │   │   ├── responses/                    # 📥 Outbound data
-    │   │   │   ├── [entity].response.ts      #    └─ Entity response
-    │   │   │   └── index.ts                  #    └─ Barrel exports
-    │   │   └── index.ts                      #    └─ Barrel exports
-    │   └── queries/                          # 🔍 CQRS queries (reads)
-    │       ├── get-[entity].handler.ts       #    └─ Single entity query
-    │       ├── list-[entities].handler.ts    #    └─ Multiple entities query
-    │       └── index.ts                      #    └─ Barrel exports
-    └── infrastructure/                       # 🏗️  Infrastructure layer
-        ├── mappers/                          # 🔄 Data transformation
-        │   ├── [entity].mapper.ts            #    └─ Domain ↔ ORM mapping
-        │   └── index.ts                      #    └─ Barrel exports
-        ├── orm-entities/                     # 🗄️  Database schema
-        │   ├── [entity].orm-entity.ts        #    └─ TypeORM entity
-        │   └── index.ts                      #    └─ Barrel exports
-        └── repositories/                     # 💾 Data access
-            ├── [entity].repository.ts        #    └─ Repository implementation
-            └── index.ts                      #    └─ Barrel exports
-```
-
-> **🎯 Every feature looks identical** - No surprises, no confusion, just consistency.
-
-### 🧠 **Smart Defaults & Conventions**
-
-```bash
-# Naming follows strict patterns
-ddd generate entity UserProfile    # → user-profile.entity.ts
-ddd generate service OrderValidator # → order-validator.service.ts  
-ddd generate event PaymentProcessed # → payment-processed.event.ts
-```
-
-**Built-in Intelligence:**
-- **🔄 Barrel exports** - Automatic `index.ts` files for clean imports
-- **🔒 TypeScript strict** - Zero `any` types, full type safety  
-- **💉 DI ready** - Injectable decorators configured
-- **📋 Interface first** - Clear contracts between layers
-- **📁 Predictable paths** - Same location every time
-
-### 💡 **Enterprise Patterns**
-
-```typescript
-// ✅ Commands (writes) - Tell, don't ask
-@CommandHandler(CreateUserCommand)
-export class CreateUserHandler {
-  async execute(command: CreateUserCommand): Promise<void> {
-    // Returns nothing - just does the work
-  }
-}
-
-// ✅ Queries (reads) - Ask, don't tell  
-@QueryHandler(GetUserQuery)
-export class GetUserHandler {
-  async execute(query: GetUserQuery): Promise<UserResponse> {
-    // Returns data - no side effects
-  }
-}
-
-// ✅ Domain Events - Loose coupling
-export class UserCreatedEvent implements IEvent {
-  constructor(public readonly userId: string) {}
-}
-```
-
-**Battle-tested principles:**
-- **Command/Query Separation** - Writes vs reads clearly separated
-- **Domain Events** - Decoupled communication between bounded contexts
-- **Repository Pattern** - Abstract data access from business logic
-- **Clean Architecture** - Dependencies point inward to domain
-
-## After Generation
-
-### 🔧 **Your 5-Minute Setup Checklist:**
-
-```bash
-# ✅ 1. Generated files are ready - Review structure
-ls -la modules/your-feature/
-
-# ✅ 2. Add business properties to entities
-# Edit: application/domain/entities/[entity].entity.ts
-#   Add: name: string; email: string; etc.
-
-# ✅ 3. Update DTOs with validation rules  
-# Edit: application/dto/requests/create-[entity].dto.ts
-#   Add: @IsEmail() email: string; @IsNotEmpty() name: string;
-
-# ✅ 4. Configure database mappings
-# Edit: infrastructure/orm-entities/[entity].orm-entity.ts  
-#   Add: @Column() name: string; @Column() email: string;
-
-# ✅ 5. Wire up the module
-# Edit: app.module.ts
-#   Add: YourFeatureModule to imports array
-```
-
-### 🎯 **Focus on Business Value:**
-```typescript
-// ✅ Write business rules in domain services
-export class OrderValidator {
-  validateBusinessRules(order: Order): ValidationResult {
-    // Your domain logic here - not infrastructure concerns
-  }
-}
-
-// ✅ Add complex queries for reporting
-@QueryHandler(GetMonthlyRevenueQuery) 
-export class GetMonthlyRevenueHandler {
-  async execute(query: GetMonthlyRevenueQuery) {
-    // Complex business queries - not CRUD
-  }
-}
-
-// ✅ Handle domain events for integration
-@EventsHandler(OrderCreatedEvent)
-export class OrderCreatedHandler {
-  async handle(event: OrderCreatedEvent) {
-    // Send emails, update analytics, etc.
-  }
-}
-```
-
-> **🚀 From scaffolding to production in minutes, not days**
-
-## Why This CLI Exists
-
-### 😤 **The Problem**
-- Endless debates about folder structure
-- Inconsistent naming across team members
-- Copy-pasting boilerplate between features  
-- Mixed patterns in the same codebase
-- New developers spending weeks learning "our way"
-
-### 🎯 **The Solution**
-- **One structure** that works for all features
-- **Zero configuration** - works out of the box
-- **Battle-tested patterns** from real enterprise apps
-- **Instant onboarding** - same structure everywhere
-- **Focus on business logic** instead of architecture decisions
-
-### 🏆 **The Result**
-- 10x faster feature development
-- Consistent codebase architecture
-- Easy code reviews and maintenance
-- New developers productive from day one
-- No more "where does this file go?" questions
-
----
-
-## Contributing & Development
-
-### 🔧 **Local Development**
-
-```bash
-# Clone and setup
-git clone https://github.com/eshe-huli/nestjs-ddd-cli
-cd nestjs-ddd-cli
-npm install
-
-# Test changes locally
-npm run dev -- generate entity Test -m test
-
-# Build for production  
-npm run build
-
-# Test globally installed version
-ddd generate entity Test -m test
-```
-
-### 🧪 **Testing Your Changes**
-
-```bash
-# Create a test project
-mkdir test-project && cd test-project
-
-# Test scaffolding
-ddd scaffold Product -m inventory
-
-# Verify structure matches expectations
-tree modules/inventory/
-
-# Test individual generators  
-ddd generate service ProductValidator -m inventory
-ddd generate event ProductCreated -m inventory
-ddd generate query GetProductsByCategory -m inventory
-```
-
-### 📋 **Template Structure**
-```
-src/templates/
-├── 📁 entity/           # Domain entity templates
-├── 📁 service/          # Domain service templates  
-├── 📁 event/            # Domain event templates
-├── 📁 query/            # Query handler templates
-├── 📁 usecase/          # Use case templates
-├── 📁 controller/       # Controller templates
-├── 📁 repository/       # Repository templates
-└── 📁 ... (more templates)
-```
-
-> **🤝 Pull requests welcome!** Help make DDD development even better.
 
 ## License
 
-MIT - Build amazing things 🚀
+MIT

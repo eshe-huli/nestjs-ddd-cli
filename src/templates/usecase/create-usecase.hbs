@@ -1,14 +1,26 @@
+import { Injectable } from "@nestjs/common";
 import { {{entityNamePascal}}Entity } from "@modules/{{moduleNameKebab}}/domain/entities/{{entityNameKebab}}.entity";
 import { {{entityNamePascal}}Repository } from "@modules/{{moduleNameKebab}}/infrastructure/repositories/{{entityNameKebab}}.repository";
-import { Create{{entityNamePascal}}Command } from "@modules/{{moduleNameKebab}}/application/commands/create-{{entityNameKebab}}.command";
-import { Injectable } from "@nestjs/common";
+import { {{entityNamePascal}}Mapper } from "@modules/{{moduleNameKebab}}/infrastructure/mappers/{{entityNameKebab}}.mapper";
+import { Create{{entityNamePascal}}Dto } from "@modules/{{moduleNameKebab}}/application/dto/requests/create-{{entityNameKebab}}.dto";
+import { {{entityNamePascal}}ResponseDto } from "@modules/{{moduleNameKebab}}/application/dto/responses/{{entityNameKebab}}.response.dto";
 
 @Injectable()
 export class Create{{entityNamePascal}}UseCase {
-  constructor(private readonly repository: {{entityNamePascal}}Repository) {}
+  constructor(
+    private readonly repository: {{entityNamePascal}}Repository,
+    private readonly mapper: {{entityNamePascal}}Mapper,
+  ) {}
 
-  async execute(command: Create{{entityNamePascal}}Command) {
-    const entity = new {{entityNamePascal}}Entity(command);
-    return this.repository.create(entity);
+  async execute(dto: Create{{entityNamePascal}}Dto): Promise<{{entityNamePascal}}ResponseDto> {
+    const entity = new {{entityNamePascal}}Entity({
+      ...dto,
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const savedEntity = await this.repository.create(entity);
+    return this.mapper.toResponseDto(savedEntity);
   }
 }

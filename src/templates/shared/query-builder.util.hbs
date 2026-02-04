@@ -1,0 +1,218 @@
+import { SelectQueryBuilder, Brackets } from "typeorm";
+
+export type FilterOperator =
+  | "eq"
+  | "ne"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "in"
+  | "nin"
+  | "like"
+  | "ilike"
+  | "between"
+  | "isNull"
+  | "isNotNull";
+
+export interface FilterCondition {
+  field: string;
+  operator: FilterOperator;
+  value?: any;
+}
+
+export interface QueryOptions {
+  page?: number;
+  limit?: number;
+  sortBy?: string;
+  sortOrder?: "ASC" | "DESC";
+  search?: string;
+  searchFields?: string[];
+  filters?: Record<string, any>;
+}
+
+/**
+ * Parse filter parameters from query string
+ * Supports format: field__operator=value (e.g., age__gte=18, name__like=john)
+ */
+export function parseFilters(query: Record<string, any>): FilterCondition[] {
+  const conditions: FilterCondition[] = [];
+  const operatorMap: Record<string, FilterOperator> = {
+    eq: "eq",
+    ne: "ne",
+    gt: "gt",
+    gte: "gte",
+    lt: "lt",
+    lte: "lte",
+    in: "in",
+    nin: "nin",
+    like: "like",
+    ilike: "ilike",
+    between: "between",
+    isNull: "isNull",
+    isNotNull: "isNotNull",
+  };
+
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || value === null || value === "") continue;
+
+    // Skip pagination and sort params
+    if (["page", "limit", "sortBy", "sortOrder", "search", "searchFields"].includes(key)) {
+      continue;
+    }
+
+    // Check for operator suffix (field__operator)
+    const parts = key.split("__");
+    const field = parts[0];
+    const operatorKey = parts[1] || "eq";
+    const operator = operatorMap[operatorKey] || "eq";
+
+    conditions.push({ field, operator, value });
+  }
+
+  return conditions;
+}
+
+/**
+ * Apply filters to TypeORM QueryBuilder
+ */
+export function applyFiltersToQueryBuilder<T>(
+  queryBuilder: SelectQueryBuilder<T>,
+  conditions: FilterCondition[],
+  alias: string
+): SelectQueryBuilder<T> {
+  for (const condition of conditions) {
+    const { field, operator, value } = condition;
+    const paramKey = `${field}_${operator}_${Date.now()}`;
+    const columnPath = `${alias}.${field}`;
+
+    switch (operator) {
+      case "eq":
+        queryBuilder.andWhere(`${columnPath} = :${paramKey}`, { [paramKey]: value });
+        break;
+      case "ne":
+        queryBuilder.andWhere(`${columnPath} != :${paramKey}`, { [paramKey]: value });
+        break;
+      case "gt":
+        queryBuilder.andWhere(`${columnPath} > :${paramKey}`, { [paramKey]: value });
+        break;
+      case "gte":
+        queryBuilder.andWhere(`${columnPath} >= :${paramKey}`, { [paramKey]: value });
+        break;
+      case "lt":
+        queryBuilder.andWhere(`${columnPath} < :${paramKey}`, { [paramKey]: value });
+        break;
+      case "lte":
+        queryBuilder.andWhere(`${columnPath} <= :${paramKey}`, { [paramKey]: value });
+        break;
+      case "in":
+        const inValues = Array.isArray(value) ? value : value.split(",");
+        queryBuilder.andWhere(`${columnPath} IN (:...${paramKey})`, { [paramKey]: inValues });
+        break;
+      case "nin":
+        const ninValues = Array.isArray(value) ? value : value.split(",");
+        queryBuilder.andWhere(`${columnPath} NOT IN (:...${paramKey})`, { [paramKey]: ninValues });
+        break;
+      case "like":
+        queryBuilder.andWhere(`LOWER(${columnPath}) LIKE LOWER(:${paramKey})`, {
+          [paramKey]: `%${value}%`,
+        });
+        break;
+      case "ilike":
+        queryBuilder.andWhere(`${columnPath} ILIKE :${paramKey}`, {
+          [paramKey]: `%${value}%`,
+        });
+        break;
+      case "between":
+        const [min, max] = Array.isArray(value) ? value : value.split(",");
+        queryBuilder.andWhere(`${columnPath} BETWEEN :${paramKey}_min AND :${paramKey}_max`, {
+          [`${paramKey}_min`]: min,
+          [`${paramKey}_max`]: max,
+        });
+        break;
+      case "isNull":
+        queryBuilder.andWhere(`${columnPath} IS NULL`);
+        break;
+      case "isNotNull":
+        queryBuilder.andWhere(`${columnPath} IS NOT NULL`);
+        break;
+    }
+  }
+
+  return queryBuilder;
+}
+
+/**
+ * Apply search across multiple fields
+ */
+export function applySearchToQueryBuilder<T>(
+  queryBuilder: SelectQueryBuilder<T>,
+  search: string,
+  searchFields: string[],
+  alias: string
+): SelectQueryBuilder<T> {
+  if (!search || searchFields.length === 0) return queryBuilder;
+
+  queryBuilder.andWhere(
+    new Brackets((qb) => {
+      for (const field of searchFields) {
+        qb.orWhere(`LOWER(${alias}.${field}) LIKE LOWER(:search)`, {
+          search: `%${search}%`,
+        });
+      }
+    })
+  );
+
+  return queryBuilder;
+}
+
+/**
+ * Apply pagination and sorting to QueryBuilder
+ */
+export function applyPaginationToQueryBuilder<T>(
+  queryBuilder: SelectQueryBuilder<T>,
+  options: QueryOptions,
+  alias: string
+): SelectQueryBuilder<T> {
+  const { page = 1, limit = 10, sortBy = "createdAt", sortOrder = "DESC" } = options;
+
+  queryBuilder
+    .skip((page - 1) * limit)
+    .take(limit)
+    .orderBy(`${alias}.${sortBy}`, sortOrder);
+
+  return queryBuilder;
+}
+
+/**
+ * Build complete query with filters, search, and pagination
+ */
+export async function executeFilteredQuery<T>(
+  queryBuilder: SelectQueryBuilder<T>,
+  options: QueryOptions,
+  alias: string,
+  defaultSearchFields: string[] = []
+): Promise<[T[], number]> {
+  // Parse and apply filters
+  if (options.filters) {
+    const conditions = parseFilters(options.filters);
+    applyFiltersToQueryBuilder(queryBuilder, conditions, alias);
+  }
+
+  // Apply search
+  if (options.search) {
+    const searchFields = options.searchFields || defaultSearchFields;
+    applySearchToQueryBuilder(queryBuilder, options.search, searchFields, alias);
+  }
+
+  // Get total count before pagination
+  const total = await queryBuilder.getCount();
+
+  // Apply pagination and sorting
+  applyPaginationToQueryBuilder(queryBuilder, options, alias);
+
+  // Execute query
+  const items = await queryBuilder.getMany();
+
+  return [items, total];
+}

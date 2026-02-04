@@ -1,8 +1,30 @@
-import { Body, Controller, Get, Param, Post, Delete, Put } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Put,
+  Query,
+} from "@nestjs/common";
 import { CommandBus, QueryBus } from "@nestjs/cqrs";
+import { ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { Create{{entityNamePascal}}Command } from "@modules/{{moduleNameKebab}}/application/commands/create-{{entityNameKebab}}.command";
+import { Update{{entityNamePascal}}Command } from "@modules/{{moduleNameKebab}}/application/commands/update-{{entityNameKebab}}.command";
+import { Delete{{entityNamePascal}}Command } from "@modules/{{moduleNameKebab}}/application/commands/delete-{{entityNameKebab}}.command";
+import { Get{{entityNamePascal}}ByIdQuery } from "@modules/{{moduleNameKebab}}/application/queries/get-{{entityNameKebab}}-by-id.query";
+import { GetAll{{entityNamePluralPascal}}Query } from "@modules/{{moduleNameKebab}}/application/queries/get-all-{{entityNamePluralKebab}}.query";
 import { Create{{entityNamePascal}}Dto } from "@modules/{{moduleNameKebab}}/application/dto/requests/create-{{entityNameKebab}}.dto";
+import { Update{{entityNamePascal}}Dto } from "@modules/{{moduleNameKebab}}/application/dto/requests/update-{{entityNameKebab}}.dto";
+import { {{entityNamePascal}}ResponseDto } from "@modules/{{moduleNameKebab}}/application/dto/responses/{{entityNameKebab}}.response.dto";
+import { PaginatedResponseDto } from "@modules/{{moduleNameKebab}}/application/dto/responses/paginated.response.dto";
+import { PaginationQueryDto } from "@modules/{{moduleNameKebab}}/application/dto/requests/pagination.query.dto";
 
+@ApiTags("{{entityNamePluralPascal}}")
 @Controller("{{entityNamePluralKebab}}")
 export class {{entityNamePascal}}Controller {
   constructor(
@@ -11,33 +33,58 @@ export class {{entityNamePascal}}Controller {
   ) {}
 
   @Post()
-  create(@Body() dto: Create{{entityNamePascal}}Dto) {
-    const contextId = "extracted-from-token"; // TODO: Get from auth decorator
-    const command = new Create{{entityNamePascal}}Command(dto, contextId);
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: "Create a new {{entityNameCamel}}" })
+  @ApiResponse({ status: 201, description: "{{entityNamePascal}} created successfully", type: {{entityNamePascal}}ResponseDto })
+  @ApiResponse({ status: 400, description: "Invalid input data" })
+  async create(@Body() dto: Create{{entityNamePascal}}Dto): Promise<{{entityNamePascal}}ResponseDto> {
+    const command = new Create{{entityNamePascal}}Command(dto);
     return this.commandBus.execute(command);
   }
 
   @Get()
-  findAll() {
-    // TODO: Implement query handler
-    throw new Error("Not implemented");
+  @ApiOperation({ summary: "Get all {{entityNamePluralCamel}} with pagination" })
+  @ApiResponse({ status: 200, description: "List of {{entityNamePluralCamel}}", type: PaginatedResponseDto })
+  async findAll(
+    @Query() pagination: PaginationQueryDto,
+  ): Promise<PaginatedResponseDto<{{entityNamePascal}}ResponseDto>> {
+    const query = new GetAll{{entityNamePluralPascal}}Query(pagination);
+    return this.queryBus.execute(query);
   }
 
   @Get(":id")
-  findOne(@Param("id") id: string) {
-    // TODO: Implement query handler
-    throw new Error("Not implemented");
+  @ApiOperation({ summary: "Get {{entityNameCamel}} by ID" })
+  @ApiParam({ name: "id", description: "{{entityNamePascal}} ID", type: "string", format: "uuid" })
+  @ApiResponse({ status: 200, description: "{{entityNamePascal}} found", type: {{entityNamePascal}}ResponseDto })
+  @ApiResponse({ status: 404, description: "{{entityNamePascal}} not found" })
+  async findOne(
+    @Param("id", ParseUUIDPipe) id: string,
+  ): Promise<{{entityNamePascal}}ResponseDto> {
+    const query = new Get{{entityNamePascal}}ByIdQuery(id);
+    return this.queryBus.execute(query);
   }
 
   @Put(":id")
-  update(@Param("id") id: string, @Body() dto: any) {
-    // TODO: Implement update command
-    throw new Error("Not implemented");
+  @ApiOperation({ summary: "Update {{entityNameCamel}}" })
+  @ApiParam({ name: "id", description: "{{entityNamePascal}} ID", type: "string", format: "uuid" })
+  @ApiResponse({ status: 200, description: "{{entityNamePascal}} updated successfully", type: {{entityNamePascal}}ResponseDto })
+  @ApiResponse({ status: 404, description: "{{entityNamePascal}} not found" })
+  async update(
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: Update{{entityNamePascal}}Dto,
+  ): Promise<{{entityNamePascal}}ResponseDto> {
+    const command = new Update{{entityNamePascal}}Command(id, dto);
+    return this.commandBus.execute(command);
   }
 
   @Delete(":id")
-  delete(@Param("id") id: string) {
-    // TODO: Implement delete command
-    throw new Error("Not implemented");
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: "Delete {{entityNameCamel}}" })
+  @ApiParam({ name: "id", description: "{{entityNamePascal}} ID", type: "string", format: "uuid" })
+  @ApiResponse({ status: 204, description: "{{entityNamePascal}} deleted successfully" })
+  @ApiResponse({ status: 404, description: "{{entityNamePascal}} not found" })
+  async delete(@Param("id", ParseUUIDPipe) id: string): Promise<void> {
+    const command = new Delete{{entityNamePascal}}Command(id);
+    return this.commandBus.execute(command);
   }
 }

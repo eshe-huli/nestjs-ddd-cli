@@ -1,0 +1,20 @@
+// Add this model to your schema.prisma file
+
+model {{entityNamePascal}} {
+  id        String   @id @default(uuid())
+{{#if hasFields}}
+{{#each fields}}
+  {{this.snakeCase}} {{this.prismaType}}{{#if this.isOptional}}?{{/if}}{{#if this.isUnique}} @unique{{/if}}
+{{/each}}
+{{else}}
+  // Add your fields here
+  // name      String
+  // email     String   @unique
+{{/if}}
+  is_active  Boolean  @default(true)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  deleted_at DateTime?
+
+  @@map("{{tableName}}")
+}

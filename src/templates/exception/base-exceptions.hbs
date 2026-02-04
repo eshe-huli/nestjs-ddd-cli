@@ -1,0 +1,69 @@
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+  UnauthorizedException,
+} from "@nestjs/common";
+
+/**
+ * Base exception for domain validation errors
+ */
+export class DomainValidationException extends BadRequestException {
+  constructor(message: string, public readonly errors?: Record<string, string[]>) {
+    super({
+      statusCode: 400,
+      message,
+      errors,
+    });
+  }
+}
+
+/**
+ * Exception for when an entity already exists (duplicate)
+ */
+export class EntityAlreadyExistsException extends ConflictException {
+  constructor(entityName: string, field: string, value: string) {
+    super(`${entityName} with ${field} '${value}' already exists`);
+  }
+}
+
+/**
+ * Exception for when an entity is not found
+ */
+export class EntityNotFoundException extends NotFoundException {
+  constructor(entityName: string, id: string) {
+    super(`${entityName} with id '${id}' was not found`);
+  }
+}
+
+/**
+ * Exception for when a business rule is violated
+ */
+export class BusinessRuleViolationException extends BadRequestException {
+  constructor(message: string) {
+    super({
+      statusCode: 400,
+      message,
+      error: 'Business Rule Violation',
+    });
+  }
+}
+
+/**
+ * Exception for unauthorized access
+ */
+export class UnauthorizedAccessException extends UnauthorizedException {
+  constructor(message = 'You are not authorized to perform this action') {
+    super(message);
+  }
+}
+
+/**
+ * Exception for forbidden operations
+ */
+export class ForbiddenOperationException extends ForbiddenException {
+  constructor(message = 'You do not have permission to perform this operation') {
+    super(message);
+  }
+}

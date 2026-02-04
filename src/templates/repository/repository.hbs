@@ -1,9 +1,16 @@
+import { Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { Repository, FindOptionsOrder } from "typeorm";
 import { {{entityNamePascal}}Mapper } from "@modules/{{moduleNameKebab}}/infrastructure/mappers/{{entityNameKebab}}.mapper";
 import { {{entityNamePascal}}OrmEntity } from "@modules/{{moduleNameKebab}}/infrastructure/orm-entities/{{entityNameKebab}}.orm-entity";
 import { {{entityNamePascal}}Entity } from "@modules/{{moduleNameKebab}}/domain/entities/{{entityNameKebab}}.entity";
-import { Injectable } from "@nestjs/common";
+
+export interface PaginationOptions {
+  skip: number;
+  take: number;
+  orderBy: string;
+  orderDirection: "ASC" | "DESC";
+}
 
 @Injectable()
 export class {{entityNamePascal}}Repository {
@@ -21,34 +28,69 @@ export class {{entityNamePascal}}Repository {
 
   async findById(id: string): Promise<{{entityNamePascal}}Entity | null> {
     const ormEntity = await this.repository.findOne({
-      where: { id },
+      where: { id, deletedAt: null } as any,
     });
+
     if (!ormEntity) {
       return null;
     }
+
     return this.mapper.toDomainEntity(ormEntity);
   }
 
   async findAll(): Promise<{{entityNamePascal}}Entity[]> {
-    const ormEntities = await this.repository.find();
-    if (!ormEntities) {
-      return [];
-    }
-    return ormEntities.map((ormEntity) =>
-      this.mapper.toDomainEntity(ormEntity),
-    );
+    const ormEntities = await this.repository.find({
+      where: { deletedAt: null } as any,
+    });
+
+    return ormEntities.map((ormEntity) => this.mapper.toDomainEntity(ormEntity));
   }
 
-  async update(
-    id: string,
-    entity: {{entityNamePascal}}Entity,
-  ): Promise<{{entityNamePascal}}Entity> {
+  async findAllPaginated(
+    options: PaginationOptions,
+  ): Promise<[{{entityNamePascal}}Entity[], number]> {
+    const { skip, take, orderBy, orderDirection } = options;
+
+    const order: FindOptionsOrder<{{entityNamePascal}}OrmEntity> = {
+      [orderBy]: orderDirection,
+    } as FindOptionsOrder<{{entityNamePascal}}OrmEntity>;
+
+    const [ormEntities, total] = await this.repository.findAndCount({
+      where: { deletedAt: null } as any,
+      skip,
+      take,
+      order,
+    });
+
+    const entities = ormEntities.map((ormEntity) =>
+      this.mapper.toDomainEntity(ormEntity),
+    );
+
+    return [entities, total];
+  }
+
+  async update(id: string, entity: {{entityNamePascal}}Entity): Promise<{{entityNamePascal}}Entity> {
     const ormEntity = this.mapper.toOrmEntity(entity);
     await this.repository.update(id, ormEntity);
     return entity;
   }
 
   async delete(id: string): Promise<void> {
+    // Soft delete
+    await this.repository.update(id, {
+      deletedAt: new Date(),
+      isActive: false,
+    } as any);
+  }
+
+  async hardDelete(id: string): Promise<void> {
     await this.repository.delete(id);
+  }
+
+  async exists(id: string): Promise<boolean> {
+    const count = await this.repository.count({
+      where: { id, deletedAt: null } as any,
+    });
+    return count > 0;
   }
 }

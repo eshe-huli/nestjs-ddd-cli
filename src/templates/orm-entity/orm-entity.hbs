@@ -1,24 +1,75 @@
-import { Column, Entity, PrimaryGeneratedColumn } from "typeorm";
+import {
+  Column,
+  CreateDateColumn,
+  DeleteDateColumn,
+  Entity,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+{{#if hasRelations}}
+  OneToOne,
+  OneToMany,
+  ManyToOne,
+  ManyToMany,
+  JoinColumn,
+  JoinTable,
+{{/if}}
+} from "typeorm";
+{{#if relationImports}}
+{{{relationImports}}}
+{{/if}}
 
 @Entity("{{tableName}}")
 export class {{entityNamePascal}}OrmEntity {
   @PrimaryGeneratedColumn("uuid")
-  id?: string;
+  id: string;
 
-  @Column({ name: "is_active", default: true })
-  isActive?: boolean;
+{{#if hasFields}}
+{{#each fields}}
+{{#if this.isRelation}}
+{{#if (eq this.relationType 'OneToOne')}}
+  @OneToOne(() => {{this.relationTarget}}OrmEntity{{#if this.relationInverse}}, ({{lowercase this.relationTarget}}) => {{lowercase this.relationTarget}}.{{this.camelCase}}{{/if}})
+  @JoinColumn()
+  {{this.camelCase}}{{#if this.isOptional}}?{{/if}}: {{this.relationTarget}}OrmEntity;
 
-  @Column({ name: "created_at", type: "timestamp", default: () => "CURRENT_TIMESTAMP" })
-  createdAt?: Date;
+{{/if}}
+{{#if (eq this.relationType 'OneToMany')}}
+  @OneToMany(() => {{this.relationTarget}}OrmEntity, ({{lowercase this.relationTarget}}) => {{lowercase this.relationTarget}}.{{#if this.relationInverse}}{{this.relationInverse}}{{else}}{{this.camelCase}}{{/if}})
+  {{this.camelCase}}: {{this.relationTarget}}OrmEntity[];
 
-  @Column({ name: "updated_at", type: "timestamp", default: () => "CURRENT_TIMESTAMP" })
-  updatedAt?: Date;
+{{/if}}
+{{#if (eq this.relationType 'ManyToOne')}}
+  @ManyToOne(() => {{this.relationTarget}}OrmEntity{{#if this.relationInverse}}, ({{lowercase this.relationTarget}}) => {{lowercase this.relationTarget}}.{{this.relationInverse}}{{/if}})
+  @JoinColumn({ name: "{{this.snakeCase}}_id" })
+  {{this.camelCase}}{{#if this.isOptional}}?{{/if}}: {{this.relationTarget}}OrmEntity;
 
-  @Column({ name: "deleted_at", type: "timestamp", nullable: true })
-  deletedAt?: Date;
+{{/if}}
+{{#if (eq this.relationType 'ManyToMany')}}
+  @ManyToMany(() => {{this.relationTarget}}OrmEntity)
+  @JoinTable()
+  {{this.camelCase}}: {{this.relationTarget}}OrmEntity[];
 
+{{/if}}
+{{else}}
+  @Column({{#if this.isUnique}}{ unique: true{{#if this.isOptional}}, nullable: true{{/if}} }{{else}}{{#if this.isOptional}}{ nullable: true }{{/if}}{{/if}})
+  {{this.snakeCase}}{{#if this.isOptional}}?{{/if}}: {{this.tsType}};
+
+{{/if}}
+{{/each}}
+{{else}}
   // Add your columns here
   // Example:
   // @Column()
-  // property_name: string;
+  // column_name: string;
+{{/if}}
+  @Column({ name: "is_active", default: true })
+  isActive: boolean;
+
+  @CreateDateColumn({ name: "created_at" })
+  createdAt: Date;
+
+  @UpdateDateColumn({ name: "updated_at" })
+  updatedAt: Date;
+
+  @DeleteDateColumn({ name: "deleted_at" })
+  deletedAt?: Date;
 }

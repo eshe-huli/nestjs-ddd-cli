@@ -1,0 +1,111 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "NestJS DDD CLI Configuration",
+  "description": "Configuration schema for nestjs-ddd-cli",
+  "type": "object",
+  "properties": {
+    "orm": {
+      "type": "string",
+      "enum": ["typeorm", "prisma", "mikro-orm"],
+      "default": "typeorm",
+      "description": "ORM to use for database operations"
+    },
+    "database": {
+      "type": "string",
+      "enum": ["postgres", "mysql", "mongodb", "sqlite"],
+      "default": "postgres",
+      "description": "Database type"
+    },
+    "naming": {
+      "type": "object",
+      "description": "Naming conventions for generated code",
+      "properties": {
+        "table": {
+          "type": "string",
+          "enum": ["snake_case", "camelCase", "PascalCase"],
+          "default": "snake_case",
+          "description": "Database table naming convention"
+        },
+        "dto": {
+          "type": "string",
+          "enum": ["snake_case", "camelCase"],
+          "default": "snake_case",
+          "description": "DTO property naming convention"
+        },
+        "file": {
+          "type": "string",
+          "enum": ["kebab-case", "snake_case"],
+          "default": "kebab-case",
+          "description": "File naming convention"
+        }
+      }
+    },
+    "features": {
+      "type": "object",
+      "description": "Feature toggles for code generation",
+      "properties": {
+        "swagger": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include Swagger/OpenAPI decorators"
+        },
+        "pagination": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include pagination support in list queries"
+        },
+        "softDelete": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use soft delete pattern"
+        },
+        "timestamps": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include createdAt/updatedAt timestamps"
+        },
+        "tests": {
+          "type": "boolean",
+          "default": false,
+          "description": "Generate test files alongside code"
+        },
+        "events": {
+          "type": "boolean",
+          "default": false,
+          "description": "Generate domain events for entities"
+        }
+      }
+    },
+    "paths": {
+      "type": "object",
+      "description": "Custom paths for generated files",
+      "properties": {
+        "modules": {
+          "type": "string",
+          "default": "src/modules",
+          "description": "Path to modules directory"
+        },
+        "migrations": {
+          "type": "string",
+          "default": "src/migrations",
+          "description": "Path to migrations directory"
+        },
+        "shared": {
+          "type": "string",
+          "default": "src/shared",
+          "description": "Path to shared/common modules"
+        }
+      }
+    },
+    "templates": {
+      "type": "object",
+      "description": "Custom template configuration",
+      "properties": {
+        "custom": {
+          "type": "string",
+          "description": "Path to custom templates directory"
+        }
+      }
+    }
+  }
+}

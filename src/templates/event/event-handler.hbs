@@ -1,0 +1,40 @@
+import { EventsHandler, IEventHandler } from "@nestjs/cqrs";
+import { Logger } from "@nestjs/common";
+import { {{entityNamePascal}}{{eventName}}Event } from "./{{entityNameKebab}}-{{eventNameKebab}}.event";
+
+@EventsHandler({{entityNamePascal}}{{eventName}}Event)
+export class {{entityNamePascal}}{{eventName}}Handler
+  implements IEventHandler<{{entityNamePascal}}{{eventName}}Event>
+{
+  private readonly logger = new Logger({{entityNamePascal}}{{eventName}}Handler.name);
+
+  async handle(event: {{entityNamePascal}}{{eventName}}Event): Promise<void> {
+    this.logger.log(
+      `Handling {{entityNamePascal}}{{eventName}}Event for {{entityNameCamel}} ${event.{{entityNameCamel}}Id}`
+    );
+
+    // Implement your event handling logic here
+    // Examples:
+    // - Send notification emails
+    // - Update related aggregates
+    // - Publish to external systems
+    // - Update read models
+    // - Trigger workflows
+
+    try {
+      // Your async operations here
+      await this.processEvent(event);
+    } catch (error) {
+      this.logger.error(
+        `Failed to handle {{entityNamePascal}}{{eventName}}Event: ${error.message}`,
+        error.stack
+      );
+      // Consider: retry logic, dead letter queue, or alerting
+      throw error;
+    }
+  }
+
+  private async processEvent(event: {{entityNamePascal}}{{eventName}}Event): Promise<void> {
+    // Implement your specific event processing logic
+  }
+}

@@ -1,0 +1,124 @@
+import { Test, TestingModule } from "@nestjs/testing";
+import { CommandBus, QueryBus } from "@nestjs/cqrs";
+import { {{entityNamePascal}}Controller } from "../{{entityNameKebab}}.controller";
+import { Create{{entityNamePascal}}Command } from "@modules/{{moduleNameKebab}}/application/commands/create-{{entityNameKebab}}.command";
+import { Update{{entityNamePascal}}Command } from "@modules/{{moduleNameKebab}}/application/commands/update-{{entityNameKebab}}.command";
+import { Delete{{entityNamePascal}}Command } from "@modules/{{moduleNameKebab}}/application/commands/delete-{{entityNameKebab}}.command";
+import { Get{{entityNamePascal}}ByIdQuery } from "@modules/{{moduleNameKebab}}/application/queries/get-{{entityNameKebab}}-by-id.query";
+import { GetAll{{entityNamePluralPascal}}Query } from "@modules/{{moduleNameKebab}}/application/queries/get-all-{{entityNamePluralKebab}}.query";
+
+describe("{{entityNamePascal}}Controller", () => {
+  let controller: {{entityNamePascal}}Controller;
+  let commandBus: jest.Mocked<CommandBus>;
+  let queryBus: jest.Mocked<QueryBus>;
+
+  const mockResponseDto = {
+    id: "test-uuid",
+    isActive: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  const mockPaginatedResponse = {
+    items: [mockResponseDto],
+    meta: {
+      total: 1,
+      page: 1,
+      limit: 10,
+      totalPages: 1,
+      hasNextPage: false,
+      hasPreviousPage: false,
+    },
+  };
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      controllers: [{{entityNamePascal}}Controller],
+      providers: [
+        {
+          provide: CommandBus,
+          useValue: {
+            execute: jest.fn(),
+          },
+        },
+        {
+          provide: QueryBus,
+          useValue: {
+            execute: jest.fn(),
+          },
+        },
+      ],
+    }).compile();
+
+    controller = module.get<{{entityNamePascal}}Controller>({{entityNamePascal}}Controller);
+    commandBus = module.get(CommandBus);
+    queryBus = module.get(QueryBus);
+  });
+
+  describe("create", () => {
+    it("should create a new {{entityNameCamel}}", async () => {
+      const createDto = {};
+      commandBus.execute.mockResolvedValue(mockResponseDto);
+
+      const result = await controller.create(createDto as any);
+
+      expect(commandBus.execute).toHaveBeenCalledWith(
+        expect.any(Create{{entityNamePascal}}Command)
+      );
+      expect(result).toEqual(mockResponseDto);
+    });
+  });
+
+  describe("findAll", () => {
+    it("should return paginated {{entityNamePluralCamel}}", async () => {
+      const paginationQuery = { page: 1, limit: 10 };
+      queryBus.execute.mockResolvedValue(mockPaginatedResponse);
+
+      const result = await controller.findAll(paginationQuery as any);
+
+      expect(queryBus.execute).toHaveBeenCalledWith(
+        expect.any(GetAll{{entityNamePluralPascal}}Query)
+      );
+      expect(result).toEqual(mockPaginatedResponse);
+    });
+  });
+
+  describe("findOne", () => {
+    it("should return a single {{entityNameCamel}}", async () => {
+      queryBus.execute.mockResolvedValue(mockResponseDto);
+
+      const result = await controller.findOne("test-uuid");
+
+      expect(queryBus.execute).toHaveBeenCalledWith(
+        expect.any(Get{{entityNamePascal}}ByIdQuery)
+      );
+      expect(result).toEqual(mockResponseDto);
+    });
+  });
+
+  describe("update", () => {
+    it("should update and return the {{entityNameCamel}}", async () => {
+      const updateDto = {};
+      commandBus.execute.mockResolvedValue(mockResponseDto);
+
+      const result = await controller.update("test-uuid", updateDto as any);
+
+      expect(commandBus.execute).toHaveBeenCalledWith(
+        expect.any(Update{{entityNamePascal}}Command)
+      );
+      expect(result).toEqual(mockResponseDto);
+    });
+  });
+
+  describe("delete", () => {
+    it("should delete the {{entityNameCamel}}", async () => {
+      commandBus.execute.mockResolvedValue(undefined);
+
+      await controller.delete("test-uuid");
+
+      expect(commandBus.execute).toHaveBeenCalledWith(
+        expect.any(Delete{{entityNamePascal}}Command)
+      );
+    });
+  });
+});

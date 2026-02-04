@@ -1,0 +1,52 @@
+import { ApiPropertyOptional } from "@nestjs/swagger";
+import { IsOptional, IsString, IsBoolean, IsDate, IsUUID } from "class-validator";
+import { Type } from "class-transformer";
+import { PaginationQueryDto } from "./pagination.query.dto";
+
+export class {{entityNamePascal}}FilterDto extends PaginationQueryDto {
+  @ApiPropertyOptional({ description: "Search by ID" })
+  @IsOptional()
+  @IsUUID()
+  id?: string;
+
+  @ApiPropertyOptional({ description: "Filter by active status" })
+  @IsOptional()
+  @IsBoolean()
+  @Type(() => Boolean)
+  isActive?: boolean;
+
+  @ApiPropertyOptional({ description: "Search term for text fields" })
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @ApiPropertyOptional({ description: "Filter by creation date (from)" })
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate()
+  createdFrom?: Date;
+
+  @ApiPropertyOptional({ description: "Filter by creation date (to)" })
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate()
+  createdTo?: Date;
+
+{{#if hasFields}}
+{{#each fields}}
+{{#unless this.isArray}}
+  @ApiPropertyOptional({ description: "Filter by {{this.camelCase}}" })
+  @IsOptional()
+  {{this.snakeCase}}?: {{this.tsType}};
+
+{{/unless}}
+{{/each}}
+{{else}}
+  // Add your filter fields here
+  // Example:
+  // @ApiPropertyOptional({ description: "Filter by name" })
+  // @IsOptional()
+  // @IsString()
+  // name?: string;
+{{/if}}
+}

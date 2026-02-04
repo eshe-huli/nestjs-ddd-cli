@@ -1,0 +1,158 @@
+import { Test, TestingModule } from "@nestjs/testing";
+import { getRepositoryToken } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
+import { {{entityNamePascal}}Repository } from "../{{entityNameKebab}}.repository";
+import { {{entityNamePascal}}OrmEntity } from "../orm-entities/{{entityNameKebab}}.orm-entity";
+import { {{entityNamePascal}}Mapper } from "../mappers/{{entityNameKebab}}.mapper";
+import { {{entityNamePascal}}Entity } from "@modules/{{moduleNameKebab}}/domain/entities/{{entityNameKebab}}.entity";
+
+describe("{{entityNamePascal}}Repository", () => {
+  let repository: {{entityNamePascal}}Repository;
+  let typeOrmRepo: jest.Mocked<Repository<{{entityNamePascal}}OrmEntity>>;
+  let mapper: jest.Mocked<{{entityNamePascal}}Mapper>;
+
+  const mockOrmEntity: {{entityNamePascal}}OrmEntity = {
+    id: "test-uuid",
+    isActive: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    deletedAt: null,
+  };
+
+  const mockDomainEntity = new {{entityNamePascal}}Entity({
+    id: "test-uuid",
+    isActive: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        {{entityNamePascal}}Repository,
+        {
+          provide: getRepositoryToken({{entityNamePascal}}OrmEntity),
+          useValue: {
+            save: jest.fn(),
+            findOne: jest.fn(),
+            find: jest.fn(),
+            findAndCount: jest.fn(),
+            update: jest.fn(),
+            delete: jest.fn(),
+            count: jest.fn(),
+          },
+        },
+        {
+          provide: {{entityNamePascal}}Mapper,
+          useValue: {
+            toOrmEntity: jest.fn(),
+            toDomainEntity: jest.fn(),
+            toResponseDto: jest.fn(),
+          },
+        },
+      ],
+    }).compile();
+
+    repository = module.get<{{entityNamePascal}}Repository>({{entityNamePascal}}Repository);
+    typeOrmRepo = module.get(getRepositoryToken({{entityNamePascal}}OrmEntity));
+    mapper = module.get({{entityNamePascal}}Mapper);
+  });
+
+  describe("create", () => {
+    it("should create and return a domain entity", async () => {
+      mapper.toOrmEntity.mockReturnValue(mockOrmEntity as any);
+      typeOrmRepo.save.mockResolvedValue(mockOrmEntity);
+      mapper.toDomainEntity.mockReturnValue(mockDomainEntity);
+
+      const result = await repository.create(mockDomainEntity);
+
+      expect(mapper.toOrmEntity).toHaveBeenCalledWith(mockDomainEntity);
+      expect(typeOrmRepo.save).toHaveBeenCalled();
+      expect(mapper.toDomainEntity).toHaveBeenCalledWith(mockOrmEntity);
+      expect(result).toEqual(mockDomainEntity);
+    });
+  });
+
+  describe("findById", () => {
+    it("should return a domain entity when found", async () => {
+      typeOrmRepo.findOne.mockResolvedValue(mockOrmEntity);
+      mapper.toDomainEntity.mockReturnValue(mockDomainEntity);
+
+      const result = await repository.findById("test-uuid");
+
+      expect(typeOrmRepo.findOne).toHaveBeenCalledWith({
+        where: { id: "test-uuid", deletedAt: null },
+      });
+      expect(result).toEqual(mockDomainEntity);
+    });
+
+    it("should return null when entity is not found", async () => {
+      typeOrmRepo.findOne.mockResolvedValue(null);
+
+      const result = await repository.findById("non-existent-uuid");
+
+      expect(result).toBeNull();
+    });
+  });
+
+  describe("findAllPaginated", () => {
+    it("should return paginated entities with total count", async () => {
+      const mockEntities = [mockOrmEntity];
+      typeOrmRepo.findAndCount.mockResolvedValue([mockEntities, 1]);
+      mapper.toDomainEntity.mockReturnValue(mockDomainEntity);
+
+      const result = await repository.findAllPaginated({
+        skip: 0,
+        take: 10,
+        orderBy: "createdAt",
+        orderDirection: "DESC",
+      });
+
+      expect(result[0]).toHaveLength(1);
+      expect(result[1]).toBe(1);
+    });
+  });
+
+  describe("update", () => {
+    it("should update and return the entity", async () => {
+      mapper.toOrmEntity.mockReturnValue(mockOrmEntity as any);
+      typeOrmRepo.update.mockResolvedValue({ affected: 1 } as any);
+
+      const result = await repository.update("test-uuid", mockDomainEntity);
+
+      expect(typeOrmRepo.update).toHaveBeenCalled();
+      expect(result).toEqual(mockDomainEntity);
+    });
+  });
+
+  describe("delete", () => {
+    it("should soft delete the entity", async () => {
+      typeOrmRepo.update.mockResolvedValue({ affected: 1 } as any);
+
+      await repository.delete("test-uuid");
+
+      expect(typeOrmRepo.update).toHaveBeenCalledWith(
+        "test-uuid",
+        expect.objectContaining({ deletedAt: expect.any(Date) })
+      );
+    });
+  });
+
+  describe("exists", () => {
+    it("should return true when entity exists", async () => {
+      typeOrmRepo.count.mockResolvedValue(1);
+
+      const result = await repository.exists("test-uuid");
+
+      expect(result).toBe(true);
+    });
+
+    it("should return false when entity does not exist", async () => {
+      typeOrmRepo.count.mockResolvedValue(0);
+
+      const result = await repository.exists("non-existent-uuid");
+
+      expect(result).toBe(false);
+    });
+  });
+});

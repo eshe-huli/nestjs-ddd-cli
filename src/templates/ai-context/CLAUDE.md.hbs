@@ -1,0 +1,158 @@
+# {{projectName}} - AI Assistant Context
+
+This is a NestJS project using Domain-Driven Design (DDD) patterns generated with `nestjs-ddd-cli`.
+
+## Project Structure
+
+```
+src/
+├── modules/                    # Feature modules (bounded contexts)
+│   └── [feature-name]/
+│       ├── [feature].module.ts # NestJS module
+│       ├── application/        # Application layer
+│       │   ├── commands/       # CQRS commands (writes)
+│       │   ├── queries/        # CQRS queries (reads)
+│       │   ├── controllers/    # HTTP controllers
+│       │   ├── dto/            # Data transfer objects
+│       │   │   ├── requests/   # Input DTOs
+│       │   │   └── responses/  # Output DTOs
+│       │   └── domain/
+│       │       ├── entities/   # Domain entities
+│       │       ├── events/     # Domain events
+│       │       ├── services/   # Domain services
+│       │       └── usecases/   # Business logic
+│       └── infrastructure/     # Infrastructure layer
+│           ├── repositories/   # Data access
+│           ├── orm-entities/   # Database schemas
+│           └── mappers/        # Entity mapping
+├── shared/                     # Shared utilities
+└── migrations/                 # Database migrations
+```
+
+## CLI Commands
+
+Generate new features using the DDD CLI:
+
+```bash
+# Generate complete CRUD scaffolding with fields
+ddd scaffold User -m users --fields "name:string email:string:unique age:number:optional"
+
+# Generate individual components
+ddd generate module [name]
+ddd generate entity [name] -m [module]
+ddd generate usecase [name] -m [module]
+ddd generate service [name] -m [module]
+ddd generate event [name] -m [module]
+ddd generate query [name] -m [module]
+```
+
+## Naming Conventions
+
+| Type | Convention | Example |
+|------|------------|---------|
+| Files | kebab-case | `create-user.command.ts` |
+| Classes | PascalCase | `CreateUserCommand` |
+| Database tables | snake_case | `users` |
+| DTO properties | snake_case | `user_name` |
+| Domain properties | camelCase | `userName` |
+
+## Architecture Rules
+
+1. **Dependencies flow inward**: Infrastructure → Application → Domain
+2. **Domain layer is pure**: No framework dependencies, just business logic
+3. **CQRS pattern**: Commands for writes, Queries for reads
+4. **Repository pattern**: Abstract data access behind interfaces
+5. **Mapper pattern**: Convert between domain and infrastructure entities
+
+## Common Patterns
+
+### Creating a new entity
+
+```typescript
+// Domain entity (pure business logic)
+export class User {
+  constructor(private readonly props: UserProps) {}
+
+  get name(): string { return this.props.name; }
+
+  changeName(newName: string): void {
+    // Business rule validation
+    if (!newName) throw new Error('Name required');
+    this.props.name = newName;
+  }
+}
+```
+
+### Creating a use case
+
+```typescript
+@Injectable()
+export class CreateUserUseCase {
+  constructor(private readonly repository: UserRepository) {}
+
+  async execute(dto: CreateUserDto): Promise<UserResponseDto> {
+    const user = new User(dto);
+    const saved = await this.repository.create(user);
+    return this.mapper.toResponseDto(saved);
+  }
+}
+```
+
+### Adding a new field to an existing entity
+
+1. Update domain entity props interface
+2. Update ORM entity with @Column decorator
+3. Update create/update DTOs with validators
+4. Update response DTO
+5. Update mapper methods
+6. Create migration for database
+
+## API Conventions
+
+All APIs follow RESTful conventions:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/entities` | List with pagination |
+| GET | `/entities/:id` | Get single entity |
+| POST | `/entities` | Create new entity |
+| PUT | `/entities/:id` | Update entity |
+| DELETE | `/entities/:id` | Soft delete entity |
+
+### Pagination
+
+```typescript
+GET /entities?page=1&limit=10&sortBy=createdAt&sortOrder=DESC
+```
+
+### Standard Response Format
+
+```json
+{
+  "items": [...],
+  "meta": {
+    "total": 100,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 10,
+    "hasNextPage": true,
+    "hasPreviousPage": false
+  }
+}
+```
+
+## Configuration
+
+Project configuration is in `.dddrc.json`:
+
+```json
+{
+  "orm": "typeorm",
+  "database": "postgres",
+  "features": {
+    "swagger": true,
+    "pagination": true,
+    "softDelete": true
+  }
+}
+```

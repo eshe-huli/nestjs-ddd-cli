@@ -1,27 +1,19 @@
 import { CommandHandler, ICommandHandler } from "@nestjs/cqrs";
 import { Create{{entityNamePascal}}UseCase } from "@modules/{{moduleNameKebab}}/application/usecases/create-{{entityNameKebab}}.use-case";
 import { Create{{entityNamePascal}}Dto } from "@modules/{{moduleNameKebab}}/application/dto/requests/create-{{entityNameKebab}}.dto";
+import { {{entityNamePascal}}ResponseDto } from "@modules/{{moduleNameKebab}}/application/dto/responses/{{entityNameKebab}}.response.dto";
 
 export class Create{{entityNamePascal}}Command {
-  // Add your command properties here
-  // They should match your entity properties in camelCase
-  
-  constructor(
-    data: Create{{entityNamePascal}}Dto,
-    public readonly contextId: string, // e.g., userId, tenantId
-  ) {
-    // Transform snake_case DTO to camelCase command properties
-    // Example: this.propertyName = data.property_name;
-  }
+  constructor(public readonly data: Create{{entityNamePascal}}Dto) {}
 }
 
 @CommandHandler(Create{{entityNamePascal}}Command)
 export class Create{{entityNamePascal}}Handler
-  implements ICommandHandler<Create{{entityNamePascal}}Command>
+  implements ICommandHandler<Create{{entityNamePascal}}Command, {{entityNamePascal}}ResponseDto>
 {
   constructor(private readonly useCase: Create{{entityNamePascal}}UseCase) {}
 
-  async execute(command: Create{{entityNamePascal}}Command) {
-    return this.useCase.execute(command);
+  async execute(command: Create{{entityNamePascal}}Command): Promise<{{entityNamePascal}}ResponseDto> {
+    return this.useCase.execute(command.data);
   }
 }

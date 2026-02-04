@@ -1,18 +1,42 @@
-import { ApiProperty } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
+  IsArray,
+  IsBoolean,
+  IsDate,
   IsDefined,
+  IsEmail,
+  IsIn,
+  IsInt,
   IsNotEmpty,
-  IsString,
   IsNumber,
+  IsOptional,
+  IsString,
   IsUUID,
+  IsUrl,
 } from "class-validator";
+import { Type } from "class-transformer";
 
 export class Create{{entityNamePascal}}Dto {
+{{#if hasFields}}
+{{#each fields}}
+{{#if this.isOptional}}
+  @ApiPropertyOptional({ description: "{{this.description}}"{{#if this.example}}, example: "{{this.example}}"{{/if}} })
+{{else}}
+  @ApiProperty({ description: "{{this.description}}"{{#if this.example}}, example: "{{this.example}}"{{/if}} })
+{{/if}}
+{{#each this.validators}}
+  {{this}}
+{{/each}}
+  {{this.snakeCase}}{{#if this.isOptional}}?{{/if}}: {{this.tsType}};
+
+{{/each}}
+{{else}}
   // Add your DTO properties here in snake_case
   // Example:
-  // @ApiProperty()
+  // @ApiProperty({ description: "User name" })
   // @IsString()
   // @IsNotEmpty()
   // @IsDefined()
-  // property_name: string;
+  // name: string;
+{{/if}}
 }

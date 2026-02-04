@@ -1,0 +1,54 @@
+import { Field, InputType } from "@nestjs/graphql";
+import { IsNotEmpty, IsOptional, IsString, IsBoolean } from "class-validator";
+
+@InputType()
+export class Create{{entityNamePascal}}Input {
+{{#if hasFields}}
+{{#each fields}}
+{{#unless this.isOptional}}
+  @Field()
+  @IsNotEmpty()
+  {{this.camelCase}}: {{this.tsType}};
+
+{{/unless}}
+{{/each}}
+{{#each fields}}
+{{#if this.isOptional}}
+  @Field({ nullable: true })
+  @IsOptional()
+  {{this.camelCase}}?: {{this.tsType}};
+
+{{/if}}
+{{/each}}
+{{else}}
+  // Add your input fields here
+  // Example:
+  // @Field()
+  // @IsNotEmpty()
+  // @IsString()
+  // name: string;
+{{/if}}
+}
+
+@InputType()
+export class Update{{entityNamePascal}}Input {
+{{#if hasFields}}
+{{#each fields}}
+  @Field({ nullable: true })
+  @IsOptional()
+  {{this.camelCase}}?: {{this.tsType}};
+
+{{/each}}
+{{else}}
+  // Add your input fields here
+  // Example:
+  // @Field({ nullable: true })
+  // @IsOptional()
+  // @IsString()
+  // name?: string;
+{{/if}}
+  @Field({ nullable: true })
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+}

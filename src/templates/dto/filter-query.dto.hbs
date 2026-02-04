@@ -1,0 +1,148 @@
+import { ApiPropertyOptional } from "@nestjs/swagger";
+import { IsOptional, IsString, IsIn, IsArray, ValidateNested } from "class-validator";
+import { Type, Transform } from "class-transformer";
+
+/**
+ * Filter operators for query building
+ */
+export type FilterOperator =
+  | "eq"      // Equal
+  | "ne"      // Not equal
+  | "gt"      // Greater than
+  | "gte"     // Greater than or equal
+  | "lt"      // Less than
+  | "lte"     // Less than or equal
+  | "in"      // In array
+  | "nin"     // Not in array
+  | "like"    // Contains (case insensitive)
+  | "ilike"   // Contains (case insensitive) - PostgreSQL
+  | "between" // Between two values
+  | "isNull"  // Is null
+  | "isNotNull"; // Is not null
+
+export class FilterCondition {
+  @ApiPropertyOptional({ description: "Field name to filter" })
+  @IsString()
+  field: string;
+
+  @ApiPropertyOptional({
+    description: "Filter operator",
+    enum: ["eq", "ne", "gt", "gte", "lt", "lte", "in", "nin", "like", "ilike", "between", "isNull", "isNotNull"]
+  })
+  @IsIn(["eq", "ne", "gt", "gte", "lt", "lte", "in", "nin", "like", "ilike", "between", "isNull", "isNotNull"])
+  operator: FilterOperator;
+
+  @ApiPropertyOptional({ description: "Filter value" })
+  value?: any;
+}
+
+export class {{entityNamePascal}}FilterDto {
+{{#if hasFields}}
+{{#each fields}}
+  @ApiPropertyOptional({ description: "Filter by {{this.camelCase}}" })
+  @IsOptional()
+  {{this.camelCase}}?: {{this.tsType}};
+
+  @ApiPropertyOptional({ description: "Filter by {{this.camelCase}} with operator (e.g., {{this.camelCase}}__gte=10)" })
+  @IsOptional()
+  {{this.camelCase}}__eq?: {{this.tsType}};
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  {{this.camelCase}}__ne?: {{this.tsType}};
+
+{{#if (or (eq this.type 'number') (eq this.type 'date') (eq this.type 'datetime'))}}
+  @ApiPropertyOptional()
+  @IsOptional()
+  {{this.camelCase}}__gt?: {{this.tsType}};
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  {{this.camelCase}}__gte?: {{this.tsType}};
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  {{this.camelCase}}__lt?: {{this.tsType}};
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  {{this.camelCase}}__lte?: {{this.tsType}};
+
+{{/if}}
+{{#if (eq this.type 'string')}}
+  @ApiPropertyOptional({ description: "Contains search for {{this.camelCase}}" })
+  @IsOptional()
+  {{this.camelCase}}__like?: string;
+
+{{/if}}
+{{/each}}
+{{else}}
+  // Add filter fields based on your entity properties
+  // Example:
+  // @ApiPropertyOptional()
+  // @IsOptional()
+  // name?: string;
+  //
+  // @ApiPropertyOptional()
+  // @IsOptional()
+  // name__like?: string;
+{{/if}}
+
+  @ApiPropertyOptional({ description: "Filter by active status" })
+  @IsOptional()
+  isActive?: boolean;
+
+  @ApiPropertyOptional({ description: "Search across multiple fields" })
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @ApiPropertyOptional({ description: "Fields to search in (comma-separated)" })
+  @IsOptional()
+  @Transform(({ value }) => typeof value === "string" ? value.split(",") : value)
+  @IsArray()
+  searchFields?: string[];
+
+  @ApiPropertyOptional({ description: "Filter by date range - start" })
+  @IsOptional()
+  @Type(() => Date)
+  createdAtFrom?: Date;
+
+  @ApiPropertyOptional({ description: "Filter by date range - end" })
+  @IsOptional()
+  @Type(() => Date)
+  createdAtTo?: Date;
+}
+
+/**
+ * Combined filter and pagination DTO
+ */
+export class {{entityNamePascal}}QueryDto extends {{entityNamePascal}}FilterDto {
+  @ApiPropertyOptional({ description: "Page number", default: 1, minimum: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  page?: number = 1;
+
+  @ApiPropertyOptional({ description: "Items per page", default: 10, minimum: 1, maximum: 100 })
+  @IsOptional()
+  @Type(() => Number)
+  limit?: number = 10;
+
+  @ApiPropertyOptional({ description: "Field to sort by", default: "createdAt" })
+  @IsOptional()
+  @IsString()
+  sortBy?: string = "createdAt";
+
+  @ApiPropertyOptional({ description: "Sort order", enum: ["ASC", "DESC"], default: "DESC" })
+  @IsOptional()
+  @IsIn(["ASC", "DESC"])
+  sortOrder?: "ASC" | "DESC" = "DESC";
+
+  get skip(): number {
+    return ((this.page || 1) - 1) * (this.limit || 10);
+  }
+
+  get take(): number {
+    return this.limit || 10;
+  }
+}

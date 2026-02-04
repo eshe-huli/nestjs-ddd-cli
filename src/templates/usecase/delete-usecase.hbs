@@ -1,0 +1,17 @@
+import { Injectable, NotFoundException } from "@nestjs/common";
+import { {{entityNamePascal}}Repository } from "@modules/{{moduleNameKebab}}/infrastructure/repositories/{{entityNameKebab}}.repository";
+
+@Injectable()
+export class Delete{{entityNamePascal}}UseCase {
+  constructor(private readonly repository: {{entityNamePascal}}Repository) {}
+
+  async execute(id: string): Promise<void> {
+    const existingEntity = await this.repository.findById(id);
+
+    if (!existingEntity) {
+      throw new NotFoundException(`{{entityNamePascal}} with id '${id}' not found`);
+    }
+
+    await this.repository.delete(id);
+  }
+}

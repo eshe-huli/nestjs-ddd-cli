@@ -1,37 +1,62 @@
-import { {{entityNamePascal}}OrmEntity } from "@modules/{{moduleNameKebab}}/infrastructure/orm-entities/{{entityNameKebab}}.orm-entity";
-import { {{entityNamePascal}}Entity } from "@modules/{{moduleNameKebab}}/domain/entities/{{entityNameKebab}}.entity";
 import { Injectable } from "@nestjs/common";
+import { {{entityNamePascal}}Entity } from "@modules/{{moduleNameKebab}}/domain/entities/{{entityNameKebab}}.entity";
+import { {{entityNamePascal}}OrmEntity } from "@modules/{{moduleNameKebab}}/infrastructure/orm-entities/{{entityNameKebab}}.orm-entity";
+import { {{entityNamePascal}}ResponseDto } from "@modules/{{moduleNameKebab}}/application/dto/responses/{{entityNameKebab}}.response.dto";
 
 @Injectable()
 export class {{entityNamePascal}}Mapper {
-  toOrmEntity(domainEntity: {{entityNamePascal}}Entity): {{entityNamePascal}}OrmEntity {
-    if (!domainEntity) {
-      throw new Error('Domain entity is required');
+  toDomainEntity(ormEntity: {{entityNamePascal}}OrmEntity): {{entityNamePascal}}Entity {
+    if (!ormEntity) {
+      throw new Error("ORM entity is required");
     }
 
-    const ormEntity = new {{entityNamePascal}}OrmEntity();
-    ormEntity.id = domainEntity.id;
-    ormEntity.isActive = domainEntity.isActive;
-    ormEntity.createdAt = domainEntity.createdAt;
-    ormEntity.updatedAt = domainEntity.updatedAt;
-    ormEntity.deletedAt = domainEntity.deletedAt;
-    // Map your properties from camelCase to snake_case
-    // Example: ormEntity.property_name = domainEntity.propertyName;
-    
-    return ormEntity;
-  }
-
-  toDomainEntity(ormEntity: {{entityNamePascal}}OrmEntity): {{entityNamePascal}}Entity {
-    const entity = new {{entityNamePascal}}Entity({
+    return new {{entityNamePascal}}Entity({
       id: ormEntity.id,
       isActive: ormEntity.isActive,
       createdAt: ormEntity.createdAt,
       updatedAt: ormEntity.updatedAt,
       deletedAt: ormEntity.deletedAt,
-      // Map your properties from snake_case to camelCase
-      // Example: propertyName: ormEntity.property_name,
+      // Map additional fields from ORM entity (snake_case) to domain entity (camelCase)
+      {{#each fields}}
+      {{this.camelCase}}: ormEntity.{{this.snakeCase}},
+      {{/each}}
     });
-    
-    return entity;
+  }
+
+  toOrmEntity(domainEntity: {{entityNamePascal}}Entity): Partial<{{entityNamePascal}}OrmEntity> {
+    if (!domainEntity) {
+      throw new Error("Domain entity is required");
+    }
+
+    const ormEntity: Partial<{{entityNamePascal}}OrmEntity> = {
+      id: domainEntity.id,
+      isActive: domainEntity.isActive,
+      createdAt: domainEntity.createdAt,
+      updatedAt: domainEntity.updatedAt,
+      deletedAt: domainEntity.deletedAt,
+      // Map additional fields from domain entity (camelCase) to ORM entity (snake_case)
+      {{#each fields}}
+      {{this.snakeCase}}: domainEntity.{{this.camelCase}},
+      {{/each}}
+    };
+
+    return ormEntity;
+  }
+
+  toResponseDto(entity: {{entityNamePascal}}Entity): {{entityNamePascal}}ResponseDto {
+    return new {{entityNamePascal}}ResponseDto({
+      id: entity.id,
+      isActive: entity.isActive,
+      createdAt: entity.createdAt,
+      updatedAt: entity.updatedAt,
+      // Map additional fields for response
+      {{#each fields}}
+      {{this.camelCase}}: entity.{{this.camelCase}},
+      {{/each}}
+    });
+  }
+
+  toResponseDtoList(entities: {{entityNamePascal}}Entity[]): {{entityNamePascal}}ResponseDto[] {
+    return entities.map((entity) => this.toResponseDto(entity));
   }
 }

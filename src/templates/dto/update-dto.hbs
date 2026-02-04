@@ -1,0 +1,11 @@
+import { ApiPropertyOptional } from "@nestjs/swagger";
+import { IsOptional, IsBoolean } from "class-validator";
+import { PartialType } from "@nestjs/swagger";
+import { Create{{entityNamePascal}}Dto } from "./create-{{entityNameKebab}}.dto";
+
+export class Update{{entityNamePascal}}Dto extends PartialType(Create{{entityNamePascal}}Dto) {
+  @ApiPropertyOptional({ description: "Whether the record is active" })
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+}

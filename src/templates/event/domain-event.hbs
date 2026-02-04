@@ -1,9 +1,35 @@
-import { IEvent } from '@nestjs/cqrs';
+import { IEvent } from "@nestjs/cqrs";
 
-export class {{entityName}}Event implements IEvent {
+export interface {{entityNamePascal}}EventData {
+  // Define your event payload here
+  // Example:
+  // name: string;
+  // email: string;
+{{#each fields}}
+  {{this.camelCase}}{{#if this.isOptional}}?{{/if}}: {{this.tsType}};
+{{/each}}
+}
+
+export class {{entityNamePascal}}{{eventName}}Event implements IEvent {
+  public readonly occurredAt: Date;
+  public readonly eventType = "{{entityNamePascal}}{{eventName}}";
+
   constructor(
-    public readonly id: string,
-    public readonly data: any,
-    public readonly occurredAt: Date = new Date(),
-  ) {}
+    public readonly {{entityNameCamel}}Id: string,
+    public readonly data: {{entityNamePascal}}EventData,
+    public readonly metadata?: {
+      correlationId?: string;
+      causationId?: string;
+      userId?: string;
+    }
+  ) {
+    this.occurredAt = new Date();
+  }
+
+  /**
+   * Get a string representation of the event for logging
+   */
+  toString(): string {
+    return `${this.eventType}(${this.{{entityNameCamel}}Id}) at ${this.occurredAt.toISOString()}`;
+  }
 }

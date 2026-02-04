@@ -1,0 +1,31 @@
+import { Injectable, NotFoundException } from "@nestjs/common";
+import { {{entityNamePascal}}Entity } from "@modules/{{moduleNameKebab}}/domain/entities/{{entityNameKebab}}.entity";
+import { {{entityNamePascal}}Repository } from "@modules/{{moduleNameKebab}}/infrastructure/repositories/{{entityNameKebab}}.repository";
+import { {{entityNamePascal}}Mapper } from "@modules/{{moduleNameKebab}}/infrastructure/mappers/{{entityNameKebab}}.mapper";
+import { Update{{entityNamePascal}}Dto } from "@modules/{{moduleNameKebab}}/application/dto/requests/update-{{entityNameKebab}}.dto";
+import { {{entityNamePascal}}ResponseDto } from "@modules/{{moduleNameKebab}}/application/dto/responses/{{entityNameKebab}}.response.dto";
+
+@Injectable()
+export class Update{{entityNamePascal}}UseCase {
+  constructor(
+    private readonly repository: {{entityNamePascal}}Repository,
+    private readonly mapper: {{entityNamePascal}}Mapper,
+  ) {}
+
+  async execute(id: string, dto: Update{{entityNamePascal}}Dto): Promise<{{entityNamePascal}}ResponseDto> {
+    const existingEntity = await this.repository.findById(id);
+
+    if (!existingEntity) {
+      throw new NotFoundException(`{{entityNamePascal}} with id '${id}' not found`);
+    }
+
+    const updatedEntity = new {{entityNamePascal}}Entity({
+      ...existingEntity,
+      ...dto,
+      updatedAt: new Date(),
+    });
+
+    const savedEntity = await this.repository.update(id, updatedEntity);
+    return this.mapper.toResponseDto(savedEntity);
+  }
+}

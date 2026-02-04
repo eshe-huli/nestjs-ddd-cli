@@ -1,0 +1,38 @@
+import { ApiProperty } from "@nestjs/swagger";
+import { Expose } from "class-transformer";
+
+export class {{entityNamePascal}}ResponseDto {
+  @ApiProperty({ description: "Unique identifier", format: "uuid" })
+  @Expose()
+  id: string;
+
+{{#if hasFields}}
+{{#each fields}}
+  @ApiProperty({ description: "{{this.description}}"{{#if this.example}}, example: "{{this.example}}"{{/if}} })
+  @Expose()
+  {{this.camelCase}}: {{this.tsType}};
+
+{{/each}}
+{{else}}
+  // Add your response properties here
+  // Example:
+  // @ApiProperty({ description: "User name" })
+  // @Expose()
+  // name: string;
+{{/if}}
+  @ApiProperty({ description: "Whether the record is active" })
+  @Expose()
+  isActive: boolean;
+
+  @ApiProperty({ description: "Creation timestamp" })
+  @Expose()
+  createdAt: Date;
+
+  @ApiProperty({ description: "Last update timestamp" })
+  @Expose()
+  updatedAt: Date;
+
+  constructor(partial: Partial<{{entityNamePascal}}ResponseDto>) {
+    Object.assign(this, partial);
+  }
+}

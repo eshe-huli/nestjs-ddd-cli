@@ -1,0 +1,71 @@
+import { Injectable } from "@nestjs/common";
+import { {{entityNamePascal}} as Prisma{{entityNamePascal}} } from "@prisma/client";
+import { {{entityNamePascal}}Entity } from "@modules/{{moduleNameKebab}}/application/domain/entities/{{entityNameKebab}}.entity";
+import { {{entityNamePascal}}ResponseDto } from "@modules/{{moduleNameKebab}}/application/dto/responses/{{entityNameKebab}}.response.dto";
+
+@Injectable()
+export class {{entityNamePascal}}Mapper {
+  toDomainEntity(prismaEntity: Prisma{{entityNamePascal}}): {{entityNamePascal}}Entity {
+    return new {{entityNamePascal}}Entity({
+      id: prismaEntity.id,
+      isActive: prismaEntity.is_active,
+      createdAt: prismaEntity.created_at,
+      updatedAt: prismaEntity.updated_at,
+      deletedAt: prismaEntity.deleted_at ?? undefined,
+{{#if hasFields}}
+{{#each fields}}
+      {{this.camelCase}}: prismaEntity.{{this.snakeCase}},
+{{/each}}
+{{else}}
+      // Map your Prisma fields to domain entity
+      // propertyName: prismaEntity.property_name,
+{{/if}}
+    });
+  }
+
+  toPrismaCreate(entity: {{entityNamePascal}}Entity): any {
+    return {
+{{#if hasFields}}
+{{#each fields}}
+      {{this.snakeCase}}: entity.{{this.camelCase}},
+{{/each}}
+{{else}}
+      // Map your domain entity to Prisma create input
+      // property_name: entity.propertyName,
+{{/if}}
+      is_active: entity.isActive ?? true,
+    };
+  }
+
+  toPrismaUpdate(entity: {{entityNamePascal}}Entity): any {
+    return {
+{{#if hasFields}}
+{{#each fields}}
+      {{this.snakeCase}}: entity.{{this.camelCase}},
+{{/each}}
+{{else}}
+      // Map your domain entity to Prisma update input
+      // property_name: entity.propertyName,
+{{/if}}
+      is_active: entity.isActive,
+      updated_at: new Date(),
+    };
+  }
+
+  toResponseDto(entity: {{entityNamePascal}}Entity): {{entityNamePascal}}ResponseDto {
+    return new {{entityNamePascal}}ResponseDto({
+      id: entity.id!,
+      isActive: entity.isActive!,
+      createdAt: entity.createdAt!,
+      updatedAt: entity.updatedAt!,
+{{#if hasFields}}
+{{#each fields}}
+      {{this.camelCase}}: entity.{{this.camelCase}},
+{{/each}}
+{{else}}
+      // Map your response fields
+      // propertyName: entity.propertyName,
+{{/if}}
+    });
+  }
+}

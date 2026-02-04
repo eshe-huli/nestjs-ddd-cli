@@ -1,0 +1,154 @@
+# {{projectName}} Coding Conventions
+
+## File Naming
+
+- **Modules**: `[name].module.ts`
+- **Controllers**: `[name].controller.ts`
+- **Commands**: `[action]-[entity].command.ts`
+- **Queries**: `get-[entity]-by-id.query.ts`, `get-all-[entities].query.ts`
+- **Use Cases**: `[action]-[entity].use-case.ts`
+- **DTOs**: `[action]-[entity].dto.ts`, `[entity].response.dto.ts`
+- **Entities**: `[entity].entity.ts`
+- **ORM Entities**: `[entity].orm-entity.ts`
+- **Repositories**: `[entity].repository.ts`
+- **Mappers**: `[entity].mapper.ts`
+- **Events**: `[entity]-[action].event.ts`
+- **Services**: `[name].service.ts`
+
+## Class Naming
+
+- **Commands**: `Create[Entity]Command`, `Update[Entity]Command`, `Delete[Entity]Command`
+- **Command Handlers**: `Create[Entity]Handler`
+- **Queries**: `Get[Entity]ByIdQuery`, `GetAll[Entities]Query`
+- **Query Handlers**: `Get[Entity]ByIdHandler`
+- **Use Cases**: `Create[Entity]UseCase`
+- **DTOs**: `Create[Entity]Dto`, `Update[Entity]Dto`, `[Entity]ResponseDto`
+- **Entities**: `[Entity]Entity`, `[Entity]EntityProps`
+- **ORM Entities**: `[Entity]OrmEntity`
+- **Repositories**: `[Entity]Repository`
+- **Mappers**: `[Entity]Mapper`
+- **Events**: `[Entity]CreatedEvent`, `[Entity]UpdatedEvent`
+
+## Import Paths
+
+Use module path aliases:
+
+```typescript
+// Good
+import { UserEntity } from "@modules/users/domain/entities/user.entity";
+import { CreateUserDto } from "@modules/users/application/dto/requests/create-user.dto";
+
+// Avoid
+import { UserEntity } from "../../../domain/entities/user.entity";
+```
+
+## DTO Conventions
+
+- Request DTOs use snake_case properties (API layer)
+- Domain entities use camelCase properties (business layer)
+- Response DTOs use camelCase properties (serialized from domain)
+
+```typescript
+// Request DTO (snake_case input)
+export class CreateUserDto {
+  @IsString()
+  first_name: string;
+
+  @IsEmail()
+  email_address: string;
+}
+
+// Domain Entity (camelCase)
+export class UserEntity {
+  firstName: string;
+  emailAddress: string;
+}
+
+// Response DTO (camelCase output)
+export class UserResponseDto {
+  firstName: string;
+  emailAddress: string;
+}
+```
+
+## Validation
+
+Always validate at the API boundary:
+
+```typescript
+export class CreateUserDto {
+  @ApiProperty({ description: "User's email address" })
+  @IsEmail()
+  @IsNotEmpty()
+  email: string;
+
+  @ApiProperty({ description: "User's full name" })
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(2)
+  @MaxLength(100)
+  name: string;
+}
+```
+
+## Error Handling
+
+Use NestJS built-in exceptions:
+
+```typescript
+import { NotFoundException, BadRequestException } from "@nestjs/common";
+
+// In use cases
+if (!entity) {
+  throw new NotFoundException(`User with id '${id}' not found`);
+}
+
+// For validation
+if (!isValid) {
+  throw new BadRequestException('Invalid data provided');
+}
+```
+
+## Repository Methods
+
+Standard repository interface:
+
+```typescript
+interface Repository<T> {
+  create(entity: T): Promise<T>;
+  findById(id: string): Promise<T | null>;
+  findAll(): Promise<T[]>;
+  findAllPaginated(options: PaginationOptions): Promise<[T[], number]>;
+  update(id: string, entity: T): Promise<T>;
+  delete(id: string): Promise<void>;
+  exists(id: string): Promise<boolean>;
+}
+```
+
+## Testing Conventions
+
+- Unit tests: `*.spec.ts` (same directory)
+- Integration tests: `*.integration.spec.ts`
+- E2E tests: `*.e2e-spec.ts` (in test/ directory)
+
+```typescript
+describe('CreateUserUseCase', () => {
+  let useCase: CreateUserUseCase;
+  let repository: MockType<UserRepository>;
+
+  beforeEach(async () => {
+    // Setup
+  });
+
+  it('should create a user', async () => {
+    // Arrange
+    const dto = { name: 'John', email: 'john@example.com' };
+
+    // Act
+    const result = await useCase.execute(dto);
+
+    // Assert
+    expect(result.name).toBe('John');
+  });
+});
+```
