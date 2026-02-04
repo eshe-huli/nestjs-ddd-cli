@@ -41,6 +41,16 @@ import { diffMigration } from './commands/migration-engine';
 import { generateFilterDSL } from './commands/filter-dsl';
 import { setupEventSourcingFramework } from './commands/event-sourcing-full';
 import { setupTestInfrastructure } from './commands/test-factory-full';
+import { generateValueObject, setupValueObjects } from './commands/generate-value-object';
+import { generateRepository, setupRepositoryInfrastructure } from './commands/generate-repository';
+import { generateDomainService, setupDomainServiceInfrastructure } from './commands/generate-domain-service';
+import { generateOrchestrator, setupOrchestratorInfrastructure } from './commands/generate-orchestrator';
+import { setupApiVersioning } from './commands/api-versioning';
+import { setupRateLimiting } from './commands/rate-limiting';
+import { setupAuditLogging } from './commands/audit-logging';
+import { setupI18n } from './commands/i18n-setup';
+import { setupAggregateValidator } from './commands/aggregate-validator';
+import { setupApiContracts } from './commands/api-contracts';
 
 const program = new Command();
 
@@ -760,6 +770,229 @@ program
     try {
       await setupTestInfrastructure(options.path || process.cwd(), {
         orm: options.orm,
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Value object generator
+program
+  .command('value-object <name>')
+  .description('Generate a value object with validation')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('-m, --module <module>', 'Module name')
+  .option('-t, --type <type>', 'Value object type (simple, composite, primitive)', 'simple')
+  .action(async (name, options) => {
+    try {
+      await generateValueObject(name, options.path || process.cwd(), {
+        module: options.module,
+        type: options.type,
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Value objects infrastructure
+program
+  .command('value-objects-infra')
+  .description('Set up value objects infrastructure with base classes')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .action(async (options) => {
+    try {
+      await setupValueObjects(options.path || process.cwd());
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Repository generator
+program
+  .command('repository <entityName>')
+  .description('Generate repository with specification pattern')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('-m, --module <module>', 'Module name')
+  .option('-o, --orm <orm>', 'ORM type (typeorm, prisma)', 'typeorm')
+  .action(async (entityName, options) => {
+    try {
+      await generateRepository(entityName, options.path || process.cwd(), {
+        module: options.module,
+        orm: options.orm,
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Repository infrastructure
+program
+  .command('repository-infra')
+  .description('Set up repository infrastructure with specification pattern')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .action(async (options) => {
+    try {
+      await setupRepositoryInfrastructure(options.path || process.cwd());
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Domain service generator
+program
+  .command('domain-service <name>')
+  .description('Generate a domain service for cross-aggregate operations')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('-m, --module <module>', 'Module name')
+  .option('-t, --type <type>', 'Service type (simple, workflow, policy)', 'simple')
+  .action(async (name, options) => {
+    try {
+      await generateDomainService(name, options.path || process.cwd(), {
+        module: options.module,
+        type: options.type,
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Domain service infrastructure
+program
+  .command('domain-service-infra')
+  .description('Set up domain service infrastructure with saga pattern')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .action(async (options) => {
+    try {
+      await setupDomainServiceInfrastructure(options.path || process.cwd());
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Orchestrator generator
+program
+  .command('orchestrator <name>')
+  .description('Generate use case orchestrator with transaction management')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('-m, --module <module>', 'Module name')
+  .option('-t, --type <type>', 'Orchestrator type (command, query, saga)', 'command')
+  .action(async (name, options) => {
+    try {
+      await generateOrchestrator(name, options.path || process.cwd(), {
+        module: options.module,
+        type: options.type,
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// API versioning
+program
+  .command('api-versioning')
+  .description('Set up API versioning with deprecation handling')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('-s, --strategy <strategy>', 'Versioning strategy (uri, header, query)', 'uri')
+  .option('-v, --version <version>', 'Current API version', '1')
+  .action(async (options) => {
+    try {
+      await setupApiVersioning(options.path || process.cwd(), {
+        strategy: options.strategy,
+        currentVersion: options.version,
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Rate limiting
+program
+  .command('rate-limiting')
+  .description('Set up rate limiting and throttling framework')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('-s, --strategy <strategy>', 'Rate limiting strategy (token-bucket, sliding-window, fixed-window)', 'sliding-window')
+  .option('--storage <storage>', 'Storage type (memory, redis)', 'memory')
+  .action(async (options) => {
+    try {
+      await setupRateLimiting(options.path || process.cwd(), {
+        strategy: options.strategy,
+        storage: options.storage,
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Audit logging
+program
+  .command('audit-logging')
+  .description('Set up audit logging and compliance framework')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('--storage <storage>', 'Storage type (database, file, elasticsearch)', 'database')
+  .action(async (options) => {
+    try {
+      await setupAuditLogging(options.path || process.cwd(), {
+        storage: options.storage,
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// i18n setup
+program
+  .command('i18n')
+  .description('Set up internationalization infrastructure')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('-d, --default-locale <locale>', 'Default locale', 'en')
+  .option('-l, --locales <locales>', 'Supported locales (comma-separated)', 'en,fr,es')
+  .action(async (options) => {
+    try {
+      await setupI18n(options.path || process.cwd(), {
+        defaultLocale: options.defaultLocale,
+        supportedLocales: options.locales.split(','),
+      });
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Aggregate validator
+program
+  .command('aggregate-validator')
+  .description('Set up aggregate validation framework with invariants')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .action(async (options) => {
+    try {
+      await setupAggregateValidator(options.path || process.cwd());
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// API contracts
+program
+  .command('api-contracts')
+  .description('Set up API contract testing framework')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('-f, --format <format>', 'Contract format (openapi, asyncapi)', 'openapi')
+  .action(async (options) => {
+    try {
+      await setupApiContracts(options.path || process.cwd(), {
+        format: options.format,
       });
     } catch (error) {
       console.error(chalk.red('Error:'), (error as Error).message);
