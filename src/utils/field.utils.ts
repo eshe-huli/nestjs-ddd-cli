@@ -223,6 +223,7 @@ function generateValidators(
   enumValues?: string[]
 ): string[] {
   const validators: string[] = [];
+  const nameLower = name.toLowerCase();
 
   if (isOptional) {
     validators.push('@IsOptional()');
@@ -231,50 +232,95 @@ function generateValidators(
     validators.push('@IsDefined()');
   }
 
-  // Type-specific validators
+  // Type-specific validators with security-focused length limits
   switch (type.toLowerCase()) {
     case 'string':
     case 'text':
       validators.push('@IsString()');
-      if (name.toLowerCase().includes('email')) {
+
+      // Field-specific validation with length limits
+      if (nameLower.includes('email')) {
         validators.push('@IsEmail()');
-      }
-      if (name.toLowerCase().includes('url') || name.toLowerCase().includes('link')) {
+        validators.push('@MaxLength(254)'); // RFC 5321
+      } else if (nameLower.includes('url') || nameLower.includes('link')) {
         validators.push('@IsUrl()');
+        validators.push('@MaxLength(2048)'); // Common browser limit
+      } else if (nameLower.includes('phone') || nameLower.includes('mobile')) {
+        validators.push("@Matches(/^[+]?[0-9\\\\s\\\\-().]+$/, { message: 'Invalid phone format' })");
+        validators.push('@MaxLength(20)'); // E.164 max
+      } else if (nameLower.includes('name') && !nameLower.includes('username')) {
+        validators.push('@MaxLength(100)');
+        validators.push('@MinLength(1)');
+      } else if (nameLower.includes('username') || nameLower.includes('login')) {
+        validators.push("@Matches(/^[a-zA-Z0-9_-]+$/, { message: 'Username can only contain letters, numbers, underscores, and hyphens' })");
+        validators.push('@MaxLength(50)');
+        validators.push('@MinLength(3)');
+      } else if (nameLower.includes('password')) {
+        validators.push('@MinLength(8)');
+        validators.push('@MaxLength(128)');
+      } else if (nameLower.includes('description') || nameLower.includes('content') || type.toLowerCase() === 'text') {
+        validators.push('@MaxLength(10000)'); // Long text fields
+      } else if (nameLower.includes('title') || nameLower.includes('subject')) {
+        validators.push('@MaxLength(255)');
+      } else if (nameLower.includes('code') || nameLower.includes('slug')) {
+        validators.push("@Matches(/^[a-zA-Z0-9_-]+$/, { message: 'Invalid format - use only letters, numbers, underscores, and hyphens' })");
+        validators.push('@MaxLength(100)');
+      } else if (nameLower.includes('ip') || nameLower.includes('address')) {
+        validators.push('@MaxLength(45)'); // IPv6 max
+      } else {
+        // Default string length limit to prevent DoS
+        validators.push('@MaxLength(1000)');
       }
       break;
+
     case 'number':
     case 'int':
     case 'integer':
       validators.push('@IsNumber()');
       validators.push('@IsInt()');
+      // Add safe integer bounds
+      validators.push('@Min(-2147483648)');
+      validators.push('@Max(2147483647)');
       break;
+
     case 'float':
     case 'decimal':
       validators.push('@IsNumber()');
+      // Prevent extremely large numbers
+      validators.push('@Min(-1e15)');
+      validators.push('@Max(1e15)');
       break;
+
     case 'boolean':
     case 'bool':
       validators.push('@IsBoolean()');
       break;
+
     case 'date':
     case 'datetime':
     case 'timestamp':
       validators.push('@IsDate()');
       validators.push('@Type(() => Date)');
       break;
+
     case 'uuid':
       validators.push('@IsUUID()');
       break;
+
     case 'enum':
       if (enumValues) {
         validators.push(`@IsIn([${enumValues.map(v => `'${v}'`).join(', ')}])`);
       }
       break;
+
+    case 'json':
+      validators.push('@IsObject()');
+      break;
   }
 
   if (isArray) {
     validators.push('@IsArray()');
+    validators.push('@ArrayMaxSize(100)'); // Limit array size by default
   }
 
   return validators;

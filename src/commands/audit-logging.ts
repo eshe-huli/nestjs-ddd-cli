@@ -333,26 +333,108 @@ export class AuditService {
   }
 
   /**
-   * Sanitize sensitive data
+   * Sanitize sensitive data - removes/masks PII and secrets
+   * OWASP A09:2021 - Security Logging and Monitoring Failures
    */
-  private sanitize(data: any): any {
-    if (!data) return data;
+  private sanitize(data: any, depth = 0): any {
+    // Prevent infinite recursion
+    if (depth > 10 || !data) return data;
 
-    const sanitized = { ...data };
-    const sensitiveFields = this.options.sensitiveFields || [
-      'password',
-      'token',
-      'secret',
-      'apiKey',
-      'creditCard',
-      'ssn',
-    ];
-
-    for (const field of sensitiveFields) {
-      if (sanitized[field]) {
-        sanitized[field] = '[REDACTED]';
-      }
+    // Handle strings with patterns
+    if (typeof data === 'string') {
+      return this.sanitizeString(data);
     }
+
+    // Handle arrays
+    if (Array.isArray(data)) {
+      return data.map(item => this.sanitize(item, depth + 1));
+    }
+
+    // Handle objects
+    if (typeof data === 'object' && data !== null) {
+      const sanitized: Record<string, any> = {};
+
+      // Default sensitive field names (case-insensitive matching)
+      const sensitiveFieldPatterns = this.options.sensitiveFields || [
+        /password/i,
+        /token/i,
+        /secret/i,
+        /api[_-]?key/i,
+        /auth/i,
+        /credential/i,
+        /credit[_-]?card/i,
+        /card[_-]?number/i,
+        /cvv/i,
+        /cvc/i,
+        /ssn/i,
+        /social[_-]?security/i,
+        /tax[_-]?id/i,
+        /passport/i,
+        /license/i,
+        /pin/i,
+        /private[_-]?key/i,
+        /access[_-]?token/i,
+        /refresh[_-]?token/i,
+        /bearer/i,
+        /authorization/i,
+        /cookie/i,
+        /session/i,
+      ];
+
+      for (const [key, value] of Object.entries(data)) {
+        // Check if field name matches sensitive patterns
+        const isSensitive = sensitiveFieldPatterns.some(pattern =>
+          typeof pattern === 'string'
+            ? key.toLowerCase().includes(pattern.toLowerCase())
+            : pattern.test(key)
+        );
+
+        if (isSensitive && value) {
+          sanitized[key] = '[REDACTED]';
+        } else {
+          sanitized[key] = this.sanitize(value, depth + 1);
+        }
+      }
+
+      return sanitized;
+    }
+
+    return data;
+  }
+
+  /**
+   * Sanitize string values that may contain sensitive patterns
+   */
+  private sanitizeString(value: string): string {
+    if (!value || typeof value !== 'string') return value;
+
+    let sanitized = value;
+
+    // Mask credit card numbers (13-19 digits)
+    sanitized = sanitized.replace(/\\b(\\d{4})[\\s-]?(\\d{4,6})[\\s-]?(\\d{4,5})[\\s-]?(\\d{4})\\b/g, '$1****$4');
+
+    // Mask email addresses
+    sanitized = sanitized.replace(/([a-zA-Z0-9._%+-]+)@([a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})/g, (match, user, domain) => {
+      const maskedUser = user.substring(0, 2) + '***';
+      return \`\${maskedUser}@\${domain}\`;
+    });
+
+    // Mask phone numbers (various formats)
+    sanitized = sanitized.replace(/\\b(\\+?\\d{1,3}[-.\\s]?)?(\\(?\\d{3}\\)?[-.\\s]?)(\\d{3})[-.\\s]?(\\d{4})\\b/g, '$1$2***-$4');
+
+    // Mask SSN-like patterns
+    sanitized = sanitized.replace(/\\b(\\d{3})[-.]?(\\d{2})[-.]?(\\d{4})\\b/g, '***-**-$3');
+
+    // Mask bearer tokens
+    sanitized = sanitized.replace(/Bearer\\s+[a-zA-Z0-9._-]+/gi, 'Bearer [REDACTED]');
+
+    // Mask API keys (common formats)
+    sanitized = sanitized.replace(/([a-z]{2,}_)?[a-zA-Z0-9]{20,}/g, (match) => {
+      if (match.length > 10) {
+        return match.substring(0, 4) + '****' + match.substring(match.length - 4);
+      }
+      return match;
+    });
 
     return sanitized;
   }
