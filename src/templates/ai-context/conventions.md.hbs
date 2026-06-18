@@ -42,6 +42,13 @@ import { CreateUserDto } from "@modules/users/application/dto/requests/create-us
 import { UserEntity } from "../../../domain/entities/user.entity";
 ```
 
+## Reusable Platform Patterns
+
+- Run `ddd recipe service-foundation --install-deps` before hand-building common service infrastructure.
+- If a pattern is needed by two services, promote it into a CLI recipe, template, or `.dddrc.json` option.
+- Prefer configuration and adapters over copied implementation for external services, auth, webhooks, environment validation, health, rate limits, and API contract checks.
+- Keep one canonical value object or DTO for each business concept. Do not accept duplicate shapes such as two phone-number, PIN, wallet-balance, or country-code models unless they represent explicitly different contexts.
+
 ## DTO Conventions
 
 - Request DTOs use snake_case properties (API layer)

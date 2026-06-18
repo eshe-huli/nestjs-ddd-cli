@@ -34,6 +34,9 @@ src/
 Generate new features using the DDD CLI:
 
 ```bash
+# Apply the standard reusable baseline for platform services
+ddd recipe service-foundation --install-deps
+
 # Generate complete CRUD scaffolding with fields
 ddd scaffold User -m users --fields "name:string email:string:unique age:number:optional"
 
@@ -63,6 +66,18 @@ ddd generate query [name] -m [module]
 3. **CQRS pattern**: Commands for writes, Queries for reads
 4. **Repository pattern**: Abstract data access behind interfaces
 5. **Mapper pattern**: Convert between domain and infrastructure entities
+6. **Recipe first**: Repeated platform behavior belongs in a `ddd recipe` or `.dddrc.json` option before copying custom implementation into another service
+7. **Canonical contracts**: Shared data shapes, value objects, environment keys, and integration adapters must have one canonical source and one generated/reused implementation path
+
+## Reusable Platform Baseline
+
+For new platform services, start with:
+
+```bash
+ddd recipe service-foundation --install-deps
+```
+
+This applies the reusable baseline for environment validation, health endpoints, API versioning, rate limiting, and filtering. If the same setup is needed in a second service, extend the CLI recipe instead of re-implementing it locally.
 
 ## Common Patterns
 

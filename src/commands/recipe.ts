@@ -79,6 +79,22 @@ const AVAILABLE_RECIPES = {
     dependencies: [],
     devDependencies: [],
   },
+  'service-foundation': {
+    name: 'Service Foundation',
+    description:
+      'Standard platform service baseline: env validation, health, versioning, rate limiting, and filtering',
+    dependencies: [
+      '@nestjs/config',
+      'joi',
+      '@nestjs/terminus',
+      'pino',
+      'pino-pretty',
+      'nestjs-pino',
+      '@nestjs/throttler',
+      'ioredis',
+    ],
+    devDependencies: [],
+  },
   'rate-limiting': {
     name: 'Rate Limiting',
     description: 'Throttling with decorators, Redis-based rate limiting, and IP tracking',
@@ -212,6 +228,9 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
     case 'filtering':
       await applyFilteringRecipe(basePath);
       break;
+    case 'service-foundation':
+      await applyServiceFoundationRecipe(basePath);
+      break;
     case 'rate-limiting':
       await applyRateLimitingRecipe(basePath);
       break;
@@ -261,6 +280,16 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
       console.log(chalk.cyan(`  npm install -D ${recipe.devDependencies.join(' ')}`));
     }
   }
+}
+
+async function applyServiceFoundationRecipe(basePath: string) {
+  await applyJoiEnvRecipe(basePath);
+  await applyHealthRecipe(basePath);
+  await applyApiVersioningRecipe(basePath);
+  await applyRateLimitingRecipe(basePath);
+  await applyFilteringRecipe(basePath);
+
+  console.log(chalk.green('  ✓ Service foundation composed from canonical recipes'));
 }
 
 async function applyAuthJwtRecipe(basePath: string) {

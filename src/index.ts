@@ -269,7 +269,7 @@ program
 program
   .command('recipe [recipeName]')
   .description(
-    'Apply a common pattern recipe (auth-jwt, pagination, joi-env, soft-delete, audit-log, caching)',
+    'Apply a common pattern recipe (service-foundation, auth-jwt, pagination, joi-env, soft-delete, audit-log, caching)',
   )
   .option('-p, --path <path>', 'Path to the project', process.cwd())
   .option('--install-deps', 'Install required dependencies', false)
