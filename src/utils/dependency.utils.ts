@@ -13,7 +13,7 @@ export async function isPackageInstalledGlobally(packageName: string): Promise<b
   try {
     await execAsync(`npm list -g ${packageName} --depth=0`);
     return true;
-  } catch (error) {
+  } catch {
     return false;
   }
 }
@@ -33,14 +33,64 @@ export async function getLatestVersion(packageName: string): Promise<string> {
 /**
  * Check if the current version is the latest version
  */
-export async function isLatestVersion(packageName: string, currentVersion: string): Promise<boolean> {
+export async function isLatestVersion(
+  packageName: string,
+  currentVersion: string,
+): Promise<boolean> {
   try {
     const latestVersion = await getLatestVersion(packageName);
-    return currentVersion === latestVersion;
+    return !isNewerVersion(latestVersion, currentVersion);
   } catch (error) {
     console.warn(chalk.yellow(`Warning: Could not check for updates: ${(error as Error).message}`));
     return true; // Assume it's the latest version if we can't check
   }
+}
+
+export function isNewerVersion(candidateVersion: string, currentVersion: string): boolean {
+  return compareVersions(candidateVersion, currentVersion) > 0;
+}
+
+export function compareVersions(leftVersion: string, rightVersion: string): number {
+  const left = parseVersion(leftVersion);
+  const right = parseVersion(rightVersion);
+
+  for (const index of [0, 1, 2] as const) {
+    const difference = left.parts[index] - right.parts[index];
+    if (difference !== 0) {
+      return difference > 0 ? 1 : -1;
+    }
+  }
+
+  if (left.preRelease === right.preRelease) {
+    return 0;
+  }
+  if (!left.preRelease) {
+    return 1;
+  }
+  if (!right.preRelease) {
+    return -1;
+  }
+
+  return left.preRelease.localeCompare(right.preRelease);
+}
+
+function parseVersion(version: string): { parts: [number, number, number]; preRelease?: string } {
+  const normalized = version.trim().replace(/^v/i, '');
+  const [core = '', preRelease] = normalized.split('-', 2);
+  const rawParts = core
+    .split('.')
+    .slice(0, 3)
+    .map((part) => Number.parseInt(part, 10));
+
+  return {
+    parts: [versionPart(rawParts, 0), versionPart(rawParts, 1), versionPart(rawParts, 2)],
+    preRelease,
+  };
+}
+
+function versionPart(parts: number[], index: number): number {
+  const value = parts[index];
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 /**
@@ -88,18 +138,18 @@ export async function createNestJSProject(projectName: string, options: any = {}
     }
 
     console.log(chalk.blue(`Creating new NestJS project: ${projectName}...`));
-    
+
     // Build the command with options
     let command = `nest new ${projectName} --skip-git --package-manager npm`;
-    
+
     if (options.directory) {
       command += ` --directory ${options.directory}`;
     }
-    
+
     if (options.skipInstall) {
       command += ' --skip-install';
     }
-    
+
     await execAsync(command);
     console.log(chalk.green(`✅ NestJS project ${projectName} created successfully!`));
   } catch (error) {
@@ -110,10 +160,16 @@ export async function createNestJSProject(projectName: string, options: any = {}
 /**
  * Install dependencies in a project
  */
-export async function installDependencies(projectPath: string, dependencies: string[], dev = false): Promise<void> {
+export async function installDependencies(
+  projectPath: string,
+  dependencies: string[],
+  dev = false,
+): Promise<void> {
   try {
     const flag = dev ? '--save-dev' : '--save';
-    console.log(chalk.blue(`Installing ${dev ? 'dev ' : ''}dependencies: ${dependencies.join(', ')}...`));
+    console.log(
+      chalk.blue(`Installing ${dev ? 'dev ' : ''}dependencies: ${dependencies.join(', ')}...`),
+    );
     await execAsync(`npm install ${flag} ${dependencies.join(' ')}`, { cwd: projectPath });
     console.log(chalk.green('✅ Dependencies installed successfully!'));
   } catch (error) {
@@ -124,7 +180,9 @@ export async function installDependencies(projectPath: string, dependencies: str
 /**
  * Check for outdated dependencies in a project
  */
-export async function checkOutdatedDependencies(projectPath: string): Promise<Record<string, { current: string; latest: string; type: string }>> {
+export async function checkOutdatedDependencies(
+  projectPath: string,
+): Promise<Record<string, { current: string; latest: string; type: string }>> {
   try {
     const { stdout } = await execAsync('npm outdated --json', { cwd: projectPath });
     return JSON.parse(stdout || '{}');
@@ -144,7 +202,10 @@ export async function checkOutdatedDependencies(projectPath: string): Promise<Re
 /**
  * Update dependencies in a project
  */
-export async function updateDependencies(projectPath: string, dependencies: string[]): Promise<void> {
+export async function updateDependencies(
+  projectPath: string,
+  dependencies: string[],
+): Promise<void> {
   try {
     console.log(chalk.blue(`Updating dependencies: ${dependencies.join(', ')}...`));
     await execAsync(`npm update ${dependencies.join(' ')}`, { cwd: projectPath });
@@ -170,14 +231,20 @@ export function getCurrentPackageVersion(): string {
 /**
  * Check if the CLI needs to be updated
  */
-export async function checkForCliUpdate(): Promise<{ needsUpdate: boolean; latestVersion: string; currentVersion: string }> {
+export async function checkForCliUpdate(): Promise<{
+  needsUpdate: boolean;
+  latestVersion: string;
+  currentVersion: string;
+}> {
   const currentVersion = getCurrentPackageVersion();
   try {
     const latestVersion = await getLatestVersion('nestjs-ddd-cli');
-    const needsUpdate = currentVersion !== latestVersion;
+    const needsUpdate = isNewerVersion(latestVersion, currentVersion);
     return { needsUpdate, latestVersion, currentVersion };
   } catch (error) {
-    console.warn(chalk.yellow(`Warning: Could not check for CLI updates: ${(error as Error).message}`));
+    console.warn(
+      chalk.yellow(`Warning: Could not check for CLI updates: ${(error as Error).message}`),
+    );
     return { needsUpdate: false, latestVersion: currentVersion, currentVersion };
   }
 }

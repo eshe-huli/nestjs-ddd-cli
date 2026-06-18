@@ -25,7 +25,13 @@ import { exportOpenApi } from './commands/openapi-export';
 import { createMigration, generateMigrationFromEntity } from './commands/migration';
 import { generateGraphQLTypes } from './commands/graphql-types';
 import { analyzeDependencies } from './commands/dependency-graph';
-import { listPlugins, installPluginCommand, uninstallPluginCommand, runPluginCommand, scaffoldPlugin } from './commands/recipe-plugin';
+import {
+  listPlugins,
+  installPluginCommand,
+  uninstallPluginCommand,
+  runPluginCommand,
+  scaffoldPlugin,
+} from './commands/recipe-plugin';
 import { debugTemplate } from './commands/template-debug';
 import { perf } from './utils/performance.utils';
 import { analyzeCode } from './commands/code-analyzer';
@@ -43,8 +49,11 @@ import { setupEventSourcingFramework } from './commands/event-sourcing-full';
 import { setupTestInfrastructure } from './commands/test-factory-full';
 import { generateValueObject, setupValueObjects } from './commands/generate-value-object';
 import { generateRepository, setupRepositoryInfrastructure } from './commands/generate-repository';
-import { generateDomainService, setupDomainServiceInfrastructure } from './commands/generate-domain-service';
-import { generateOrchestrator, setupOrchestratorInfrastructure } from './commands/generate-orchestrator';
+import {
+  generateDomainService,
+  setupDomainServiceInfrastructure,
+} from './commands/generate-domain-service';
+import { generateOrchestrator } from './commands/generate-orchestrator';
 import { setupApiVersioning } from './commands/api-versioning';
 import { setupRateLimiting } from './commands/rate-limiting';
 import { setupAuditLogging } from './commands/audit-logging';
@@ -76,12 +85,12 @@ program
     if (needsUpdate) {
       console.log(
         chalk.yellow(
-          `You are using nestjs-ddd-cli version ${currentVersion}, but version ${latestVersion} is available.`
-        )
+          `You are using nestjs-ddd-cli version ${currentVersion}, but version ${latestVersion} is available.`,
+        ),
       );
       console.log(chalk.yellow(`Run 'ddd update' to update to the latest version.`));
     }
-  } catch (error) {
+  } catch {
     // Silently ignore update check errors
   }
 })();
@@ -89,7 +98,9 @@ program
 program
   .command('generate <type> <name>')
   .alias('g')
-  .description('Generate boilerplate code (types: module, entity, usecase, service, event, query, all)')
+  .description(
+    'Generate boilerplate code (types: module, entity, usecase, service, event, query, all)',
+  )
   .option('-m, --module <module>', 'Module name')
   .option('-p, --path <path>', 'Base path for generation', process.cwd())
   .option('-f, --fields <fields>', 'Entity fields (format: "name:type:modifier name2:type2")')
@@ -127,7 +138,9 @@ program
           break;
         default:
           console.error(chalk.red(`Unknown type: ${type}`));
-          console.log(chalk.yellow('Available types: module, entity, usecase, service, event, query, all'));
+          console.log(
+            chalk.yellow('Available types: module, entity, usecase, service, event, query, all'),
+          );
           process.exit(1);
       }
     } catch (error) {
@@ -142,7 +155,10 @@ program
   .description('Generate complete CRUD scaffolding for an entity')
   .option('-m, --module <module>', 'Module name (will be created if not exists)')
   .option('-p, --path <path>', 'Base path for generation', process.cwd())
-  .option('-f, --fields <fields>', 'Entity fields (format: "name:string email:string:unique age:number:optional")')
+  .option(
+    '-f, --fields <fields>',
+    'Entity fields (format: "name:string email:string:unique age:number:optional")',
+  )
   .option('-o, --orm <orm>', 'ORM to use (typeorm or prisma)', 'typeorm')
   .option('--with-tests', 'Generate test files alongside the code', false)
   .option('--with-graphql', 'Generate GraphQL resolvers and types', false)
@@ -252,7 +268,9 @@ program
 // Apply a recipe (common patterns)
 program
   .command('recipe [recipeName]')
-  .description('Apply a common pattern recipe (auth-jwt, pagination, soft-delete, audit-log, caching)')
+  .description(
+    'Apply a common pattern recipe (auth-jwt, pagination, joi-env, soft-delete, audit-log, caching)',
+  )
   .option('-p, --path <path>', 'Path to the project', process.cwd())
   .option('--install-deps', 'Install required dependencies', false)
   .action(async (recipeName, options) => {
@@ -311,7 +329,10 @@ program
   .action(async (options) => {
     try {
       if (options.enhanced) {
-        await runEnhancedDoctor(options.path || process.cwd(), { fix: options.fix, verbose: options.verbose });
+        await runEnhancedDoctor(options.path || process.cwd(), {
+          fix: options.fix,
+          verbose: options.verbose,
+        });
       } else {
         await runDoctor(options);
       }
@@ -690,7 +711,9 @@ program
 // AI-assisted code generation
 program
   .command('ai <action>')
-  .description('AI-assisted code generation (actions: usecase, service, test, refactor, explain, config)')
+  .description(
+    'AI-assisted code generation (actions: usecase, service, test, refactor, explain, config)',
+  )
   .option('-p, --path <path>', 'Path to the project', process.cwd())
   .option('-k, --api-key <key>', 'API key for AI provider')
   .option('-m, --model <model>', 'Model to use')
@@ -929,7 +952,11 @@ program
   .command('rate-limiting')
   .description('Set up rate limiting and throttling framework')
   .option('-p, --path <path>', 'Path to the project', process.cwd())
-  .option('-s, --strategy <strategy>', 'Rate limiting strategy (token-bucket, sliding-window, fixed-window)', 'sliding-window')
+  .option(
+    '-s, --strategy <strategy>',
+    'Rate limiting strategy (token-bucket, sliding-window, fixed-window)',
+    'sliding-window',
+  )
   .option('--storage <storage>', 'Storage type (memory, redis)', 'memory')
   .action(async (options) => {
     try {
@@ -1059,7 +1086,11 @@ program
   .command('feature-flags')
   .description('Set up feature flag management with A/B testing')
   .option('-p, --path <path>', 'Path to the project', process.cwd())
-  .option('--provider <provider>', 'Flag provider (memory, database, redis, launchdarkly)', 'database')
+  .option(
+    '--provider <provider>',
+    'Flag provider (memory, database, redis, launchdarkly)',
+    'database',
+  )
   .action(async (options) => {
     try {
       await setupFeatureFlags(options.path || process.cwd(), {
@@ -1159,7 +1190,11 @@ program
   .description('Set up advanced health probes for Kubernetes')
   .option('-p, --path <path>', 'Path to the project', process.cwd())
   .option('-m, --module <module>', 'Module name', 'shared')
-  .option('-d, --dependencies <deps>', 'Dependencies to check (comma-separated)', 'database,redis,external-api')
+  .option(
+    '-d, --dependencies <deps>',
+    'Dependencies to check (comma-separated)',
+    'database,redis,external-api',
+  )
   .option('--k8s', 'Include Kubernetes configuration', true)
   .action(async (options) => {
     try {

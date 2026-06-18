@@ -1,6 +1,6 @@
 import * as path from 'path';
 import chalk from 'chalk';
-import { generateFromTemplate, ensureDir, writeFile, prepareTemplateData } from '../utils/file.utils';
+import { ensureDir, writeFile } from '../utils/file.utils';
 import { installDependencies } from '../utils/dependency.utils';
 
 // Import recipe implementations from separate files
@@ -11,6 +11,7 @@ import { applyOAuth2Recipe } from './recipes/oauth2.recipe';
 import { applyMessageQueueRecipe } from './recipes/message-queue.recipe';
 import { applyElasticsearchRecipe } from './recipes/elasticsearch.recipe';
 import { applyEventSourcingRecipe } from './recipes/event-sourcing.recipe';
+import { applyJoiEnvRecipe } from './recipes/joi-env.recipe';
 
 export interface RecipeOptions {
   path?: string;
@@ -24,7 +25,7 @@ const AVAILABLE_RECIPES = {
     dependencies: ['@nestjs/jwt', '@nestjs/passport', 'passport', 'passport-jwt', 'bcrypt'],
     devDependencies: ['@types/passport-jwt', '@types/bcrypt'],
   },
-  'pagination': {
+  pagination: {
     name: 'Pagination Utilities',
     description: 'Shared pagination DTOs and utilities',
     dependencies: [],
@@ -42,7 +43,7 @@ const AVAILABLE_RECIPES = {
     dependencies: [],
     devDependencies: [],
   },
-  'caching': {
+  caching: {
     name: 'Redis Caching',
     description: 'Redis-based caching with decorators',
     dependencies: ['@nestjs/cache-manager', 'cache-manager', 'cache-manager-redis-store', 'redis'],
@@ -51,22 +52,28 @@ const AVAILABLE_RECIPES = {
   'file-upload': {
     name: 'File Upload',
     description: 'File upload service with local/S3 storage support',
-    dependencies: ['@nestjs/platform-express', 'multer', '@aws-sdk/client-s3', '@aws-sdk/s3-request-presigner', 'uuid'],
+    dependencies: [
+      '@nestjs/platform-express',
+      'multer',
+      '@aws-sdk/client-s3',
+      '@aws-sdk/s3-request-presigner',
+      'uuid',
+    ],
     devDependencies: ['@types/multer', '@types/uuid'],
   },
-  'notifications': {
+  notifications: {
     name: 'Notifications',
     description: 'Multi-channel notification system (email, push, SMS)',
     dependencies: ['@nestjs/bull', 'bull', 'nodemailer', 'handlebars'],
     devDependencies: ['@types/nodemailer'],
   },
-  'webhooks': {
+  webhooks: {
     name: 'Webhooks',
     description: 'Webhook management with retry and signature verification',
     dependencies: ['axios', 'crypto'],
     devDependencies: [],
   },
-  'filtering': {
+  filtering: {
     name: 'Advanced Filtering',
     description: 'Query builder utilities with operators (eq, gt, lt, like, in, between)',
     dependencies: [],
@@ -78,7 +85,7 @@ const AVAILABLE_RECIPES = {
     dependencies: ['@nestjs/throttler', 'ioredis'],
     devDependencies: [],
   },
-  'health': {
+  health: {
     name: 'Health Checks & Monitoring',
     description: 'Health endpoints, structured logging, and monitoring utilities',
     dependencies: ['@nestjs/terminus', 'pino', 'pino-pretty', 'nestjs-pino'],
@@ -96,13 +103,13 @@ const AVAILABLE_RECIPES = {
     dependencies: ['@faker-js/faker'],
     devDependencies: [],
   },
-  'middleware': {
+  middleware: {
     name: 'Middleware, Guards & Interceptors',
     description: 'Common middleware, guards, and interceptors for NestJS applications',
     dependencies: [],
     devDependencies: [],
   },
-  'websocket': {
+  websocket: {
     name: 'WebSocket & Real-Time',
     description: 'Socket.IO gateway, rooms, presence tracking, and real-time events',
     dependencies: ['@nestjs/websockets', '@nestjs/platform-socket.io', 'socket.io'],
@@ -114,10 +121,15 @@ const AVAILABLE_RECIPES = {
     dependencies: [],
     devDependencies: [],
   },
-  'oauth2': {
+  oauth2: {
     name: 'OAuth2 & Social Login',
     description: 'OAuth2/OIDC with Google, GitHub, and enterprise SSO support',
-    dependencies: ['@nestjs/passport', 'passport-google-oauth20', 'passport-github2', 'openid-client'],
+    dependencies: [
+      '@nestjs/passport',
+      'passport-google-oauth20',
+      'passport-github2',
+      'openid-client',
+    ],
     devDependencies: ['@types/passport-google-oauth20', '@types/passport-github2'],
   },
   'message-queue': {
@@ -126,7 +138,7 @@ const AVAILABLE_RECIPES = {
     dependencies: ['@nestjs/microservices', 'amqplib', 'amqp-connection-manager'],
     devDependencies: ['@types/amqplib'],
   },
-  'elasticsearch': {
+  elasticsearch: {
     name: 'Elasticsearch Search',
     description: 'Full-text search with Elasticsearch, indexing, and autocomplete',
     dependencies: ['@nestjs/elasticsearch', '@elastic/elasticsearch'],
@@ -136,6 +148,12 @@ const AVAILABLE_RECIPES = {
     name: 'Event Sourcing',
     description: 'Event store, projections, snapshots, and event replay capabilities',
     dependencies: ['@nestjs/cqrs'],
+    devDependencies: [],
+  },
+  'joi-env': {
+    name: 'Joi Environment Validation',
+    description: 'Joi-backed ConfigModule validation with platform bootstrap defaults',
+    dependencies: ['@nestjs/config', 'joi'],
     devDependencies: [],
   },
 };
@@ -227,12 +245,17 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
     case 'event-sourcing':
       await applyEventSourcingRecipe(basePath);
       break;
+    case 'joi-env':
+      await applyJoiEnvRecipe(basePath);
+      break;
   }
 
   console.log(chalk.green(`\n✅ Recipe '${recipe.name}' applied successfully!`));
 
   if (recipe.dependencies.length > 0 && !options.installDeps) {
-    console.log(chalk.yellow('\n📦 Required dependencies (run with --install-deps to auto-install):'));
+    console.log(
+      chalk.yellow('\n📦 Required dependencies (run with --install-deps to auto-install):'),
+    );
     console.log(chalk.cyan(`  npm install ${recipe.dependencies.join(' ')}`));
     if (recipe.devDependencies.length > 0) {
       console.log(chalk.cyan(`  npm install -D ${recipe.devDependencies.join(' ')}`));
@@ -374,7 +397,10 @@ export const CurrentUser = createParamDecorator(
   }
 );
 `;
-  await writeFile(path.join(authPath, 'decorators/current-user.decorator.ts'), currentUserDecoratorContent);
+  await writeFile(
+    path.join(authPath, 'decorators/current-user.decorator.ts'),
+    currentUserDecoratorContent,
+  );
 
   // Index exports
   const indexContent = `// Guards
@@ -2376,7 +2402,9 @@ export * from "./utils";
   console.log(chalk.green('  ✓ Example factories (User, Post) with fluent API'));
   console.log(chalk.green('  ✓ Test data builder pattern'));
   console.log(chalk.green('  ✓ Database fixture manager with dependencies'));
-  console.log(chalk.green('  ✓ Mock utilities (Repository, QueryBuilder, Prisma, Request/Response)'));
+  console.log(
+    chalk.green('  ✓ Mock utilities (Repository, QueryBuilder, Prisma, Request/Response)'),
+  );
   console.log(chalk.green('  ✓ Test setup utilities (createTestApp, cleanup, waitFor, retry)'));
 }
 
@@ -2530,7 +2558,10 @@ export const VersionedEndpoint = (version: string, deprecated = false) =>
     ...(deprecated ? [DeprecatedVersion(\`This endpoint is deprecated in v\${version}\`)] : [])
   );
 `;
-  await writeFile(path.join(versioningPath, 'decorators/version.decorator.ts'), versionDecoratorContent);
+  await writeFile(
+    path.join(versioningPath, 'decorators/version.decorator.ts'),
+    versionDecoratorContent,
+  );
 
   // Version interceptor
   const versionInterceptorContent = `import {
@@ -2608,7 +2639,10 @@ export class VersionHeaderInterceptor implements NestInterceptor {
   }
 }
 `;
-  await writeFile(path.join(versioningPath, 'interceptors/version-header.interceptor.ts'), versionInterceptorContent);
+  await writeFile(
+    path.join(versioningPath, 'interceptors/version-header.interceptor.ts'),
+    versionInterceptorContent,
+  );
 
   // Version guard
   const versionGuardContent = `import {
@@ -3444,7 +3478,10 @@ export const RelaxedRateLimit = () => RateLimit(100, 60);
 export const RATE_LIMIT_BY_USER = "rate_limit_by_user";
 export const RateLimitByUser = () => SetMetadata(RATE_LIMIT_BY_USER, true);
 `;
-  await writeFile(path.join(rateLimitPath, 'decorators/throttle.decorator.ts'), throttleDecoratorContent);
+  await writeFile(
+    path.join(rateLimitPath, 'decorators/throttle.decorator.ts'),
+    throttleDecoratorContent,
+  );
 
   // Custom throttler guard
   const throttlerGuardContent = `import { Injectable, ExecutionContext } from "@nestjs/common";
@@ -3686,7 +3723,9 @@ export * from "./rate-limit.module";
 `;
   await writeFile(path.join(rateLimitPath, 'guards/index.ts'), guardsIndexContent);
 
-  console.log(chalk.green('  ✓ Rate limit decorators (@RateLimit, @StrictRateLimit, @RateLimitByUser)'));
+  console.log(
+    chalk.green('  ✓ Rate limit decorators (@RateLimit, @StrictRateLimit, @RateLimitByUser)'),
+  );
   console.log(chalk.green('  ✓ Custom throttler guard with IP/User tracking'));
   console.log(chalk.green('  ✓ Redis-based throttler storage'));
   console.log(chalk.green('  ✓ Rate limit module'));
