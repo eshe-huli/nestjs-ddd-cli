@@ -50,15 +50,18 @@ export function parseFields(fieldsString: string): ParsedFields {
     return { fields: [], hasEmail: false, hasDate: false, hasEnum: false, hasRelation: false };
   }
 
-  const fieldDefs = fieldsString.split(' ').filter(f => f.trim() !== '');
+  const fieldDefs = fieldsString.split(' ').filter((f) => f.trim() !== '');
   let hasEmail = false;
   let hasDate = false;
   let hasEnum = false;
   let hasRelation = false;
 
-  const fields: FieldDefinition[] = fieldDefs.map(fieldDef => {
+  const fields: FieldDefinition[] = fieldDefs.map((fieldDef) => {
     const parts = fieldDef.split(':');
-    const name = parts[0];
+    const name = parts[0]?.trim();
+    if (!name) {
+      throw new Error(`Invalid field definition: ${fieldDef}`);
+    }
     const typeWithArray = parts[1] || 'string';
     const modifiers = parts.slice(2);
 
@@ -70,8 +73,14 @@ export function parseFields(fieldsString: string): ParsedFields {
 
     // Check for relation type
     const relationTypes = ['OneToOne', 'OneToMany', 'ManyToOne', 'ManyToMany'];
-    const relationTypeModifier = modifiers.find(m => relationTypes.includes(m)) as 'OneToOne' | 'OneToMany' | 'ManyToOne' | 'ManyToMany' | undefined;
-    const isRelation = baseType === 'relation' || modifiers.includes('relation') || !!relationTypeModifier;
+    const relationTypeModifier = modifiers.find((m) => relationTypes.includes(m)) as
+      | 'OneToOne'
+      | 'OneToMany'
+      | 'ManyToOne'
+      | 'ManyToMany'
+      | undefined;
+    const isRelation =
+      baseType === 'relation' || modifiers.includes('relation') || !!relationTypeModifier;
 
     // Parse relation details
     let relationTarget: string | undefined;
@@ -82,9 +91,15 @@ export function parseFields(fieldsString: string): ParsedFields {
       if (baseType === 'relation') {
         // Format: fieldName:relation:TargetEntity:RelationType:inverseSide
         relationTarget = modifiers[0]; // First modifier is target entity
-        relationType = (modifiers.find(m => relationTypes.includes(m)) || 'ManyToOne') as any;
+        relationType = (modifiers.find((m) => relationTypes.includes(m)) || 'ManyToOne') as any;
         // Find inverse (anything that's not a relation type or target)
-        relationInverse = modifiers.find(m => !relationTypes.includes(m) && m !== relationTarget && m !== 'optional' && m !== 'unique');
+        relationInverse = modifiers.find(
+          (m) =>
+            !relationTypes.includes(m) &&
+            m !== relationTarget &&
+            m !== 'optional' &&
+            m !== 'unique',
+        );
       } else {
         // Legacy format or uuid:relation
         relationTarget = toPascalCase(name.replace(/Id$/, ''));
@@ -93,7 +108,9 @@ export function parseFields(fieldsString: string): ParsedFields {
     }
 
     // Find enum values if present
-    const enumModifier = modifiers.find(m => m.includes(',') || (baseType === 'enum' && m && !relationTypes.includes(m)));
+    const enumModifier = modifiers.find(
+      (m) => m.includes(',') || (baseType === 'enum' && m && !relationTypes.includes(m)),
+    );
     const enumValues = baseType === 'enum' && enumModifier ? enumModifier.split(',') : undefined;
 
     // Determine TypeScript type
@@ -107,7 +124,14 @@ export function parseFields(fieldsString: string): ParsedFields {
     const prismaType = mapToPrismaType(baseType, isArray);
 
     // Generate validators
-    const validators = generateValidators(name, baseType, isOptional, isUnique, isArray, enumValues);
+    const validators = generateValidators(
+      name,
+      baseType,
+      isOptional,
+      isUnique,
+      isArray,
+      enumValues,
+    );
 
     // Track special types
     if (name.toLowerCase().includes('email')) hasEmail = true;
@@ -125,7 +149,11 @@ export function parseFields(fieldsString: string): ParsedFields {
       snakeCase,
       pascalCase,
       type: baseType,
-      tsType: isRelation ? (relationType === 'OneToMany' || relationType === 'ManyToMany' ? `${relationTarget}[]` : relationTarget || 'string') : tsType,
+      tsType: isRelation
+        ? relationType === 'OneToMany' || relationType === 'ManyToMany'
+          ? `${relationTarget}[]`
+          : relationTarget || 'string'
+        : tsType,
       dbType,
       prismaType,
       isRequired: !isOptional,
@@ -162,7 +190,7 @@ function mapToTsType(type: string, enumValues?: string[]): string {
     uuid: 'string',
     json: 'Record<string, any>',
     text: 'string',
-    enum: enumValues ? enumValues.map(v => `'${v}'`).join(' | ') : 'string',
+    enum: enumValues ? enumValues.map((v) => `'${v}'`).join(' | ') : 'string',
   };
 
   return typeMap[type.toLowerCase()] || 'string';
@@ -218,9 +246,9 @@ function generateValidators(
   name: string,
   type: string,
   isOptional: boolean,
-  isUnique: boolean,
+  _isUnique: boolean,
   isArray: boolean,
-  enumValues?: string[]
+  enumValues?: string[],
 ): string[] {
   const validators: string[] = [];
   const nameLower = name.toLowerCase();
@@ -246,24 +274,34 @@ function generateValidators(
         validators.push('@IsUrl()');
         validators.push('@MaxLength(2048)'); // Common browser limit
       } else if (nameLower.includes('phone') || nameLower.includes('mobile')) {
-        validators.push("@Matches(/^[+]?[0-9\\\\s\\\\-().]+$/, { message: 'Invalid phone format' })");
+        validators.push(
+          "@Matches(/^[+]?[0-9\\\\s\\\\-().]+$/, { message: 'Invalid phone format' })",
+        );
         validators.push('@MaxLength(20)'); // E.164 max
       } else if (nameLower.includes('name') && !nameLower.includes('username')) {
         validators.push('@MaxLength(100)');
         validators.push('@MinLength(1)');
       } else if (nameLower.includes('username') || nameLower.includes('login')) {
-        validators.push("@Matches(/^[a-zA-Z0-9_-]+$/, { message: 'Username can only contain letters, numbers, underscores, and hyphens' })");
+        validators.push(
+          "@Matches(/^[a-zA-Z0-9_-]+$/, { message: 'Username can only contain letters, numbers, underscores, and hyphens' })",
+        );
         validators.push('@MaxLength(50)');
         validators.push('@MinLength(3)');
       } else if (nameLower.includes('password')) {
         validators.push('@MinLength(8)');
         validators.push('@MaxLength(128)');
-      } else if (nameLower.includes('description') || nameLower.includes('content') || type.toLowerCase() === 'text') {
+      } else if (
+        nameLower.includes('description') ||
+        nameLower.includes('content') ||
+        type.toLowerCase() === 'text'
+      ) {
         validators.push('@MaxLength(10000)'); // Long text fields
       } else if (nameLower.includes('title') || nameLower.includes('subject')) {
         validators.push('@MaxLength(255)');
       } else if (nameLower.includes('code') || nameLower.includes('slug')) {
-        validators.push("@Matches(/^[a-zA-Z0-9_-]+$/, { message: 'Invalid format - use only letters, numbers, underscores, and hyphens' })");
+        validators.push(
+          "@Matches(/^[a-zA-Z0-9_-]+$/, { message: 'Invalid format - use only letters, numbers, underscores, and hyphens' })",
+        );
         validators.push('@MaxLength(100)');
       } else if (nameLower.includes('ip') || nameLower.includes('address')) {
         validators.push('@MaxLength(45)'); // IPv6 max
@@ -309,7 +347,7 @@ function generateValidators(
 
     case 'enum':
       if (enumValues) {
-        validators.push(`@IsIn([${enumValues.map(v => `'${v}'`).join(', ')}])`);
+        validators.push(`@IsIn([${enumValues.map((v) => `'${v}'`).join(', ')}])`);
       }
       break;
 
@@ -347,7 +385,7 @@ function generateRelationDecorator(f: FieldDefinition): string {
   }
 }
 
-function generateDescription(name: string, type: string): string {
+function generateDescription(name: string, _type: string): string {
   const readableName = name
     .replace(/([A-Z])/g, ' $1')
     .replace(/[_-]/g, ' ')
@@ -400,25 +438,25 @@ export function generateFieldsTemplateData(fields: FieldDefinition[]): {
   responseProperties: string;
 } {
   const entityProperties = fields
-    .map(f => `  public readonly ${f.camelCase}${f.isOptional ? '?' : ''}: ${f.tsType};`)
+    .map((f) => `  public readonly ${f.camelCase}${f.isOptional ? '?' : ''}: ${f.tsType};`)
     .join('\n');
 
   const entityPropsInterface = fields
-    .map(f => `  ${f.camelCase}${f.isOptional ? '?' : ''}: ${f.tsType};`)
+    .map((f) => `  ${f.camelCase}${f.isOptional ? '?' : ''}: ${f.tsType};`)
     .join('\n');
 
   const dtoProperties = fields
-    .map(f => {
+    .map((f) => {
       const decorators = [
         `  @ApiProperty({ description: "${f.description}"${f.example ? `, example: "${f.example}"` : ''} })`,
-        ...f.validators.map(v => `  ${v}`),
+        ...f.validators.map((v) => `  ${v}`),
       ].join('\n');
       return `${decorators}\n  ${f.snakeCase}${f.isOptional ? '?' : ''}: ${f.tsType};`;
     })
     .join('\n\n');
 
   const ormColumns = fields
-    .map(f => {
+    .map((f) => {
       if (f.isRelation && f.relationType && f.relationTarget) {
         // Generate relation decorator
         const relationDecorator = generateRelationDecorator(f);
@@ -436,7 +474,7 @@ export function generateFieldsTemplateData(fields: FieldDefinition[]): {
     .join('\n\n');
 
   const migrationColumns = fields
-    .map(f => {
+    .map((f) => {
       return `          {
             name: "${f.snakeCase}",
             type: "${f.dbType}",
@@ -447,7 +485,10 @@ export function generateFieldsTemplateData(fields: FieldDefinition[]): {
     .join('\n');
 
   const responseProperties = fields
-    .map(f => `  @ApiProperty({ description: "${f.description}" })\n  @Expose()\n  ${f.camelCase}: ${f.tsType};`)
+    .map(
+      (f) =>
+        `  @ApiProperty({ description: "${f.description}" })\n  @Expose()\n  ${f.camelCase}: ${f.tsType};`,
+    )
     .join('\n\n');
 
   return {

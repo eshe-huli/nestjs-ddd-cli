@@ -1,5 +1,11 @@
 import { describe, it, expect } from '@jest/globals';
-import { toPascalCase, toCamelCase, toKebabCase, toSnakeCase } from '../../src/utils/naming.utils';
+import {
+  toPascalCase,
+  toCamelCase,
+  toKebabCase,
+  toSnakeCase,
+  toPlural,
+} from '../../src/utils/naming.utils';
 
 describe('Naming Utils', () => {
   describe('toPascalCase', () => {
@@ -67,6 +73,13 @@ describe('Naming Utils', () => {
       expect(toSnakeCase('kycVerification')).toBe('kyc_verification');
       expect(toSnakeCase('sanctionsScreening')).toBe('sanctions_screening');
       expect(toSnakeCase('complianceEntity')).toBe('compliance_entity');
+    });
+  });
+
+  describe('toPlural', () => {
+    it('pluralizes PascalCase names ending in y', () => {
+      expect(toPlural('CapitalParty')).toBe('CapitalParties');
+      expect(toPlural('Party')).toBe('Parties');
     });
   });
 });

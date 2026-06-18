@@ -1,6 +1,12 @@
 import * as path from 'path';
 import chalk from 'chalk';
-import { getModulePath, prepareTemplateData, generateFromTemplate, fileExists, writeFile } from '../utils/file.utils';
+import {
+  getModulePath,
+  prepareTemplateData,
+  generateFromTemplate,
+  fileExists,
+  updateBarrelFile,
+} from '../utils/file.utils';
 import { toKebabCase, toPascalCase } from '../utils/naming.utils';
 
 export async function generateEntity(entityName: string, options: any) {
@@ -14,19 +20,20 @@ export async function generateEntity(entityName: string, options: any) {
   const modulePath = getModulePath(basePath, options.module);
   const fieldsString = options.fields || '';
   const templateData = prepareTemplateData(entityName, options.module, fieldsString);
+  const dryRun = !!options.dryRun;
 
   // Generate domain entity
   const entityTemplatePath = path.join(__dirname, '../templates/entity/entity.hbs');
   const entityOutputPath = path.join(
     modulePath,
     'application/domain/entities',
-    `${toKebabCase(entityName)}.entity.ts`
+    `${toKebabCase(entityName)}.entity.ts`,
   );
 
   if (await fileExists(entityOutputPath)) {
     console.log(chalk.yellow(`    Entity ${entityName} already exists. Skipping...`));
   } else {
-    await generateFromTemplate(entityTemplatePath, entityOutputPath, templateData);
+    await generateFromTemplate(entityTemplatePath, entityOutputPath, templateData, dryRun);
     console.log(chalk.green(`    ✓ Domain entity`));
   }
 
@@ -39,11 +46,11 @@ export async function generateEntity(entityName: string, options: any) {
     const ormOutputPath = path.join(
       modulePath,
       'infrastructure/orm-entities',
-      `${toKebabCase(entityName)}.orm-entity.ts`
+      `${toKebabCase(entityName)}.orm-entity.ts`,
     );
 
     if (!(await fileExists(ormOutputPath))) {
-      await generateFromTemplate(ormTemplatePath, ormOutputPath, templateData);
+      await generateFromTemplate(ormTemplatePath, ormOutputPath, templateData, dryRun);
       console.log(chalk.green(`    ✓ ORM entity (TypeORM)`));
     }
   }
@@ -56,11 +63,11 @@ export async function generateEntity(entityName: string, options: any) {
     const mapperOutputPath = path.join(
       modulePath,
       'infrastructure/mappers',
-      `${toKebabCase(entityName)}.mapper.ts`
+      `${toKebabCase(entityName)}.mapper.ts`,
     );
 
     if (!(await fileExists(mapperOutputPath))) {
-      await generateFromTemplate(mapperTemplatePath, mapperOutputPath, templateData);
+      await generateFromTemplate(mapperTemplatePath, mapperOutputPath, templateData, dryRun);
       console.log(chalk.green(`    ✓ Mapper (${isPrisma ? 'Prisma' : 'TypeORM'})`));
     }
   }
@@ -73,11 +80,11 @@ export async function generateEntity(entityName: string, options: any) {
     const repoOutputPath = path.join(
       modulePath,
       'infrastructure/repositories',
-      `${toKebabCase(entityName)}.repository.ts`
+      `${toKebabCase(entityName)}.repository.ts`,
     );
 
     if (!(await fileExists(repoOutputPath))) {
-      await generateFromTemplate(repoTemplatePath, repoOutputPath, templateData);
+      await generateFromTemplate(repoTemplatePath, repoOutputPath, templateData, dryRun);
       console.log(chalk.green(`    ✓ Repository (${isPrisma ? 'Prisma' : 'TypeORM'})`));
     }
   }
@@ -87,11 +94,16 @@ export async function generateEntity(entityName: string, options: any) {
   const responseDtoOutputPath = path.join(
     modulePath,
     'application/dto/responses',
-    `${toKebabCase(entityName)}.response.dto.ts`
+    `${toKebabCase(entityName)}.response.dto.ts`,
   );
 
   if (!(await fileExists(responseDtoOutputPath))) {
-    await generateFromTemplate(responseDtoTemplatePath, responseDtoOutputPath, templateData);
+    await generateFromTemplate(
+      responseDtoTemplatePath,
+      responseDtoOutputPath,
+      templateData,
+      dryRun,
+    );
     console.log(chalk.green(`    ✓ Response DTO`));
   }
 
@@ -104,52 +116,55 @@ export async function generateEntity(entityName: string, options: any) {
 async function updateIndexFiles(modulePath: string, entityName: string, options: any) {
   const entityNameKebab = toKebabCase(entityName);
   const entityNamePascal = toPascalCase(entityName);
+  const dryRun = !!options.dryRun;
 
   // Entities index
   const entitiesIndexPath = path.join(modulePath, 'application/domain/entities/index.ts');
-  const entitiesIndexContent = `export * from './${entityNameKebab}.entity';
-`;
-  await writeFile(entitiesIndexPath, entitiesIndexContent);
+  await updateBarrelFile(entitiesIndexPath, {
+    exports: [`export * from './${entityNameKebab}.entity';`],
+    dryRun,
+  });
 
-  if (!options.skipOrm) {
+  if (!options.skipOrm && options.orm !== 'prisma') {
     // ORM entities index
     const ormIndexPath = path.join(modulePath, 'infrastructure/orm-entities/index.ts');
-    const ormIndexContent = `export * from './${entityNameKebab}.orm-entity';
-
-import { ${entityNamePascal}OrmEntity } from './${entityNameKebab}.orm-entity';
-
-export const OrmEntities = [${entityNamePascal}OrmEntity];
-`;
-    await writeFile(ormIndexPath, ormIndexContent);
+    await updateBarrelFile(ormIndexPath, {
+      exports: [`export * from './${entityNameKebab}.orm-entity';`],
+      imports: [`import { ${entityNamePascal}OrmEntity } from './${entityNameKebab}.orm-entity';`],
+      arrayName: 'OrmEntities',
+      arrayItems: [`${entityNamePascal}OrmEntity`],
+      dryRun,
+    });
   }
 
   if (!options.skipMapper) {
     // Mappers index
     const mappersIndexPath = path.join(modulePath, 'infrastructure/mappers/index.ts');
-    const mappersIndexContent = `export * from './${entityNameKebab}.mapper';
-
-import { ${entityNamePascal}Mapper } from './${entityNameKebab}.mapper';
-
-export const Mappers = [${entityNamePascal}Mapper];
-`;
-    await writeFile(mappersIndexPath, mappersIndexContent);
+    await updateBarrelFile(mappersIndexPath, {
+      exports: [`export * from './${entityNameKebab}.mapper';`],
+      imports: [`import { ${entityNamePascal}Mapper } from './${entityNameKebab}.mapper';`],
+      arrayName: 'Mappers',
+      arrayItems: [`${entityNamePascal}Mapper`],
+      dryRun,
+    });
   }
 
   if (!options.skipRepo) {
     // Repositories index
     const reposIndexPath = path.join(modulePath, 'infrastructure/repositories/index.ts');
-    const reposIndexContent = `export * from './${entityNameKebab}.repository';
-
-import { ${entityNamePascal}Repository } from './${entityNameKebab}.repository';
-
-export const Repositories = [${entityNamePascal}Repository];
-`;
-    await writeFile(reposIndexPath, reposIndexContent);
+    await updateBarrelFile(reposIndexPath, {
+      exports: [`export * from './${entityNameKebab}.repository';`],
+      imports: [`import { ${entityNamePascal}Repository } from './${entityNameKebab}.repository';`],
+      arrayName: 'Repositories',
+      arrayItems: [`${entityNamePascal}Repository`],
+      dryRun,
+    });
   }
 
   // Responses index
   const responsesIndexPath = path.join(modulePath, 'application/dto/responses/index.ts');
-  const responsesIndexContent = `export * from './${entityNameKebab}.response.dto';
-`;
-  await writeFile(responsesIndexPath, responsesIndexContent);
+  await updateBarrelFile(responsesIndexPath, {
+    exports: [`export * from './${entityNameKebab}.response.dto';`],
+    dryRun,
+  });
 }

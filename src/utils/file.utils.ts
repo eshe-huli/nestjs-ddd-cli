@@ -1,7 +1,14 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import Handlebars from 'handlebars';
-import { toKebabCase, toPascalCase, toCamelCase, toSnakeCase, toPlural, toTableName } from './naming.utils';
+import {
+  toKebabCase,
+  toPascalCase,
+  toCamelCase,
+  toSnakeCase,
+  toPlural,
+  toTableName,
+} from './naming.utils';
 import { FieldDefinition, parseFields, generateFieldsTemplateData } from './field.utils';
 
 // Register Handlebars helpers
@@ -57,21 +64,31 @@ export interface TemplateData {
   relationImports?: string;
 }
 
-export function prepareTemplateData(entityName: string, moduleName: string, fieldsString?: string): TemplateData {
+export function prepareTemplateData(
+  entityName: string,
+  moduleName: string,
+  fieldsString?: string,
+): TemplateData {
   const parsedFields = fieldsString ? parseFields(fieldsString) : null;
   const fieldsTemplateData = parsedFields?.fields.length
     ? generateFieldsTemplateData(parsedFields.fields)
     : null;
 
   // Check for relations and generate imports
-  const relationFields = parsedFields?.fields.filter(f => f.isRelation) || [];
+  const relationFields = parsedFields?.fields.filter((f) => f.isRelation) || [];
   const hasRelations = relationFields.length > 0;
 
   // Generate unique relation imports
-  const relationTargets = [...new Set(relationFields.map(f => f.relationTarget).filter(Boolean))];
-  const relationImports = relationTargets.length > 0
-    ? relationTargets.map(target => `import { ${target}OrmEntity } from "./${toKebabCase(target!)}.orm-entity";`).join('\n')
-    : '';
+  const relationTargets = [...new Set(relationFields.map((f) => f.relationTarget).filter(Boolean))];
+  const relationImports =
+    relationTargets.length > 0
+      ? relationTargets
+          .map(
+            (target) =>
+              `import { ${target}OrmEntity } from "./${toKebabCase(target!)}.orm-entity";`,
+          )
+          .join('\n')
+      : '';
 
   return {
     entityName,
@@ -171,13 +188,17 @@ export async function writeFile(filePath: string, content: string): Promise<void
   validatePath(filePath);
 
   // Validate content size (prevent DoS via huge files)
+  validateContentSize(content);
+
+  await ensureDir(path.dirname(filePath));
+  await fs.writeFile(filePath, content, 'utf-8');
+}
+
+function validateContentSize(content: string): void {
   const maxContentSize = 10 * 1024 * 1024; // 10MB max
   if (content && content.length > maxContentSize) {
     throw new Error(`Content exceeds maximum size of ${maxContentSize} bytes`);
   }
-
-  await ensureDir(path.dirname(filePath));
-  await fs.writeFile(filePath, content, 'utf-8');
 }
 
 export async function readTemplate(templatePath: string): Promise<string> {
@@ -201,7 +222,7 @@ export async function readTemplate(templatePath: string): Promise<string> {
 }
 
 export function compileTemplate(template: string, data: TemplateData): string {
-  const compiledTemplate = Handlebars.compile(template);
+  const compiledTemplate = Handlebars.compile(template, { noEscape: true });
   return compiledTemplate(data);
 }
 
@@ -209,31 +230,182 @@ export async function generateFromTemplate(
   templatePath: string,
   outputPath: string,
   data: TemplateData,
-  dryRun = false
+  dryRun = false,
 ): Promise<string> {
   const template = await readTemplate(templatePath);
   const content = compileTemplate(template, data);
 
-  if (!dryRun) {
-    await writeFile(outputPath, content);
-  }
+  await writeGeneratedFile(outputPath, content, dryRun);
 
   return outputPath;
 }
 
 // Dry run tracking
-let dryRunFiles: string[] = [];
+export type DryRunAction = 'create' | 'update';
+
+export interface DryRunChange {
+  filePath: string;
+  action: DryRunAction;
+}
+
+let dryRunFiles: DryRunChange[] = [];
 
 export function resetDryRunFiles(): void {
   dryRunFiles = [];
 }
 
-export function getDryRunFiles(): string[] {
+export function getDryRunFiles(): DryRunChange[] {
   return [...dryRunFiles];
 }
 
-export function addDryRunFile(filePath: string): void {
-  dryRunFiles.push(filePath);
+export function addDryRunFile(filePath: string, action: DryRunAction = 'create'): void {
+  if (dryRunFiles.some((change) => change.filePath === filePath)) {
+    return;
+  }
+
+  dryRunFiles.push({ filePath, action });
+}
+
+export async function writeGeneratedFile(
+  filePath: string,
+  content: string,
+  dryRun = false,
+): Promise<void> {
+  validatePath(filePath);
+  validateContentSize(content);
+
+  if (dryRun) {
+    addDryRunFile(filePath, (await fileExists(filePath)) ? 'update' : 'create');
+    return;
+  }
+
+  await writeFile(filePath, content);
+}
+
+export interface BarrelFileUpdate {
+  exports?: string[];
+  imports?: string[];
+  arrayName?: string;
+  arrayItems?: string[];
+  dryRun?: boolean;
+}
+
+export async function updateBarrelFile(filePath: string, update: BarrelFileUpdate): Promise<void> {
+  validatePath(filePath);
+
+  let content = '';
+  if (await fileExists(filePath)) {
+    content = await fs.readFile(filePath, 'utf-8');
+  }
+
+  const originalContent = content;
+
+  content = appendUniqueLines(content, update.exports || [], update.arrayName);
+  content = appendUniqueLines(content, update.imports || [], update.arrayName);
+
+  if (update.arrayName && update.arrayItems?.length) {
+    content = mergeExportedArray(content, update.arrayName, update.arrayItems);
+  }
+
+  content = normalizeFileContent(content);
+
+  if (content !== normalizeFileContent(originalContent)) {
+    await writeGeneratedFile(filePath, content, !!update.dryRun);
+  }
+}
+
+function appendUniqueLines(content: string, lines: string[], beforeArrayName?: string): string {
+  const existingLines = new Set(
+    content
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean),
+  );
+  const missingLines = lines
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !existingLines.has(line));
+
+  if (!missingLines.length) {
+    return content;
+  }
+
+  const insertion = `${missingLines.join('\n')}\n`;
+
+  if (beforeArrayName) {
+    const arrayPattern = new RegExp(
+      `export const ${escapeRegExp(beforeArrayName)}(:[^=]+)?\\s*=\\s*\\[`,
+    );
+    const arrayMatch = arrayPattern.exec(content);
+
+    if (arrayMatch?.index !== undefined) {
+      const beforeArray = content.slice(0, arrayMatch.index).trimEnd();
+      const afterArray = content.slice(arrayMatch.index);
+      const prefix = beforeArray.length > 0 ? `${beforeArray}\n` : '';
+      return `${prefix}${insertion}${afterArray}`;
+    }
+  }
+
+  const trimmedContent = content.trimEnd();
+  const prefix = trimmedContent.length > 0 ? `${trimmedContent}\n` : '';
+  return `${prefix}${insertion}`;
+}
+
+function mergeExportedArray(content: string, arrayName: string, arrayItems: string[]): string {
+  const uniqueItems = [...new Set(arrayItems.map((item) => item.trim()).filter(Boolean))];
+  const escapedArrayName = escapeRegExp(arrayName);
+  const arrayPattern = new RegExp(
+    `export const ${escapedArrayName}(:[^=]+)?\\s*=\\s*\\[([\\s\\S]*?)\\];`,
+  );
+  const match = arrayPattern.exec(content);
+
+  if (!match) {
+    const arrayContent = uniqueItems.map((item) => `  ${item},`).join('\n');
+    return appendUniqueLines(content, [`export const ${arrayName} = [\n${arrayContent}\n];`]);
+  }
+
+  const typeAnnotation = match[1] || '';
+  const body = match[2] || '';
+  const missingItems = uniqueItems.filter((item) => !hasArrayItem(body, item));
+
+  if (!missingItems.length) {
+    return content;
+  }
+
+  const nextBody = appendArrayItems(body, missingItems);
+  const nextArray = `export const ${arrayName}${typeAnnotation} = [${nextBody}];`;
+
+  return content.replace(match[0], nextArray);
+}
+
+function hasArrayItem(body: string, item: string): boolean {
+  return new RegExp(`(^|[^A-Za-z0-9_$])${escapeRegExp(item)}([^A-Za-z0-9_$]|$)`).test(body);
+}
+
+function appendArrayItems(body: string, missingItems: string[]): string {
+  const linesToAdd = missingItems.map((item) => `  ${item},`).join('\n');
+  const trimmedBody = body.trim();
+
+  if (!trimmedBody) {
+    return `\n${linesToAdd}\n`;
+  }
+
+  if (!body.includes('\n')) {
+    return `\n  ${trimmedBody.replace(/,\s*$/, '')},\n${linesToAdd}\n`;
+  }
+
+  const bodyWithTrailingComma = /,\s*$/.test(body.trimEnd())
+    ? body.trimEnd()
+    : `${body.trimEnd()},`;
+
+  return `${bodyWithTrailingComma}\n${linesToAdd}\n`;
+}
+
+function normalizeFileContent(content: string): string {
+  return content.trimEnd() ? `${content.trimEnd()}\n` : '';
+}
+
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 export function getModulePath(basePath: string, moduleName: string): string {

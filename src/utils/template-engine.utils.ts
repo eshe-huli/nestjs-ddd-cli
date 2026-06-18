@@ -116,10 +116,8 @@ function registerBuiltInHelpers(registry: TemplateRegistry): void {
       str?.replace(new RegExp(search, 'g'), replacement),
     trim: (str: string) => str?.trim(),
     split: (str: string, sep: string) => str?.split(sep),
-    padStart: (str: string, len: number, char: string) =>
-      String(str).padStart(len, char),
-    padEnd: (str: string, len: number, char: string) =>
-      String(str).padEnd(len, char),
+    padStart: (str: string, len: number, char: string) => String(str).padStart(len, char),
+    padEnd: (str: string, len: number, char: string) => String(str).padEnd(len, char),
 
     // Type helpers
     typeOf: (val: any) => typeof val,
@@ -150,7 +148,7 @@ function registerBuiltInHelpers(registry: TemplateRegistry): void {
     importPath: (from: string, to: string) => calculateImportPath(from, to),
 
     // Block helpers
-    times: function(n: number, options: Handlebars.HelperOptions) {
+    times: function (n: number, options: Handlebars.HelperOptions) {
       let result = '';
       for (let i = 0; i < n; i++) {
         result += options.fn({ index: i, first: i === 0, last: i === n - 1 });
@@ -158,7 +156,7 @@ function registerBuiltInHelpers(registry: TemplateRegistry): void {
       return result;
     },
 
-    each_with_index: function(arr: any[], options: Handlebars.HelperOptions) {
+    each_with_index: function (arr: any[], options: Handlebars.HelperOptions) {
       let result = '';
       arr?.forEach((item, index) => {
         result += options.fn({
@@ -171,19 +169,30 @@ function registerBuiltInHelpers(registry: TemplateRegistry): void {
       return result;
     },
 
-    ifCond: function(v1: any, operator: string, v2: any, options: Handlebars.HelperOptions) {
+    ifCond: function (v1: any, operator: string, v2: any, options: Handlebars.HelperOptions) {
       switch (operator) {
-        case '==': return v1 == v2 ? options.fn(this) : options.inverse(this);
-        case '===': return v1 === v2 ? options.fn(this) : options.inverse(this);
-        case '!=': return v1 != v2 ? options.fn(this) : options.inverse(this);
-        case '!==': return v1 !== v2 ? options.fn(this) : options.inverse(this);
-        case '<': return v1 < v2 ? options.fn(this) : options.inverse(this);
-        case '<=': return v1 <= v2 ? options.fn(this) : options.inverse(this);
-        case '>': return v1 > v2 ? options.fn(this) : options.inverse(this);
-        case '>=': return v1 >= v2 ? options.fn(this) : options.inverse(this);
-        case '&&': return v1 && v2 ? options.fn(this) : options.inverse(this);
-        case '||': return v1 || v2 ? options.fn(this) : options.inverse(this);
-        default: return options.inverse(this);
+        case '==':
+          return v1 == v2 ? options.fn(this) : options.inverse(this);
+        case '===':
+          return v1 === v2 ? options.fn(this) : options.inverse(this);
+        case '!=':
+          return v1 != v2 ? options.fn(this) : options.inverse(this);
+        case '!==':
+          return v1 !== v2 ? options.fn(this) : options.inverse(this);
+        case '<':
+          return v1 < v2 ? options.fn(this) : options.inverse(this);
+        case '<=':
+          return v1 <= v2 ? options.fn(this) : options.inverse(this);
+        case '>':
+          return v1 > v2 ? options.fn(this) : options.inverse(this);
+        case '>=':
+          return v1 >= v2 ? options.fn(this) : options.inverse(this);
+        case '&&':
+          return v1 && v2 ? options.fn(this) : options.inverse(this);
+        case '||':
+          return v1 || v2 ? options.fn(this) : options.inverse(this);
+        default:
+          return options.inverse(this);
       }
     },
   };
@@ -200,7 +209,7 @@ function registerBuiltInHelpers(registry: TemplateRegistry): void {
 export function loadTemplate(
   registry: TemplateRegistry,
   templatePath: string,
-  name?: string
+  name?: string,
 ): CompiledTemplate {
   const source = fs.readFileSync(templatePath, 'utf-8');
   const templateName = name || path.basename(templatePath, path.extname(templatePath));
@@ -213,7 +222,7 @@ export function loadTemplate(
     config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
   }
 
-  const compiled = Handlebars.compile(source);
+  const compiled = Handlebars.compile(source, { noEscape: true });
 
   const template: CompiledTemplate = {
     name: templateName,
@@ -229,10 +238,7 @@ export function loadTemplate(
 /**
  * Load all templates from a directory
  */
-export function loadTemplatesFromDirectory(
-  registry: TemplateRegistry,
-  dirPath: string
-): void {
+export function loadTemplatesFromDirectory(registry: TemplateRegistry, dirPath: string): void {
   if (!fs.existsSync(dirPath)) return;
 
   const files = fs.readdirSync(dirPath, { withFileTypes: true });
@@ -251,12 +257,8 @@ export function loadTemplatesFromDirectory(
 /**
  * Register a partial template
  */
-export function registerPartial(
-  registry: TemplateRegistry,
-  name: string,
-  source: string
-): void {
-  const compiled = Handlebars.compile(source);
+export function registerPartial(registry: TemplateRegistry, name: string, source: string): void {
+  const compiled = Handlebars.compile(source, { noEscape: true });
   registry.partials.set(name, compiled);
   Handlebars.registerPartial(name, source);
 }
@@ -267,7 +269,7 @@ export function registerPartial(
 export function registerHelper(
   registry: TemplateRegistry,
   name: string,
-  helper: Handlebars.HelperDelegate
+  helper: Handlebars.HelperDelegate,
 ): void {
   registry.helpers.set(name, helper);
   Handlebars.registerHelper(name, helper);
@@ -279,7 +281,7 @@ export function registerHelper(
 export function registerHook(
   registry: TemplateRegistry,
   phase: 'preGenerate' | 'postGenerate',
-  hook: GenerationHook
+  hook: GenerationHook,
 ): void {
   registry.hooks[phase].push(hook);
 }
@@ -290,7 +292,7 @@ export function registerHook(
 export async function renderTemplate(
   registry: TemplateRegistry,
   templateName: string,
-  context: GenerationContext
+  context: GenerationContext,
 ): Promise<string> {
   const template = registry.templates.get(templateName);
   if (!template) {
@@ -313,7 +315,7 @@ export async function renderTemplate(
   }
 
   // Compile and render
-  const compiled = Handlebars.compile(source);
+  const compiled = Handlebars.compile(source, { noEscape: true });
   let result = compiled(processedContext);
 
   // Run post-generate hooks
@@ -345,7 +347,7 @@ function mergeTemplates(parentSource: string, childSource: string): string {
   for (const [name, content] of blocks) {
     const parentBlockPattern = new RegExp(
       `\\{\\{#block\\s+"${name}"\\}\\}[\\s\\S]*?\\{\\{\\/block\\}\\}`,
-      'g'
+      'g',
     );
     result = result.replace(parentBlockPattern, content);
   }
@@ -358,54 +360,58 @@ function mergeTemplates(parentSource: string, childSource: string): string {
  */
 export function createModuleTemplateConfig(
   moduleName: string,
-  overrides: Record<string, string>
+  overrides: Record<string, string>,
 ): TemplateConfig {
   return {
     overrides: Object.fromEntries(
       Object.entries(overrides).map(([template, customPath]) => [
         template,
         path.join('src/modules', moduleName, '.templates', customPath),
-      ])
+      ]),
     ),
   };
 }
 
 // Helper implementations
 function toCamelCase(str: string): string {
-  return str.replace(/[-_\s]+(.)?/g, (_, c) => c ? c.toUpperCase() : '')
-    .replace(/^(.)/, c => c.toLowerCase());
+  return str
+    .replace(/[-_\s]+(.)?/g, (_, c) => (c ? c.toUpperCase() : ''))
+    .replace(/^(.)/, (c) => c.toLowerCase());
 }
 
 function toPascalCase(str: string): string {
-  return str.replace(/[-_\s]+(.)?/g, (_, c) => c ? c.toUpperCase() : '')
-    .replace(/^(.)/, c => c.toUpperCase());
+  return str
+    .replace(/[-_\s]+(.)?/g, (_, c) => (c ? c.toUpperCase() : ''))
+    .replace(/^(.)/, (c) => c.toUpperCase());
 }
 
 function toKebabCase(str: string): string {
-  return str.replace(/([a-z])([A-Z])/g, '$1-$2')
+  return str
+    .replace(/([a-z])([A-Z])/g, '$1-$2')
     .replace(/[\s_]+/g, '-')
     .toLowerCase();
 }
 
 function toSnakeCase(str: string): string {
-  return str.replace(/([a-z])([A-Z])/g, '$1_$2')
+  return str
+    .replace(/([a-z])([A-Z])/g, '$1_$2')
     .replace(/[\s-]+/g, '_')
     .toLowerCase();
 }
 
 function pluralize(str: string): string {
   const irregulars: Record<string, string> = {
-    'person': 'people',
-    'child': 'children',
-    'mouse': 'mice',
-    'goose': 'geese',
+    person: 'people',
+    child: 'children',
+    mouse: 'mice',
+    goose: 'geese',
   };
 
   if (irregulars[str.toLowerCase()]) {
     return irregulars[str.toLowerCase()];
   }
 
-  if (str.endsWith('y') && !['ay', 'ey', 'iy', 'oy', 'uy'].some(v => str.endsWith(v))) {
+  if (str.endsWith('y') && !['ay', 'ey', 'iy', 'oy', 'uy'].some((v) => str.endsWith(v))) {
     return str.slice(0, -1) + 'ies';
   }
   if (str.endsWith('s') || str.endsWith('x') || str.endsWith('ch') || str.endsWith('sh')) {
@@ -423,60 +429,60 @@ function singularize(str: string): string {
 
 function fieldTypeToTs(type: string): string {
   const map: Record<string, string> = {
-    'string': 'string',
-    'number': 'number',
-    'boolean': 'boolean',
-    'date': 'Date',
-    'datetime': 'Date',
-    'text': 'string',
-    'json': 'Record<string, any>',
-    'uuid': 'string',
-    'email': 'string',
-    'url': 'string',
-    'decimal': 'number',
-    'float': 'number',
-    'integer': 'number',
-    'bigint': 'bigint',
+    string: 'string',
+    number: 'number',
+    boolean: 'boolean',
+    date: 'Date',
+    datetime: 'Date',
+    text: 'string',
+    json: 'Record<string, any>',
+    uuid: 'string',
+    email: 'string',
+    url: 'string',
+    decimal: 'number',
+    float: 'number',
+    integer: 'number',
+    bigint: 'bigint',
   };
   return map[type] || 'any';
 }
 
 function fieldTypeToDb(type: string, orm: string = 'typeorm'): string {
   const typeormMap: Record<string, string> = {
-    'string': 'varchar',
-    'number': 'int',
-    'boolean': 'boolean',
-    'date': 'date',
-    'datetime': 'timestamp',
-    'text': 'text',
-    'json': 'jsonb',
-    'uuid': 'uuid',
-    'email': 'varchar',
-    'url': 'varchar',
-    'decimal': 'decimal',
-    'float': 'float',
-    'integer': 'int',
-    'bigint': 'bigint',
+    string: 'varchar',
+    number: 'int',
+    boolean: 'boolean',
+    date: 'date',
+    datetime: 'timestamp',
+    text: 'text',
+    json: 'jsonb',
+    uuid: 'uuid',
+    email: 'varchar',
+    url: 'varchar',
+    decimal: 'decimal',
+    float: 'float',
+    integer: 'int',
+    bigint: 'bigint',
   };
 
   const prismaMap: Record<string, string> = {
-    'string': 'String',
-    'number': 'Int',
-    'boolean': 'Boolean',
-    'date': 'DateTime',
-    'datetime': 'DateTime',
-    'text': 'String',
-    'json': 'Json',
-    'uuid': 'String',
-    'email': 'String',
-    'url': 'String',
-    'decimal': 'Decimal',
-    'float': 'Float',
-    'integer': 'Int',
-    'bigint': 'BigInt',
+    string: 'String',
+    number: 'Int',
+    boolean: 'Boolean',
+    date: 'DateTime',
+    datetime: 'DateTime',
+    text: 'String',
+    json: 'Json',
+    uuid: 'String',
+    email: 'String',
+    url: 'String',
+    decimal: 'Decimal',
+    float: 'Float',
+    integer: 'Int',
+    bigint: 'BigInt',
   };
 
-  return orm === 'prisma' ? (prismaMap[type] || 'String') : (typeormMap[type] || 'varchar');
+  return orm === 'prisma' ? prismaMap[type] || 'String' : typeormMap[type] || 'varchar';
 }
 
 function generateValidatorDecorators(field: any): string {
