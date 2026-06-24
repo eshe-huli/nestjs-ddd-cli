@@ -140,6 +140,7 @@ ddd recipe
 
 # Apply with dependency installation
 ddd recipe auth-jwt --install-deps
+ddd recipe event-backbone --install-deps
 ```
 
 | Recipe | Description |
@@ -149,6 +150,8 @@ ddd recipe auth-jwt --install-deps
 | `soft-delete` | Base entity and repository with soft delete |
 | `audit-log` | Entity change tracking with sensitive data masking |
 | `caching` | Redis caching with decorators |
+| `event-backbone` | Postgres event store/outbox source of truth with Pulsar transport |
+| `business-reference-identifiers` | Human-readable sidecar references beside canonical IDs |
 
 ## Generated Structure
 

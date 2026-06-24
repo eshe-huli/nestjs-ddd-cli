@@ -12,6 +12,8 @@ import { applyMessageQueueRecipe } from './recipes/message-queue.recipe';
 import { applyElasticsearchRecipe } from './recipes/elasticsearch.recipe';
 import { applyEventSourcingRecipe } from './recipes/event-sourcing.recipe';
 import { applyJoiEnvRecipe } from './recipes/joi-env.recipe';
+import { applyBusinessReferenceIdentifiersRecipe } from './recipes/business-reference-identifiers.recipe';
+import { applyEventBackboneRecipe } from './recipes/event-backbone.recipe';
 
 export interface RecipeOptions {
   path?: string;
@@ -166,6 +168,26 @@ const AVAILABLE_RECIPES = {
     dependencies: ['@nestjs/cqrs'],
     devDependencies: [],
   },
+  'event-backbone': {
+    name: 'Event Backbone',
+    description: 'Postgres event store/outbox source of truth with Pulsar transport and relay',
+    dependencies: [
+      '@nestjs/config',
+      '@nestjs/schedule',
+      '@nestjs/typeorm',
+      'typeorm',
+      'pg',
+      'pulsar-client',
+      'joi',
+    ],
+    devDependencies: [],
+  },
+  'business-reference-identifiers': {
+    name: 'Business Reference Identifiers',
+    description: 'Human-readable sidecar references alongside canonical UUID/internal IDs',
+    dependencies: [],
+    devDependencies: [],
+  },
   'joi-env': {
     name: 'Joi Environment Validation',
     description: 'Joi-backed ConfigModule validation with platform bootstrap defaults',
@@ -181,7 +203,7 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
     console.log(chalk.red(`Unknown recipe: ${recipeName}`));
     console.log(chalk.yellow('\nAvailable recipes:'));
     Object.entries(AVAILABLE_RECIPES).forEach(([key, value]) => {
-      console.log(chalk.cyan(`  ${key.padEnd(15)} - ${value.description}`));
+      console.log(chalk.cyan(`  ${key.padEnd(34)} - ${value.description}`));
     });
     return;
   }
@@ -263,6 +285,12 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
       break;
     case 'event-sourcing':
       await applyEventSourcingRecipe(basePath);
+      break;
+    case 'event-backbone':
+      await applyEventBackboneRecipe(basePath);
+      break;
+    case 'business-reference-identifiers':
+      await applyBusinessReferenceIdentifiersRecipe(basePath);
       break;
     case 'joi-env':
       await applyJoiEnvRecipe(basePath);
@@ -4087,12 +4115,14 @@ export * from "./prisma-query-builder";
 }
 
 export function listRecipes() {
-  console.log(chalk.blue('\\n📚 Available Recipes:\\n'));
+  console.log(chalk.blue('\n📚 Available Recipes:\n'));
 
   Object.entries(AVAILABLE_RECIPES).forEach(([key, value]) => {
-    console.log(chalk.cyan(`  ${key.padEnd(15)}`), '-', value.description);
+    console.log(chalk.cyan(`  ${key.padEnd(34)}`), '-', value.description);
     if (value.dependencies.length > 0) {
-      console.log(chalk.gray(`                  Dependencies: ${value.dependencies.join(', ')}`));
+      console.log(
+        chalk.gray(`  ${''.padEnd(34)}   Dependencies: ${value.dependencies.join(', ')}`),
+      );
     }
   });
 

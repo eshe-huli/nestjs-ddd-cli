@@ -79,6 +79,22 @@ ddd recipe service-foundation --install-deps
 
 This applies the reusable baseline for environment validation, health endpoints, API versioning, rate limiting, and filtering. If the same setup is needed in a second service, extend the CLI recipe instead of re-implementing it locally.
 
+For durable cross-service events, use:
+
+```bash
+ddd recipe event-backbone --install-deps
+```
+
+This applies the canonical Postgres event store/outbox source of truth with a Pulsar transport relay. Do not create new RabbitMQ/Kafka/Pulsar variants unless the platform decision changes.
+
+For human-readable operational references, use:
+
+```bash
+ddd recipe business-reference-identifiers
+```
+
+Keep UUID/internal IDs canonical; meaningful references are sidecar metadata for support, reconciliation, receipts, partner files, logs, and dashboards.
+
 ## Common Patterns
 
 ### Creating a new entity

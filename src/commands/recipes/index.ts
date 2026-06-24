@@ -5,4 +5,6 @@ export * from './oauth2.recipe';
 export * from './message-queue.recipe';
 export * from './elasticsearch.recipe';
 export * from './event-sourcing.recipe';
+export * from './event-backbone.recipe';
+export * from './business-reference-identifiers.recipe';
 export * from './joi-env.recipe';
