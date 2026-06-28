@@ -152,6 +152,8 @@ ddd recipe event-backbone --install-deps
 | `caching` | Redis caching with decorators |
 | `event-backbone` | Postgres event store/outbox source of truth with Pulsar transport |
 | `business-reference-identifiers` | Human-readable sidecar references beside canonical IDs |
+| `platform-service-runtime` | Service manifest, capabilities, actions, events, dependencies, and health contract |
+| `banklink-connector-contract` | BankLink NestJS control-plane and Go sidecar connector boundary contract |
 
 ## Generated Structure
 
