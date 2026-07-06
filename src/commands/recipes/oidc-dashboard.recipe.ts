@@ -11,6 +11,7 @@ export async function applyOidcDashboardRecipe(basePath: string): Promise<void> 
 
   await writeFile(path.join(authPath, 'oidc-dashboard.config.ts'), configContent);
   await writeFile(path.join(authPath, 'oidc-principal.ts'), principalContent);
+  await writeFile(path.join(authPath, 'oidc-access-mapping.ts'), mappingContent);
   await writeFile(path.join(authPath, 'oidc-token-verifier.service.ts'), verifierContent);
   await writeFile(path.join(authPath, 'oidc-dashboard.guard.ts'), guardContent);
   await writeFile(path.join(authPath, 'index.ts'), indexContent);
@@ -25,9 +26,10 @@ export async function applyOidcDashboardRecipe(basePath: string): Promise<void> 
   await writeFile(targetExamplePath, envExampleContent);
 
   console.log(chalk.green('  ✓ OIDC dashboard config contract'));
+  console.log(chalk.green('  ✓ Role/group mapping hook'));
   console.log(chalk.green('  ✓ JWKS-backed bearer token verifier'));
   console.log(chalk.green('  ✓ NestJS dashboard/API guard'));
-  console.log(chalk.green('  ✓ Laravel/Filament integration notes'));
+  console.log(chalk.green('  ✓ Laravel/Filament and Next/Node integration notes'));
   console.log(
     chalk.yellow(
       '  Keep dashboard RBAC local or PARC-backed; OIDC proves identity, not product authorization.',
@@ -45,6 +47,7 @@ const configContent = `export interface OidcDashboardConfig {
   adminEmails: string[];
   allowedEmailDomains: string[];
   roleClaim: string;
+  groupClaim: string;
   audience?: string;
   jwksUrl?: string;
 }
@@ -85,6 +88,7 @@ export function oidcDashboardConfigFromEnv(): OidcDashboardConfig {
       (domain) => domain.toLowerCase(),
     ),
     roleClaim: process.env.OIDC_ROLE_CLAIM ?? "roles",
+    groupClaim: process.env.OIDC_GROUP_CLAIM ?? "groups",
     audience: process.env.OIDC_AUDIENCE ?? clientId,
     jwksUrl: process.env.OIDC_JWKS_URL || undefined,
   };
@@ -97,12 +101,69 @@ const principalContent = `export interface OidcDashboardPrincipal {
   emailVerified?: boolean;
   name?: string;
   roles: string[];
+  groups: string[];
   claims: Record<string, unknown>;
+}
+`;
+
+const mappingContent = `export interface OidcDashboardAccessMappingInput {
+  subject: string;
+  email?: string;
+  claims: Record<string, unknown>;
+  roleClaim: string;
+  groupClaim: string;
+}
+
+export interface OidcDashboardAccessMapping {
+  roles: string[];
+  groups: string[];
+}
+
+export type OidcDashboardAccessMappingHook = (
+  input: OidcDashboardAccessMappingInput,
+) => OidcDashboardAccessMapping | Promise<OidcDashboardAccessMapping>;
+
+export const defaultOidcDashboardAccessMapping: OidcDashboardAccessMappingHook = (
+  input,
+) => ({
+  roles: oidcClaimValues(input.claims, input.roleClaim),
+  groups: oidcClaimValues(input.claims, input.groupClaim),
+});
+
+export function oidcClaimValues(
+  claims: Record<string, unknown>,
+  claimName: string,
+): string[] {
+  const value = claims[claimName];
+  return uniqueStringList(stringListFromClaimValue(value));
+}
+
+function stringListFromClaimValue(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string");
+  }
+
+  if (typeof value === "string") {
+    return value.split(/[\\s,]+/);
+  }
+
+  if (value && typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .filter(([, nestedValue]) => Boolean(nestedValue))
+      .map(([key]) => key);
+  }
+
+  return [];
+}
+
+function uniqueStringList(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 `;
 
 const verifierContent = `import { Injectable, UnauthorizedException } from "@nestjs/common";
 import { createRemoteJWKSet, jwtVerify } from "jose";
+import { defaultOidcDashboardAccessMapping } from "./oidc-access-mapping";
 import {
   OidcDashboardConfig,
   oidcDashboardConfigFromEnv,
@@ -128,26 +189,32 @@ export class OidcTokenVerifierService {
         audience: this.config.audience,
       });
 
+      const subject = String(payload.sub);
       const email = typeof payload.email === "string" ? payload.email : undefined;
-      const roleClaim = payload[this.config.roleClaim];
-      const roles = Array.isArray(roleClaim)
-        ? roleClaim.filter((role): role is string => typeof role === "string")
-        : [];
+      const claims = payload as Record<string, unknown>;
+      const access = await defaultOidcDashboardAccessMapping({
+        subject,
+        email,
+        claims,
+        roleClaim: this.config.roleClaim,
+        groupClaim: this.config.groupClaim,
+      });
 
       if (email && !this.emailAllowed(email)) {
         throw new UnauthorizedException("OIDC email domain is not allowed");
       }
 
       return {
-        subject: String(payload.sub),
+        subject,
         email,
         emailVerified:
           typeof payload.email_verified === "boolean"
             ? payload.email_verified
             : undefined,
         name: typeof payload.name === "string" ? payload.name : undefined,
-        roles,
-        claims: payload as Record<string, unknown>,
+        roles: access.roles,
+        groups: access.groups,
+        claims,
       };
     } catch (error) {
       if (error instanceof UnauthorizedException) {
@@ -211,6 +278,7 @@ export class OidcDashboardGuard implements CanActivate {
 
 const indexContent = `export * from "./oidc-dashboard.config";
 export * from "./oidc-principal";
+export * from "./oidc-access-mapping";
 export * from "./oidc-token-verifier.service";
 export * from "./oidc-dashboard.guard";
 `;
@@ -242,6 +310,26 @@ delegate authentication to an OIDC broker such as ZITADEL.
 6. Set \`OIDC_JWKS_URL\` only when the broker does not expose keys at the
    default ZITADEL-compatible \`/oauth/v2/keys\` path.
 
+## Environment Contract
+
+- \`OIDC_ISSUER_URL\`: OIDC issuer URL, for example \`https://auth.example.com\`.
+- \`OIDC_CLIENT_ID\`: dashboard/application client ID.
+- \`OIDC_CLIENT_SECRET\`: secret loaded from the environment secret store.
+- \`OIDC_CALLBACK_URL\`: exact redirect URI registered on the OIDC client.
+- \`OIDC_SCOPES\`: comma-separated scopes, usually \`openid,profile,email\`.
+- \`OIDC_ALLOWED_EMAIL_DOMAINS\`: comma-separated allow-list for staff/operator
+  domains. Leave empty only when the dashboard has a stronger local allow-list.
+- \`OIDC_ROLE_CLAIM\`: token claim used for roles. Defaults to \`roles\`.
+- \`OIDC_GROUP_CLAIM\`: token claim used for groups. Defaults to \`groups\`.
+
+## Role And Group Mapping Hook
+
+\`oidc-access-mapping.ts\` is intentionally framework-neutral. Use
+\`defaultOidcDashboardAccessMapping\` as the safe default, then wrap or replace
+it when a dashboard needs to map broker roles/groups to local roles, tenant
+access, or PARC permissions. Keep this mapping after token verification and
+before local session creation.
+
 ## Laravel/Filament Pattern
 
 Laravel dashboards should use Socialite with an OpenID Connect provider.
@@ -253,6 +341,15 @@ Filament panels can either:
 
 The same rule applies: Socialite proves who logged in; the dashboard still needs
 local/PARC authorization before showing resources.
+
+## Next.js/Node Pattern
+
+Next.js dashboards should use Auth.js/NextAuth or \`openid-client\` with the
+same issuer, client, callback URL, and scopes from the environment contract. In
+the sign-in callback, enforce \`OIDC_ALLOWED_EMAIL_DOMAINS\`, then call the same
+role/group mapping hook before writing the local session. Plain Node services
+that receive bearer tokens can reuse the generated \`jose\` verifier pattern and
+map roles/groups before applying route permissions.
 
 ## Required Redirect Shape
 
@@ -278,6 +375,7 @@ OIDC_SCOPES=openid,profile,email
 OIDC_AUDIENCE=replace-me
 OIDC_JWKS_URL=
 OIDC_ROLE_CLAIM=roles
+OIDC_GROUP_CLAIM=groups
 OIDC_ADMIN_EMAILS=admin@example.com
 OIDC_ALLOWED_EMAIL_DOMAINS=example.com
 `;
