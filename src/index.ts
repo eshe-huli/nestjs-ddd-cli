@@ -269,7 +269,7 @@ program
 program
   .command('recipe [recipeName]')
   .description(
-    'Apply a selectable common pattern recipe (service-foundation, event-backbone, platform-service-runtime, banklink-connector-contract, business-reference-identifiers, auth-jwt, pagination, joi-env)',
+    'Apply a selectable common pattern recipe (service-foundation, event-backbone, platform-service-runtime, oidc-dashboard, banklink-connector-contract, business-reference-identifiers, auth-jwt, pagination, joi-env)',
   )
   .option('-p, --path <path>', 'Path to the project', process.cwd())
   .option('--install-deps', 'Install required dependencies', false)

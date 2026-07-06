@@ -16,6 +16,7 @@ import { applyBusinessReferenceIdentifiersRecipe } from './recipes/business-refe
 import { applyEventBackboneRecipe } from './recipes/event-backbone.recipe';
 import { applyPlatformServiceRuntimeRecipe } from './recipes/platform-service-runtime.recipe';
 import { applyBanklinkConnectorContractRecipe } from './recipes/banklink-connector-contract.recipe';
+import { applyOidcDashboardRecipe } from './recipes/oidc-dashboard.recipe';
 
 export interface RecipeOptions {
   path?: string;
@@ -209,6 +210,13 @@ const AVAILABLE_RECIPES = {
     dependencies: [],
     devDependencies: [],
   },
+  'oidc-dashboard': {
+    name: 'OIDC Dashboard SSO',
+    description:
+      'OIDC broker integration for internal dashboards and admin APIs with local/PARC authorization',
+    dependencies: ['jose'],
+    devDependencies: ['@types/express'],
+  },
 };
 
 export async function applyRecipe(recipeName: string, options: RecipeOptions) {
@@ -315,6 +323,9 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
       break;
     case 'banklink-connector-contract':
       await applyBanklinkConnectorContractRecipe(basePath);
+      break;
+    case 'oidc-dashboard':
+      await applyOidcDashboardRecipe(basePath);
       break;
   }
 

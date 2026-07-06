@@ -141,6 +141,7 @@ ddd recipe
 # Apply with dependency installation
 ddd recipe auth-jwt --install-deps
 ddd recipe event-backbone --install-deps
+ddd recipe oidc-dashboard --install-deps
 ```
 
 | Recipe | Description |
@@ -154,6 +155,7 @@ ddd recipe event-backbone --install-deps
 | `business-reference-identifiers` | Human-readable sidecar references beside canonical IDs |
 | `platform-service-runtime` | Service manifest, capabilities, actions, events, dependencies, and health contract |
 | `banklink-connector-contract` | BankLink NestJS control-plane and Go sidecar connector boundary contract |
+| `oidc-dashboard` | OIDC broker integration for internal dashboards and admin APIs |
 
 ## Generated Structure
 
