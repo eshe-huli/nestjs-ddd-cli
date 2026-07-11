@@ -1,18 +1,20 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import chalk from 'chalk';
-import { ensureDir, writeFile } from '../utils/file.utils';
+import { ensureDir, writeGeneratedFile } from '../utils/file.utils';
 
 export interface MigrationOptions {
   name: string;
   orm?: 'typeorm' | 'prisma';
   path?: string;
+  dryRun?: boolean;
 }
 
 export interface GenerateMigrationOptions {
   module: string;
   orm?: 'typeorm' | 'prisma';
   path?: string;
+  dryRun?: boolean;
 }
 
 interface ColumnDefinition {
@@ -42,9 +44,9 @@ export async function createMigration(basePath: string, options: MigrationOption
   console.log(chalk.bold.blue(`\n📦 Creating ${orm} migration: ${migrationName}\n`));
 
   if (orm === 'typeorm') {
-    await createTypeOrmMigration(basePath, migrationName, timestamp, options.path);
+    await createTypeOrmMigration(basePath, migrationName, timestamp, options.path, options.dryRun);
   } else {
-    await createPrismaMigration(basePath, migrationName, timestamp, options.path);
+    await createPrismaMigration(basePath, migrationName, timestamp, options.path, options.dryRun);
   }
 }
 
@@ -52,10 +54,11 @@ async function createTypeOrmMigration(
   basePath: string,
   name: string,
   timestamp: number,
-  customPath?: string
+  customPath?: string,
+  dryRun = false,
 ): Promise<void> {
   const migrationsPath = customPath || path.join(basePath, 'src/database/migrations');
-  await ensureDir(migrationsPath);
+  if (!dryRun) await ensureDir(migrationsPath);
 
   const className = `${toPascalCase(name)}${timestamp}`;
   const fileName = `${timestamp}-${name}.ts`;
@@ -108,8 +111,8 @@ export class ${className} implements MigrationInterface {
 }
 `;
 
-  await writeFile(path.join(migrationsPath, fileName), content);
-  console.log(chalk.green(`✓ Created migration: ${fileName}`));
+  await writeGeneratedFile(path.join(migrationsPath, fileName), content, dryRun);
+  console.log(chalk.green(`✓ ${dryRun ? 'Would create' : 'Created'} migration: ${fileName}`));
   console.log(chalk.gray(`  Path: ${migrationsPath}`));
 }
 
@@ -117,12 +120,13 @@ async function createPrismaMigration(
   basePath: string,
   name: string,
   timestamp: number,
-  customPath?: string
+  customPath?: string,
+  dryRun = false,
 ): Promise<void> {
   const migrationsPath = customPath || path.join(basePath, 'prisma/migrations');
   const migrationDir = path.join(migrationsPath, `${timestamp}_${name}`);
 
-  await ensureDir(migrationDir);
+  if (!dryRun) await ensureDir(migrationDir);
 
   const content = `-- Migration: ${name}
 -- Created at: ${new Date(timestamp).toISOString()}
@@ -151,14 +155,16 @@ async function createPrismaMigration(
 --   ON DELETE CASCADE;
 `;
 
-  await writeFile(path.join(migrationDir, 'migration.sql'), content);
-  console.log(chalk.green(`✓ Created Prisma migration: ${timestamp}_${name}`));
+  await writeGeneratedFile(path.join(migrationDir, 'migration.sql'), content, dryRun);
+  console.log(
+    chalk.green(`✓ ${dryRun ? 'Would create' : 'Created'} Prisma migration: ${timestamp}_${name}`),
+  );
   console.log(chalk.gray(`  Path: ${migrationDir}`));
 }
 
 export async function generateMigrationFromEntity(
   basePath: string,
-  options: GenerateMigrationOptions
+  options: GenerateMigrationOptions,
 ): Promise<void> {
   const orm = options.orm || 'typeorm';
   const modulePath = path.join(basePath, 'src/modules', options.module);
@@ -198,9 +204,23 @@ export async function generateMigrationFromEntity(
   const migrationName = `create_${options.module}_tables`;
 
   if (orm === 'typeorm') {
-    await generateTypeOrmMigration(basePath, tables, migrationName, timestamp);
+    await generateTypeOrmMigration(
+      basePath,
+      tables,
+      migrationName,
+      timestamp,
+      options.path,
+      options.dryRun,
+    );
   } else {
-    await generatePrismaMigration(basePath, tables, migrationName, timestamp);
+    await generatePrismaMigration(
+      basePath,
+      tables,
+      migrationName,
+      timestamp,
+      options.path,
+      options.dryRun,
+    );
   }
 }
 
@@ -232,7 +252,7 @@ function parseEntityFile(filePath: string): TableDefinition | null {
   const tableMatch = content.match(/@Entity\(\s*['"]?([^'")\s]+)?['"]?\s*\)/);
   const className = content.match(/export\s+class\s+(\w+)/);
 
-  if (!className) return null;
+  if (!className?.[1]) return null;
 
   const tableName = tableMatch?.[1] || toSnakeCase(className[1].replace(/Entity$/, ''));
 
@@ -240,14 +260,16 @@ function parseEntityFile(filePath: string): TableDefinition | null {
   const indexes: Array<{ columns: string[]; unique: boolean }> = [];
 
   // Parse columns
-  const columnRegex = /@(?:PrimaryGeneratedColumn|PrimaryColumn|Column|CreateDateColumn|UpdateDateColumn|DeleteDateColumn)\s*\(([^)]*)\)\s*(\w+)(?:\?)?:\s*(\w+)/g;
+  const columnRegex =
+    /@(?:PrimaryGeneratedColumn|PrimaryColumn|Column|CreateDateColumn|UpdateDateColumn|DeleteDateColumn)\s*\(([^)]*)\)\s*(\w+)(?:\?)?:\s*(\w+)/g;
 
   let match;
   while ((match = columnRegex.exec(content)) !== null) {
-    const decorator = match[0];
-    const options = match[1];
+    const decorator = match[0] || '';
+    const options = match[1] || '';
     const propName = match[2];
     const propType = match[3];
+    if (!propName || !propType) continue;
 
     const column: ColumnDefinition = {
       name: toSnakeCase(propName),
@@ -268,14 +290,16 @@ function parseEntityFile(filePath: string): TableDefinition | null {
   }
 
   // Parse relations for foreign keys
-  const relationRegex = /@(?:ManyToOne|OneToOne)\s*\([^)]*\)\s*(?:@JoinColumn\(\s*\{[^}]*name:\s*['"](\w+)['"][^}]*\}\s*\))?\s*(\w+)/g;
+  const relationRegex =
+    /@(?:ManyToOne|OneToOne)\s*\([^)]*\)\s*(?:@JoinColumn\(\s*\{[^}]*name:\s*['"](\w+)['"][^}]*\}\s*\))?\s*(\w+)/g;
 
   while ((match = relationRegex.exec(content)) !== null) {
-    const fkColumn = match[1] || `${toSnakeCase(match[2])}_id`;
     const relatedEntity = match[2];
+    if (!relatedEntity) continue;
+    const fkColumn = match[1] || `${toSnakeCase(relatedEntity)}_id`;
 
     // Add foreign key column if not already present
-    if (!columns.find(c => c.name === fkColumn)) {
+    if (!columns.find((c) => c.name === fkColumn)) {
       columns.push({
         name: fkColumn,
         type: 'uuid',
@@ -297,7 +321,7 @@ function parseEntityFile(filePath: string): TableDefinition | null {
       const cols = idx.match(/['"](\w+)['"]/g);
       if (cols) {
         indexes.push({
-          columns: cols.map(c => c.replace(/['"]/g, '')),
+          columns: cols.map((c) => c.replace(/['"]/g, '')),
           unique: idx.includes('unique: true'),
         });
       }
@@ -305,7 +329,7 @@ function parseEntityFile(filePath: string): TableDefinition | null {
   }
 
   // Add default columns if missing
-  if (!columns.find(c => c.name === 'id')) {
+  if (!columns.find((c) => c.name === 'id')) {
     columns.unshift({
       name: 'id',
       type: 'uuid',
@@ -316,7 +340,7 @@ function parseEntityFile(filePath: string): TableDefinition | null {
     });
   }
 
-  if (!columns.find(c => c.name === 'created_at')) {
+  if (!columns.find((c) => c.name === 'created_at')) {
     columns.push({
       name: 'created_at',
       type: 'timestamp',
@@ -327,7 +351,7 @@ function parseEntityFile(filePath: string): TableDefinition | null {
     });
   }
 
-  if (!columns.find(c => c.name === 'updated_at')) {
+  if (!columns.find((c) => c.name === 'updated_at')) {
     columns.push({
       name: 'updated_at',
       type: 'timestamp',
@@ -343,18 +367,18 @@ function parseEntityFile(filePath: string): TableDefinition | null {
 
 function mapTypeToSql(tsType: string, options: string): string {
   const typeMap: Record<string, string> = {
-    'string': 'varchar(255)',
-    'number': 'integer',
-    'boolean': 'boolean',
-    'Date': 'timestamp',
-    'bigint': 'bigint',
-    'float': 'float',
-    'decimal': 'decimal(10,2)',
+    string: 'varchar(255)',
+    number: 'integer',
+    boolean: 'boolean',
+    Date: 'timestamp',
+    bigint: 'bigint',
+    float: 'float',
+    decimal: 'decimal(10,2)',
   };
 
   // Check for explicit type in decorator options
   const explicitType = options.match(/type:\s*['"](\w+)['"]/);
-  if (explicitType) {
+  if (explicitType?.[1]) {
     return explicitType[1];
   }
 
@@ -371,10 +395,12 @@ async function generateTypeOrmMigration(
   basePath: string,
   tables: TableDefinition[],
   name: string,
-  timestamp: number
+  timestamp: number,
+  customPath?: string,
+  dryRun = false,
 ): Promise<void> {
-  const migrationsPath = path.join(basePath, 'src/database/migrations');
-  await ensureDir(migrationsPath);
+  const migrationsPath = customPath || path.join(basePath, 'src/database/migrations');
+  if (!dryRun) await ensureDir(migrationsPath);
 
   const className = `${toPascalCase(name)}${timestamp}`;
   const fileName = `${timestamp}-${name}.ts`;
@@ -384,7 +410,7 @@ async function generateTypeOrmMigration(
 
   for (const table of tables) {
     // Generate CREATE TABLE
-    const columnDefs = table.columns.map(col => {
+    const columnDefs = table.columns.map((col) => {
       let def = `{ name: "${col.name}", type: "${col.type}"`;
 
       if (col.primary) {
@@ -433,7 +459,7 @@ async function generateTypeOrmMigration(
       "${table.name}",
       new TableIndex({
         name: "${indexName}",
-        columnNames: [${index.columns.map(c => `"${c}"`).join(', ')}],
+        columnNames: [${index.columns.map((c) => `"${c}"`).join(', ')}],
         ${index.unique ? 'isUnique: true,' : ''}
       })
     );
@@ -441,7 +467,7 @@ async function generateTypeOrmMigration(
     }
 
     // Generate foreign keys
-    for (const col of table.columns.filter(c => c.references)) {
+    for (const col of table.columns.filter((c) => c.references)) {
       const fkName = `FK_${table.name}_${col.name}`;
       upStatements += `
     await queryRunner.createForeignKey(
@@ -478,8 +504,8 @@ ${upStatements}
 }
 `;
 
-  await writeFile(path.join(migrationsPath, fileName), content);
-  console.log(chalk.green(`✓ Generated migration: ${fileName}`));
+  await writeGeneratedFile(path.join(migrationsPath, fileName), content, dryRun);
+  console.log(chalk.green(`✓ ${dryRun ? 'Would generate' : 'Generated'} migration: ${fileName}`));
 
   for (const table of tables) {
     console.log(chalk.gray(`  • Table: ${table.name} (${table.columns.length} columns)`));
@@ -490,19 +516,21 @@ async function generatePrismaMigration(
   basePath: string,
   tables: TableDefinition[],
   name: string,
-  timestamp: number
+  timestamp: number,
+  customPath?: string,
+  dryRun = false,
 ): Promise<void> {
-  const migrationsPath = path.join(basePath, 'prisma/migrations');
+  const migrationsPath = customPath || path.join(basePath, 'prisma/migrations');
   const migrationDir = path.join(migrationsPath, `${timestamp}_${name}`);
 
-  await ensureDir(migrationDir);
+  if (!dryRun) await ensureDir(migrationDir);
 
   let upSql = `-- Migration: ${name}\n-- Generated at: ${new Date(timestamp).toISOString()}\n\n`;
   let downSql = `-- Rollback migration: ${name}\n\n`;
 
   for (const table of tables) {
     // Generate CREATE TABLE
-    const columnDefs = table.columns.map(col => {
+    const columnDefs = table.columns.map((col) => {
       let def = `  "${col.name}" ${col.type.toUpperCase()}`;
 
       if (col.primary) {
@@ -530,11 +558,11 @@ async function generatePrismaMigration(
     // Generate indexes
     for (const index of table.indexes) {
       const indexName = `${table.name}_${index.columns.join('_')}_idx`;
-      upSql += `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX "${indexName}" ON "${table.name}"(${index.columns.map(c => `"${c}"`).join(', ')});\n`;
+      upSql += `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX "${indexName}" ON "${table.name}"(${index.columns.map((c) => `"${c}"`).join(', ')});\n`;
     }
 
     // Generate foreign keys
-    for (const col of table.columns.filter(c => c.references)) {
+    for (const col of table.columns.filter((c) => c.references)) {
       const fkName = `${table.name}_${col.name}_fkey`;
       upSql += `ALTER TABLE "${table.name}" ADD CONSTRAINT "${fkName}" FOREIGN KEY ("${col.name}") REFERENCES "${col.references!.table}"("${col.references!.column}") ON DELETE SET NULL;\n`;
     }
@@ -545,8 +573,12 @@ async function generatePrismaMigration(
     downSql += `DROP TABLE IF EXISTS "${table.name}" CASCADE;\n`;
   }
 
-  await writeFile(path.join(migrationDir, 'migration.sql'), upSql);
-  console.log(chalk.green(`✓ Generated Prisma migration: ${timestamp}_${name}`));
+  await writeGeneratedFile(path.join(migrationDir, 'migration.sql'), upSql, dryRun);
+  console.log(
+    chalk.green(
+      `✓ ${dryRun ? 'Would generate' : 'Generated'} Prisma migration: ${timestamp}_${name}`,
+    ),
+  );
 
   for (const table of tables) {
     console.log(chalk.gray(`  • Table: ${table.name} (${table.columns.length} columns)`));
@@ -556,7 +588,7 @@ async function generatePrismaMigration(
 function toPascalCase(str: string): string {
   return str
     .split(/[-_\s]+/)
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
     .join('');
 }
 

@@ -408,6 +408,8 @@ program
   .option('-p, --path <path>', 'Path to the project', process.cwd())
   .option('-m, --module <module>', 'Module name (for generate action)')
   .option('-o, --orm <orm>', 'ORM to use (typeorm, prisma)', 'typeorm')
+  .option('--migration-path <path>', 'Custom migration output directory')
+  .option('--dry-run', 'Preview files without writing', false)
   .action(async (action, name, options) => {
     try {
       const basePath = options.path || process.cwd();
@@ -416,13 +418,23 @@ program
           console.error(chalk.red('Migration name is required'));
           process.exit(1);
         }
-        await createMigration(basePath, { name, orm: options.orm, path: options.migrationPath });
+        await createMigration(basePath, {
+          name,
+          orm: options.orm,
+          path: options.migrationPath,
+          dryRun: options.dryRun,
+        });
       } else if (action === 'generate') {
         if (!options.module) {
           console.error(chalk.red('Module name is required (--module)'));
           process.exit(1);
         }
-        await generateMigrationFromEntity(basePath, { module: options.module, orm: options.orm });
+        await generateMigrationFromEntity(basePath, {
+          module: options.module,
+          orm: options.orm,
+          path: options.migrationPath,
+          dryRun: options.dryRun,
+        });
       } else {
         console.error(chalk.red(`Unknown action: ${action}`));
         console.log(chalk.yellow('Available actions: create, generate'));

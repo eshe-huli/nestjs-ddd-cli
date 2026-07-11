@@ -5,6 +5,7 @@ import { generateEvent } from '../../src/commands/generate-event';
 import { generateController } from '../../src/commands/generate-controller';
 import { generateDomainService } from '../../src/commands/generate-domain-service';
 import { generateModule } from '../../src/commands/generate-module';
+import { createMigration } from '../../src/commands/migration';
 import { generateQuery } from '../../src/commands/generate-query';
 import { generateService } from '../../src/commands/generate-service';
 import { generateUseCase } from '../../src/commands/generate-usecase';
@@ -172,6 +173,25 @@ describe('Command Generators', () => {
       expect(plannedFiles).toContain(
         'src/modules/certifications/application/queries/get-certification.handler.ts',
       );
+    });
+
+    it('previews a migration in a custom directory without writing it', async () => {
+      const migrationsPath = path.join(testDir, 'src/migrations');
+
+      await createMigration(testDir, {
+        name: 'AccountingBaseline',
+        path: migrationsPath,
+        dryRun: true,
+      });
+
+      expect(await fs.pathExists(migrationsPath)).toBe(false);
+      expect(
+        getDryRunFiles().some(
+          (change) =>
+            path.dirname(change.filePath) === migrationsPath &&
+            path.basename(change.filePath).endsWith('-AccountingBaseline.ts'),
+        ),
+      ).toBe(true);
     });
   });
 });
