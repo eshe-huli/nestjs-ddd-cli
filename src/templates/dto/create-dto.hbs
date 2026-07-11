@@ -9,10 +9,17 @@ import {
   IsInt,
   IsNotEmpty,
   IsNumber,
+  IsObject,
   IsOptional,
   IsString,
   IsUUID,
   IsUrl,
+  ArrayMaxSize,
+  Matches,
+  Max,
+  MaxLength,
+  Min,
+  MinLength,
 } from "class-validator";
 import { Type } from "class-transformer";
 
@@ -27,7 +34,7 @@ export class Create{{entityNamePascal}}Dto {
 {{#each this.validators}}
   {{this}}
 {{/each}}
-  {{this.snakeCase}}{{#if this.isOptional}}?{{/if}}: {{this.tsType}};
+  {{this.camelCase}}{{#if this.isOptional}}?{{/if}}: {{this.tsType}};
 
 {{/each}}
 {{else}}

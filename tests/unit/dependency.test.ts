@@ -1,5 +1,9 @@
 import { describe, expect, it } from '@jest/globals';
-import { compareVersions, isNewerVersion } from '../../src/utils/dependency.utils';
+import {
+  compareVersions,
+  getNestProjectExecution,
+  isNewerVersion,
+} from '../../src/utils/dependency.utils';
 
 describe('Dependency Utils', () => {
   describe('semantic version comparison', () => {
@@ -17,5 +21,17 @@ describe('Dependency Utils', () => {
       expect(isNewerVersion('3.2.2', '3.2.2-beta.1')).toBe(true);
       expect(isNewerVersion('3.2.2-beta.1', '3.2.2')).toBe(false);
     });
+  });
+
+  it('runs Nest from the requested parent with a relative target directory', () => {
+    const execution = getNestProjectExecution('JoonaPayCliSmoke', {
+      directory: '/tmp/ddd-projects/joona-pay-cli-smoke',
+      skipInstall: true,
+    });
+
+    expect(execution.cwd).toBe('/tmp/ddd-projects');
+    expect(execution.args).toContain('joona-pay-cli-smoke');
+    expect(execution.args).not.toContain('/tmp/ddd-projects/joona-pay-cli-smoke');
+    expect(execution.args).toContain('--skip-install');
   });
 });

@@ -1,0 +1,17 @@
+import { Injectable } from "@nestjs/common";
+
+export interface {{entityNamePascal}}Input {
+  // Define validated application input.
+}
+
+export interface {{entityNamePascal}}Result {
+  // Define the use-case result contract.
+}
+
+@Injectable()
+export class {{entityNamePascal}}UseCase {
+  async execute(input: {{entityNamePascal}}Input): Promise<{{entityNamePascal}}Result> {
+    void input;
+    throw new Error("{{entityNamePascal}}UseCase is not implemented");
+  }
+}

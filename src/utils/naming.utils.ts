@@ -18,14 +18,15 @@ function sanitizeInput(str: string): string {
 export function toPascalCase(str: string): string {
   const sanitized = sanitizeInput(str);
 
-  // If the string is already PascalCase (starts with uppercase and has no separators), return as-is
-  if (/^[A-Z][a-zA-Z0-9]*$/.test(sanitized) && !/[-_ ]/.test(sanitized)) {
-    return sanitized;
+  // Preserve existing identifier casing. Lowercasing the tail here turns
+  // tenantId into Tenantid and silently changes generated domain contracts.
+  if (/^[a-zA-Z][a-zA-Z0-9]*$/.test(sanitized)) {
+    return sanitized.charAt(0).toUpperCase() + sanitized.slice(1);
   }
 
   return sanitized
     .split(/[-_ ]/)
-    .filter(word => word.length > 0)
+    .filter((word) => word.length > 0)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
     .join('');
 }

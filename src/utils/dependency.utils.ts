@@ -1,10 +1,11 @@
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import chalk from 'chalk';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /**
  * Check if a package is installed globally
@@ -126,6 +127,26 @@ export async function installNestJSCli(): Promise<void> {
   }
 }
 
+export function getNestProjectExecution(
+  projectName: string,
+  options: { directory?: string; skipInstall?: boolean } = {},
+): { args: string[]; cwd: string } {
+  const args = ['new', projectName, '--skip-git', '--package-manager', 'npm'];
+  let cwd = process.cwd();
+
+  if (options.directory) {
+    const targetDirectory = path.resolve(options.directory);
+    cwd = path.dirname(targetDirectory);
+    args.push('--directory', path.basename(targetDirectory));
+  }
+
+  if (options.skipInstall) {
+    args.push('--skip-install');
+  }
+
+  return { args, cwd };
+}
+
 /**
  * Create a new NestJS project
  */
@@ -139,18 +160,14 @@ export async function createNestJSProject(projectName: string, options: any = {}
 
     console.log(chalk.blue(`Creating new NestJS project: ${projectName}...`));
 
-    // Build the command with options
-    let command = `nest new ${projectName} --skip-git --package-manager npm`;
+    const { args, cwd } = getNestProjectExecution(projectName, options);
 
     if (options.directory) {
-      command += ` --directory ${options.directory}`;
+      await fs.ensureDir(cwd);
     }
 
-    if (options.skipInstall) {
-      command += ' --skip-install';
-    }
-
-    await execAsync(command);
+    // Avoid shell parsing of user-provided project names and paths.
+    await execFileAsync('nest', args, { cwd });
     console.log(chalk.green(`✅ NestJS project ${projectName} created successfully!`));
   } catch (error) {
     throw new Error(`Failed to create NestJS project: ${(error as Error).message}`);

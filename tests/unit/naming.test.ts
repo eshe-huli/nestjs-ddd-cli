@@ -46,6 +46,11 @@ describe('Naming Utils', () => {
       expect(toCamelCase('sanctions-screening')).toBe('sanctionsScreening');
       expect(toCamelCase('user-profile')).toBe('userProfile');
     });
+
+    it('preserves existing camelCase word boundaries', () => {
+      expect(toCamelCase('tenantId')).toBe('tenantId');
+      expect(toCamelCase('providerInvoiceId')).toBe('providerInvoiceId');
+    });
   });
 
   describe('toKebabCase', () => {

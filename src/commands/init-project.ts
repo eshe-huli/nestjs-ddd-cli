@@ -9,12 +9,17 @@ import {
 } from '../utils/dependency.utils';
 import { writeFile, generateFromTemplate, ensureDir } from '../utils/file.utils';
 import { createDefaultConfig } from '../utils/config.utils';
+import { toKebabCase } from '../utils/naming.utils';
 
 export interface InitProjectOptions {
   path?: string;
   skipInstall?: boolean;
   skipUpdate?: boolean;
   withDdd?: boolean;
+}
+
+export function resolveProjectDirectory(projectName: string, parentPath = process.cwd()): string {
+  return path.resolve(parentPath, toKebabCase(projectName));
 }
 
 export async function initProject(projectName: string, options: InitProjectOptions) {
@@ -25,8 +30,8 @@ export async function initProject(projectName: string, options: InitProjectOptio
       if (needsUpdate) {
         console.log(
           chalk.yellow(
-            `You are using nestjs-ddd-cli version ${currentVersion}, but version ${latestVersion} is available.`
-          )
+            `You are using nestjs-ddd-cli version ${currentVersion}, but version ${latestVersion} is available.`,
+          ),
         );
 
         const { shouldUpdate } = await inquirer.prompt<{ shouldUpdate: boolean }>([
@@ -47,13 +52,11 @@ export async function initProject(projectName: string, options: InitProjectOptio
     }
 
     // Determine the project directory
-    const projectDir = options.path
-      ? path.resolve(options.path, projectName)
-      : path.resolve(process.cwd(), projectName);
+    const projectDir = resolveProjectDirectory(projectName, options.path);
 
     // Create a new NestJS project
     await createNestJSProject(projectName, {
-      directory: options.path,
+      directory: projectDir,
       skipInstall: options.skipInstall,
     });
 
@@ -65,7 +68,9 @@ export async function initProject(projectName: string, options: InitProjectOptio
         'class-validator',
         'class-transformer',
       ];
-      await installDependencies(projectDir, dependencies);
+      if (!options.skipInstall) {
+        await installDependencies(projectDir, dependencies);
+      }
 
       // Create DDD folder structure
       console.log(chalk.blue('Setting up DDD folder structure...'));
@@ -91,13 +96,13 @@ export async function initProject(projectName: string, options: InitProjectOptio
 
     console.log(chalk.green(`\n✅ Project ${projectName} initialized successfully!`));
     console.log(chalk.blue(`\nNext steps:`));
-    console.log(chalk.blue(`  1. cd ${projectName}`));
+    console.log(chalk.blue(`  1. cd ${projectDir}`));
     console.log(chalk.blue(`  2. npm run start:dev`));
 
     if (options.withDdd) {
       console.log(chalk.blue(`\nTo generate DDD components, use:`));
       console.log(
-        chalk.blue(`  ddd scaffold User -m users --fields "name:string email:string:unique"`)
+        chalk.blue(`  ddd scaffold User -m users --fields "name:string email:string:unique"`),
       );
       console.log(chalk.blue(`  ddd generate module <module-name>`));
       console.log(chalk.blue(`  ddd generate entity <entity-name> -m <module-name>`));
@@ -118,7 +123,10 @@ async function createAiContextFiles(projectDir: string, projectName: string) {
   await generateFromTemplate(claudeTemplatePath, claudeOutputPath, templateData as any);
 
   // Create conventions.md
-  const conventionsTemplatePath = path.join(__dirname, '../templates/ai-context/conventions.md.hbs');
+  const conventionsTemplatePath = path.join(
+    __dirname,
+    '../templates/ai-context/conventions.md.hbs',
+  );
   const conventionsOutputPath = path.join(projectDir, 'docs/conventions.md');
   await ensureDir(path.join(projectDir, 'docs'));
   await generateFromTemplate(conventionsTemplatePath, conventionsOutputPath, templateData as any);
@@ -142,7 +150,9 @@ async function updateTsConfig(projectDir: string) {
   } catch (error) {
     // If we can't update tsconfig, that's okay - continue with the setup
     console.log(
-      chalk.yellow('  Note: Could not update tsconfig.json paths. You may need to add them manually.')
+      chalk.yellow(
+        '  Note: Could not update tsconfig.json paths. You may need to add them manually.',
+      ),
     );
   }
 }
