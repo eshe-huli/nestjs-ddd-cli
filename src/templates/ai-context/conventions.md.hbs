@@ -35,11 +35,11 @@ Use module path aliases:
 
 ```typescript
 // Good
-import { UserEntity } from "@modules/users/domain/entities/user.entity";
+import { UserEntity } from "@modules/users/application/domain/entities/user.entity";
 import { CreateUserDto } from "@modules/users/application/dto/requests/create-user.dto";
 
 // Avoid
-import { UserEntity } from "../../../domain/entities/user.entity";
+import { UserEntity } from "../../../application/domain/entities/user.entity";
 ```
 
 ## Reusable Platform Patterns
@@ -53,18 +53,18 @@ import { UserEntity } from "../../../domain/entities/user.entity";
 
 ## DTO Conventions
 
-- Request DTOs use snake_case properties (API layer)
+- Request DTOs use camelCase properties (API layer)
 - Domain entities use camelCase properties (business layer)
 - Response DTOs use camelCase properties (serialized from domain)
 
 ```typescript
-// Request DTO (snake_case input)
+// Request DTO (camelCase input)
 export class CreateUserDto {
   @IsString()
-  first_name: string;
+  firstName: string;
 
   @IsEmail()
-  email_address: string;
+  emailAddress: string;
 }
 
 // Domain Entity (camelCase)

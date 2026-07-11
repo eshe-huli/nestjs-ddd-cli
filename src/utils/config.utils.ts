@@ -33,7 +33,7 @@ const DEFAULT_CONFIG: DddConfig = {
   database: 'postgres',
   naming: {
     table: 'snake_case',
-    dto: 'snake_case',
+    dto: 'camelCase',
     file: 'kebab-case',
   },
   features: {
@@ -118,7 +118,7 @@ function mergeConfig(defaults: DddConfig, overrides: Partial<DddConfig>): DddCon
  */
 export async function getConfigValue<K extends keyof DddConfig>(
   key: K,
-  basePath?: string
+  basePath?: string,
 ): Promise<DddConfig[K]> {
   const config = await loadConfig(basePath);
   return config[key];
@@ -170,7 +170,7 @@ export function getConfigSchema(): object {
           dto: {
             type: 'string',
             enum: ['snake_case', 'camelCase'],
-            default: 'snake_case',
+            default: 'camelCase',
           },
           file: {
             type: 'string',

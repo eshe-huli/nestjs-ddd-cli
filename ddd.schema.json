@@ -29,7 +29,7 @@
         "dto": {
           "type": "string",
           "enum": ["snake_case", "camelCase"],
-          "default": "snake_case",
+          "default": "camelCase",
           "description": "DTO property naming convention"
         },
         "file": {
