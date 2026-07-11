@@ -199,7 +199,7 @@ Create `.dddrc.json` in your project root:
   "database": "postgres",
   "naming": {
     "table": "snake_case",
-    "dto": "snake_case",
+    "dto": "camelCase",
     "file": "kebab-case"
   },
   "features": {
