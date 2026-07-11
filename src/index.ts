@@ -6,6 +6,7 @@ import { generateModule } from './commands/generate-module';
 import { generateEntity } from './commands/generate-entity';
 import { generateUseCase } from './commands/generate-usecase';
 import { generateService } from './commands/generate-service';
+import { generateController } from './commands/generate-controller';
 import { generateEvent } from './commands/generate-event';
 import { generateQuery } from './commands/generate-query';
 import { generateAll } from './commands/generate-all';
@@ -100,7 +101,7 @@ program
   .command('generate <type> <name>')
   .alias('g')
   .description(
-    'Generate boilerplate code (types: module, entity, usecase, service, event, query, all)',
+    'Generate boilerplate code (types: module, entity, controller, usecase, service, event, query, all)',
   )
   .option('-m, --module <module>', 'Module name')
   .option('-p, --path <path>', 'Base path for generation', process.cwd())
@@ -126,6 +127,9 @@ program
         case 'entity':
           await generateEntity(name, options);
           break;
+        case 'controller':
+          await generateController(name, options);
+          break;
         case 'usecase':
         case 'use-case':
           await generateUseCase(name, options);
@@ -145,7 +149,9 @@ program
         default:
           console.error(chalk.red(`Unknown type: ${type}`));
           console.log(
-            chalk.yellow('Available types: module, entity, usecase, service, event, query, all'),
+            chalk.yellow(
+              'Available types: module, entity, controller, usecase, service, event, query, all',
+            ),
           );
           process.exit(1);
       }

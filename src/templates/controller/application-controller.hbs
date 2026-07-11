@@ -1,0 +1,7 @@
+import { Controller } from "@nestjs/common";
+import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
+
+@ApiTags("{{entityNamePluralPascal}}")
+@ApiBearerAuth()
+@Controller("{{entityNamePluralKebab}}")
+export class {{entityNamePascal}}Controller {}

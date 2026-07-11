@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { generateEvent } from '../../src/commands/generate-event';
+import { generateController } from '../../src/commands/generate-controller';
 import { generateDomainService } from '../../src/commands/generate-domain-service';
 import { generateModule } from '../../src/commands/generate-module';
 import { generateQuery } from '../../src/commands/generate-query';
@@ -51,6 +52,31 @@ describe('Command Generators', () => {
           ),
         ),
       ).toBe(true);
+    });
+  });
+
+  describe('Controller Generator', () => {
+    it('generates a registered application controller shell', async () => {
+      await generateModule('fne-certifications', { path: testDir });
+      await generateController('FneCertification', {
+        module: 'fne-certifications',
+        path: testDir,
+      });
+
+      const controllerPath = path.join(
+        testDir,
+        'src/modules/fne-certifications/application/controllers/fne-certification.controller.ts',
+      );
+      const controllerIndex = await fs.readFile(
+        path.join(testDir, 'src/modules/fne-certifications/application/controllers/index.ts'),
+        'utf-8',
+      );
+
+      expect(await fs.pathExists(controllerPath)).toBe(true);
+      expect(await fs.readFile(controllerPath, 'utf-8')).toContain(
+        '@Controller("fne-certifications")',
+      );
+      expect(controllerIndex).toContain('FneCertificationController');
     });
   });
 
@@ -121,6 +147,7 @@ describe('Command Generators', () => {
       const options = { module: 'certifications', path: testDir, dryRun: true };
 
       await generateModule('certifications', { path: testDir, dryRun: true });
+      await generateController('Certification', options);
       await generateService('CertificationGateway', options);
       await generateUseCase('RequestCertification', options);
       await generateEvent('CertificationRequested', options);
@@ -129,6 +156,9 @@ describe('Command Generators', () => {
       expect(await fs.pathExists(path.join(testDir, 'src'))).toBe(false);
       const plannedFiles = getDryRunFiles().map((change) =>
         path.relative(testDir, change.filePath),
+      );
+      expect(plannedFiles).toContain(
+        'src/modules/certifications/application/controllers/certification.controller.ts',
       );
       expect(plannedFiles).toContain(
         'src/modules/certifications/application/domain/services/certification-gateway.service.ts',
