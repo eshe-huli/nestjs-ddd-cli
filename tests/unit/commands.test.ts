@@ -5,7 +5,7 @@ import { generateEvent } from '../../src/commands/generate-event';
 import { generateController } from '../../src/commands/generate-controller';
 import { generateDomainService } from '../../src/commands/generate-domain-service';
 import { generateModule } from '../../src/commands/generate-module';
-import { createMigration } from '../../src/commands/migration';
+import { createMigration, resolveMigrationOutputPath } from '../../src/commands/migration';
 import { generateQuery } from '../../src/commands/generate-query';
 import { generateService } from '../../src/commands/generate-service';
 import { generateUseCase } from '../../src/commands/generate-usecase';
@@ -192,6 +192,39 @@ describe('Command Generators', () => {
             path.basename(change.filePath).endsWith('-AccountingBaseline.ts'),
         ),
       ).toBe(true);
+    });
+
+    it('allows a shared migration directory inside a monorepo workspace', async () => {
+      const workspacePath = path.join(testDir, 'workspace');
+      const appPath = path.join(workspacePath, 'apps/accounting-api');
+      const migrationsPath = path.join(workspacePath, 'packages/infra/src/migrations');
+      await fs.ensureDir(path.join(workspacePath, '.git'));
+      await fs.ensureDir(appPath);
+
+      await createMigration(appPath, {
+        name: 'CustomerSettlementFields',
+        path: '../../packages/infra/src/migrations',
+        dryRun: true,
+      });
+
+      expect(
+        getDryRunFiles().some(
+          (change) =>
+            path.dirname(change.filePath) === migrationsPath &&
+            path.basename(change.filePath).endsWith('-CustomerSettlementFields.ts'),
+        ),
+      ).toBe(true);
+    });
+
+    it('rejects a migration directory outside the workspace', async () => {
+      const workspacePath = path.join(testDir, 'workspace');
+      const appPath = path.join(workspacePath, 'apps/accounting-api');
+      await fs.ensureDir(path.join(workspacePath, '.git'));
+      await fs.ensureDir(appPath);
+
+      expect(() =>
+        resolveMigrationOutputPath(appPath, '../../../outside', 'src/database/migrations'),
+      ).toThrow('Migration path escapes the project workspace');
     });
   });
 });

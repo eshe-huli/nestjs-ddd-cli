@@ -36,6 +36,44 @@ interface TableDefinition {
   indexes: Array<{ columns: string[]; unique: boolean }>;
 }
 
+export function resolveMigrationOutputPath(
+  basePath: string,
+  customPath: string | undefined,
+  defaultPath: string,
+): string {
+  const projectPath = path.resolve(basePath);
+  const workspacePath = findWorkspaceRoot(projectPath);
+  const outputPath = customPath
+    ? path.resolve(projectPath, customPath)
+    : path.resolve(projectPath, defaultPath);
+  const relative = path.relative(workspacePath, outputPath);
+
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error('Migration path escapes the project workspace');
+  }
+
+  return outputPath;
+}
+
+function findWorkspaceRoot(startPath: string): string {
+  let current = startPath;
+
+  while (true) {
+    if (
+      fs.existsSync(path.join(current, '.git')) ||
+      fs.existsSync(path.join(current, 'pnpm-workspace.yaml'))
+    ) {
+      return current;
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return startPath;
+    }
+    current = parent;
+  }
+}
+
 export async function createMigration(basePath: string, options: MigrationOptions): Promise<void> {
   const orm = options.orm || 'typeorm';
   const timestamp = Date.now();
@@ -57,7 +95,11 @@ async function createTypeOrmMigration(
   customPath?: string,
   dryRun = false,
 ): Promise<void> {
-  const migrationsPath = customPath || path.join(basePath, 'src/database/migrations');
+  const migrationsPath = resolveMigrationOutputPath(
+    basePath,
+    customPath,
+    'src/database/migrations',
+  );
   if (!dryRun) await ensureDir(migrationsPath);
 
   const className = `${toPascalCase(name)}${timestamp}`;
@@ -123,7 +165,7 @@ async function createPrismaMigration(
   customPath?: string,
   dryRun = false,
 ): Promise<void> {
-  const migrationsPath = customPath || path.join(basePath, 'prisma/migrations');
+  const migrationsPath = resolveMigrationOutputPath(basePath, customPath, 'prisma/migrations');
   const migrationDir = path.join(migrationsPath, `${timestamp}_${name}`);
 
   if (!dryRun) await ensureDir(migrationDir);
@@ -399,7 +441,11 @@ async function generateTypeOrmMigration(
   customPath?: string,
   dryRun = false,
 ): Promise<void> {
-  const migrationsPath = customPath || path.join(basePath, 'src/database/migrations');
+  const migrationsPath = resolveMigrationOutputPath(
+    basePath,
+    customPath,
+    'src/database/migrations',
+  );
   if (!dryRun) await ensureDir(migrationsPath);
 
   const className = `${toPascalCase(name)}${timestamp}`;
@@ -520,7 +566,7 @@ async function generatePrismaMigration(
   customPath?: string,
   dryRun = false,
 ): Promise<void> {
-  const migrationsPath = customPath || path.join(basePath, 'prisma/migrations');
+  const migrationsPath = resolveMigrationOutputPath(basePath, customPath, 'prisma/migrations');
   const migrationDir = path.join(migrationsPath, `${timestamp}_${name}`);
 
   if (!dryRun) await ensureDir(migrationDir);
