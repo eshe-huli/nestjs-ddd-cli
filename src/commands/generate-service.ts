@@ -9,20 +9,20 @@ export async function generateService(serviceName: string, options: any) {
   }
 
   console.log(chalk.blue(`Generating domain service: ${serviceName}`));
-  
+
   const basePath = options.path || process.cwd();
   const modulePath = getModulePath(basePath, options.module);
-  
+
   // Generate domain service
   const templateData = prepareTemplateData(serviceName, options.module);
   const templatePath = path.join(__dirname, '../templates/service/domain-service.hbs');
   const outputPath = path.join(
     modulePath,
-    'domain/services',
-    `${toKebabCase(serviceName)}.service.ts`
+    'application/domain/services',
+    `${toKebabCase(serviceName)}.service.ts`,
   );
-  
+
   await generateFromTemplate(templatePath, outputPath, templateData);
-  
+
   console.log(chalk.green(`✅ Domain service ${serviceName} generated successfully!`));
 }

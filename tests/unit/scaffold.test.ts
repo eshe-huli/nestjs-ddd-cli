@@ -69,6 +69,39 @@ describe('Scaffold Generator', () => {
     );
   });
 
+  it('preserves camelCase contracts and imports every emitted validator', async () => {
+    await generateAll('Certification', {
+      module: 'certifications',
+      path: testDir,
+      fields: 'tenantId:uuid phoneNumber:string metadata:json amount:decimal tags:string[]',
+    });
+
+    const entityContent = await fs.readFile(
+      path.join(
+        testDir,
+        'src/modules/certifications/application/domain/entities/certification.entity.ts',
+      ),
+      'utf-8',
+    );
+    const dtoContent = await fs.readFile(
+      path.join(
+        testDir,
+        'src/modules/certifications/application/dto/requests/create-certification.dto.ts',
+      ),
+      'utf-8',
+    );
+
+    expect(entityContent).toContain('tenantId: string;');
+    expect(entityContent).not.toContain('tenantid');
+    expect(dtoContent).toContain('tenantId: string;');
+    expect(dtoContent).toMatch(/\bMatches\b/);
+    expect(dtoContent).toMatch(/\bMaxLength\b/);
+    expect(dtoContent).toMatch(/\bIsObject\b/);
+    expect(dtoContent).toMatch(/\bMin\b/);
+    expect(dtoContent).toMatch(/\bMax\b/);
+    expect(dtoContent).toMatch(/\bArrayMaxSize\b/);
+  });
+
   it('merges barrel indexes across scaffold runs without dropping existing registrations', async () => {
     await generateAll('ExecutionIntent', {
       module: 'capital-markets',

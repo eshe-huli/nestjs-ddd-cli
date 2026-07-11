@@ -6,6 +6,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import chalk from 'chalk';
+import { getModulePath } from '../utils/file.utils';
 
 export interface DomainServiceOptions {
   path?: string;
@@ -16,12 +17,13 @@ export interface DomainServiceOptions {
 export async function generateDomainService(
   name: string,
   basePath: string,
-  options: DomainServiceOptions = {}
+  options: DomainServiceOptions = {},
 ): Promise<void> {
   console.log(chalk.bold.blue('\n🔧 Generating Domain Service\n'));
 
   const moduleName = options.module || 'shared';
-  const servicePath = path.join(basePath, 'src', moduleName, 'domain', 'services');
+  const modulePath = getModulePath(basePath, moduleName);
+  const servicePath = path.join(modulePath, 'application', 'domain', 'services');
 
   if (!fs.existsSync(servicePath)) {
     fs.mkdirSync(servicePath, { recursive: true });
@@ -519,7 +521,7 @@ export function policy(): PolicyBuilder {
  */
 export async function setupDomainServiceInfrastructure(
   basePath: string,
-  options: DomainServiceOptions = {}
+  _options: DomainServiceOptions = {},
 ): Promise<void> {
   console.log(chalk.bold.blue('\n🔧 Setting up Domain Service Infrastructure\n'));
 
@@ -787,6 +789,6 @@ function toKebabCase(str: string): string {
 
 function toPascalCase(str: string): string {
   return str
-    .replace(/[-_\s]+(.)?/g, (_, c) => c ? c.toUpperCase() : '')
-    .replace(/^(.)/, c => c.toUpperCase());
+    .replace(/[-_\s]+(.)?/g, (_, c) => (c ? c.toUpperCase() : ''))
+    .replace(/^(.)/, (c) => c.toUpperCase());
 }

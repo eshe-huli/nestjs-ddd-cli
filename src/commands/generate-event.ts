@@ -9,20 +9,20 @@ export async function generateEvent(eventName: string, options: any) {
   }
 
   console.log(chalk.blue(`Generating domain event: ${eventName}`));
-  
+
   const basePath = options.path || process.cwd();
   const modulePath = getModulePath(basePath, options.module);
-  
+
   // Generate domain event
   const templateData = prepareTemplateData(eventName, options.module);
   const templatePath = path.join(__dirname, '../templates/event/domain-event.hbs');
   const outputPath = path.join(
     modulePath,
-    'domain/events',
-    `${toKebabCase(eventName)}.event.ts`
+    'application/domain/events',
+    `${toKebabCase(eventName)}.event.ts`,
   );
-  
+
   await generateFromTemplate(templatePath, outputPath, templateData);
-  
+
   console.log(chalk.green(`✅ Domain event ${eventName} generated successfully!`));
 }
