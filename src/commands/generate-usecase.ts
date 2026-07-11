@@ -8,6 +8,7 @@ export async function generateUseCase(useCaseName: string, options: any) {
     throw new Error('Module name is required. Use -m or --module option.');
   }
 
+  const dryRun = !!options.dryRun;
   console.log(chalk.blue(`Generating use case: ${useCaseName}`));
 
   const basePath = options.path || process.cwd();
@@ -23,9 +24,15 @@ export async function generateUseCase(useCaseName: string, options: any) {
     `${toKebabCase(useCaseName)}.use-case.ts`,
   );
 
-  await generateFromTemplate(useCaseTemplatePath, useCaseOutputPath, templateData);
+  await generateFromTemplate(useCaseTemplatePath, useCaseOutputPath, templateData, dryRun);
 
-  console.log(chalk.green(`✅ Use case ${useCaseName} generated successfully!`));
+  console.log(
+    chalk.green(
+      dryRun
+        ? `Use case ${useCaseName} preview complete.`
+        : `✅ Use case ${useCaseName} generated successfully!`,
+    ),
+  );
   console.log(
     chalk.yellow(`\n⚠️  Remember to export it from application/domain/usecases/index.ts`),
   );

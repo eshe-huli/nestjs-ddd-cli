@@ -8,21 +8,28 @@ export async function generateQuery(queryName: string, options: any) {
     throw new Error('Module name is required. Use -m option to specify the module.');
   }
 
+  const dryRun = !!options.dryRun;
   console.log(chalk.blue(`Generating query handler: ${queryName}`));
-  
+
   const basePath = options.path || process.cwd();
   const modulePath = getModulePath(basePath, options.module);
-  
+
   // Generate query handler
   const templateData = prepareTemplateData(queryName, options.module);
   const templatePath = path.join(__dirname, '../templates/query/query-handler.hbs');
   const outputPath = path.join(
     modulePath,
     'application/queries',
-    `${toKebabCase(queryName)}.handler.ts`
+    `${toKebabCase(queryName)}.handler.ts`,
   );
-  
-  await generateFromTemplate(templatePath, outputPath, templateData);
-  
-  console.log(chalk.green(`✅ Query handler ${queryName} generated successfully!`));
+
+  await generateFromTemplate(templatePath, outputPath, templateData, dryRun);
+
+  console.log(
+    chalk.green(
+      dryRun
+        ? `Query handler ${queryName} preview complete.`
+        : `✅ Query handler ${queryName} generated successfully!`,
+    ),
+  );
 }

@@ -70,6 +70,7 @@ import { setupDatabaseSeeding } from './commands/database-seeding';
 import { setupHealthProbesAdvanced } from './commands/health-probes-advanced';
 import { setupMetricsPrometheus } from './commands/metrics-prometheus';
 import { setupGraphQLSubscriptions } from './commands/graphql-subscriptions';
+import { getDryRunFiles, resetDryRunFiles } from './utils/file.utils';
 
 const program = new Command();
 
@@ -110,9 +111,14 @@ program
   .option('--with-events', 'Include domain events')
   .option('--with-queries', 'Include query handlers')
   .option('--with-graphql', 'Generate GraphQL resolvers and types')
+  .option('--dry-run', 'Preview files that would be generated without writing', false)
   .option('--install-deps', 'Install required dependencies', false)
   .action(async (type, name, options) => {
     try {
+      if (options.dryRun) {
+        resetDryRunFiles();
+      }
+
       switch (type.toLowerCase()) {
         case 'module':
           await generateModule(name, options);
@@ -142,6 +148,14 @@ program
             chalk.yellow('Available types: module, entity, usecase, service, event, query, all'),
           );
           process.exit(1);
+      }
+
+      if (options.dryRun && type.toLowerCase() !== 'all') {
+        const plannedFiles = getDryRunFiles();
+        console.log(chalk.yellow('\nDry run: no files were written.'));
+        for (const change of plannedFiles) {
+          console.log(chalk.gray(`  ${change.action}: ${change.filePath}`));
+        }
       }
     } catch (error) {
       console.error(chalk.red('Error:'), (error as Error).message);

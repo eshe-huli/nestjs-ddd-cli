@@ -69,7 +69,13 @@ export async function generateModule(moduleName: string, options: any) {
     await generateIndexFile(path.join(modulePath, indexPath), arrayName, dryRun);
   }
 
-  console.log(chalk.green(`✅ Module ${moduleName} generated successfully!`));
+  console.log(
+    chalk.green(
+      dryRun
+        ? `Module ${moduleName} preview complete.`
+        : `✅ Module ${moduleName} generated successfully!`,
+    ),
+  );
 }
 
 function getArrayNameFromPath(indexPath: string): string {

@@ -8,6 +8,7 @@ export async function generateEvent(eventName: string, options: any) {
     throw new Error('Module name is required. Use -m option to specify the module.');
   }
 
+  const dryRun = !!options.dryRun;
   console.log(chalk.blue(`Generating domain event: ${eventName}`));
 
   const basePath = options.path || process.cwd();
@@ -22,7 +23,13 @@ export async function generateEvent(eventName: string, options: any) {
     `${toKebabCase(eventName)}.event.ts`,
   );
 
-  await generateFromTemplate(templatePath, outputPath, templateData);
+  await generateFromTemplate(templatePath, outputPath, templateData, dryRun);
 
-  console.log(chalk.green(`✅ Domain event ${eventName} generated successfully!`));
+  console.log(
+    chalk.green(
+      dryRun
+        ? `Domain event ${eventName} preview complete.`
+        : `✅ Domain event ${eventName} generated successfully!`,
+    ),
+  );
 }

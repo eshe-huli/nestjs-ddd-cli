@@ -8,6 +8,7 @@ export async function generateService(serviceName: string, options: any) {
     throw new Error('Module name is required. Use -m option to specify the module.');
   }
 
+  const dryRun = !!options.dryRun;
   console.log(chalk.blue(`Generating domain service: ${serviceName}`));
 
   const basePath = options.path || process.cwd();
@@ -22,7 +23,13 @@ export async function generateService(serviceName: string, options: any) {
     `${toKebabCase(serviceName)}.service.ts`,
   );
 
-  await generateFromTemplate(templatePath, outputPath, templateData);
+  await generateFromTemplate(templatePath, outputPath, templateData, dryRun);
 
-  console.log(chalk.green(`✅ Domain service ${serviceName} generated successfully!`));
+  console.log(
+    chalk.green(
+      dryRun
+        ? `Domain service ${serviceName} preview complete.`
+        : `✅ Domain service ${serviceName} generated successfully!`,
+    ),
+  );
 }

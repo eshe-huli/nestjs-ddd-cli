@@ -7,10 +7,12 @@ import { generateModule } from '../../src/commands/generate-module';
 import { generateQuery } from '../../src/commands/generate-query';
 import { generateService } from '../../src/commands/generate-service';
 import { generateUseCase } from '../../src/commands/generate-usecase';
+import { getDryRunFiles, resetDryRunFiles } from '../../src/utils/file.utils';
 
 describe('Command Generators', () => {
   const testDir = path.join(__dirname, '../.test-output');
   beforeEach(async () => {
+    resetDryRunFiles();
     await fs.ensureDir(testDir);
     await fs.emptyDir(testDir);
   });
@@ -111,6 +113,35 @@ describe('Command Generators', () => {
       expect(content).toContain('TestQueryQuery');
       expect(content).toContain('TestQueryHandler');
       expect(content).toContain('IQueryHandler');
+    });
+  });
+
+  describe('Dry-run generation', () => {
+    it('reports focused generators without writing module files', async () => {
+      const options = { module: 'certifications', path: testDir, dryRun: true };
+
+      await generateModule('certifications', { path: testDir, dryRun: true });
+      await generateService('CertificationGateway', options);
+      await generateUseCase('RequestCertification', options);
+      await generateEvent('CertificationRequested', options);
+      await generateQuery('GetCertification', options);
+
+      expect(await fs.pathExists(path.join(testDir, 'src'))).toBe(false);
+      const plannedFiles = getDryRunFiles().map((change) =>
+        path.relative(testDir, change.filePath),
+      );
+      expect(plannedFiles).toContain(
+        'src/modules/certifications/application/domain/services/certification-gateway.service.ts',
+      );
+      expect(plannedFiles).toContain(
+        'src/modules/certifications/application/domain/usecases/request-certification.use-case.ts',
+      );
+      expect(plannedFiles).toContain(
+        'src/modules/certifications/application/domain/events/certification-requested.event.ts',
+      );
+      expect(plannedFiles).toContain(
+        'src/modules/certifications/application/queries/get-certification.handler.ts',
+      );
     });
   });
 });
