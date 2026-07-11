@@ -343,6 +343,7 @@ program
   .command('doctor')
   .description('Check project health and validate DDD structure')
   .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option('--app <workspace>', 'NestJS app workspace path or name inside a monorepo')
   .option('--enhanced', 'Run enhanced doctor with DDD pattern checks', false)
   .option('--fix', 'Auto-fix issues where possible', false)
   .option('-v, --verbose', 'Show detailed output', false)
