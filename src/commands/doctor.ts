@@ -79,7 +79,9 @@ export async function runDoctor(options: DoctorOptions) {
   }
 
   console.log('\n' + chalk.bold('Summary:'));
-  console.log(`  ${chalk.green(`${passCount} passed`)}, ${chalk.yellow(`${warnCount} warnings`)}, ${chalk.red(`${failCount} failed`)}`);
+  console.log(
+    `  ${chalk.green(`${passCount} passed`)}, ${chalk.yellow(`${warnCount} warnings`)}, ${chalk.red(`${failCount} failed`)}`,
+  );
 
   if (failCount > 0) {
     console.log(chalk.red('\n⚠️  Some checks failed. Run the suggested fixes above.'));
@@ -99,7 +101,7 @@ async function checkFile(
   basePath: string,
   filePath: string,
   name: string,
-  optional = false
+  optional = false,
 ): Promise<CheckResult> {
   const fullPath = path.join(basePath, filePath);
   const exists = await fileExists(fullPath);
@@ -119,7 +121,7 @@ async function checkDirectory(
   basePath: string,
   dirPath: string,
   name: string,
-  optional = false
+  optional = false,
 ): Promise<CheckResult> {
   const fullPath = path.join(basePath, dirPath);
   const exists = await fileExists(fullPath);
@@ -135,14 +137,14 @@ async function checkDirectory(
   return { name, status: 'fail', message: `Not found - run 'ddd init' or create manually` };
 }
 
-async function checkDependency(
+export async function checkDependency(
   basePath: string,
   packageName: string,
   name: string,
-  optional = false
+  optional = false,
 ): Promise<CheckResult> {
   try {
-    const packageJsonPath = path.join(basePath, 'package.json');
+    const packageJsonPath = path.resolve(basePath, 'package.json');
     const packageJson = require(packageJsonPath);
 
     const deps = {

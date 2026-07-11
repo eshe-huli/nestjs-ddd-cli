@@ -334,7 +334,8 @@ program
           verbose: options.verbose,
         });
       } else {
-        await runDoctor(options);
+        const healthy = await runDoctor(options);
+        if (!healthy) process.exitCode = 1;
       }
     } catch (error) {
       console.error(chalk.red('Error:'), (error as Error).message);
