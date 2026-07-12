@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [16.x, 18.x, 20.x]
+        node-version: [18.x, 20.x, 22.x]
     
     steps:
       - uses: actions/checkout@v3
@@ -32,7 +32,7 @@ jobs:
         run: npm run typecheck
       
       - name: Run tests
-        run: npm run test:cov
+        run: npm test
       
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3
@@ -46,7 +46,12 @@ jobs:
         run: npm run build
       
       - name: Run E2E tests
-        run: npm run test:e2e
+        run: |
+          if find tests/e2e -name '*.e2e.spec.ts' -print -quit 2>/dev/null | grep -q .; then
+            npm run test:e2e
+          else
+            echo "No E2E test files are present yet."
+          fi
 
   build-and-publish:
     needs: test

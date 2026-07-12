@@ -102,6 +102,41 @@ describe('Scaffold Generator', () => {
     expect(dtoContent).toMatch(/\bArrayMaxSize\b/);
   });
 
+  it('generates tests with resolvable sibling imports', async () => {
+    await generateAll('PermissionAssignment', {
+      module: 'permissions',
+      path: testDir,
+      fields: 'subjectId:string active:boolean',
+      withTests: true,
+    });
+
+    const controllerTest = await fs.readFile(
+      path.join(
+        testDir,
+        'src/modules/permissions/application/controllers/permission-assignment.controller.spec.ts',
+      ),
+      'utf-8',
+    );
+    const repositoryTest = await fs.readFile(
+      path.join(
+        testDir,
+        'src/modules/permissions/infrastructure/repositories/permission-assignment.repository.spec.ts',
+      ),
+      'utf-8',
+    );
+    const useCaseTest = await fs.readFile(
+      path.join(
+        testDir,
+        'src/modules/permissions/application/domain/usecases/permission-assignment.use-case.spec.ts',
+      ),
+      'utf-8',
+    );
+
+    expect(controllerTest).toContain('from "./permission-assignment.controller"');
+    expect(repositoryTest).toContain('from "./permission-assignment.repository"');
+    expect(useCaseTest).toContain('from "./create-permission-assignment.use-case"');
+  });
+
   it('merges barrel indexes across scaffold runs without dropping existing registrations', async () => {
     await generateAll('ExecutionIntent', {
       module: 'capital-markets',
