@@ -50,7 +50,7 @@
   },
   "homepage": "https://github.com/eshe-huli/nestjs-ddd-cli#readme",
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=18.0.0"
   },
   "files": [
     "dist",
