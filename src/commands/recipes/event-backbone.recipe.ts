@@ -100,11 +100,13 @@ export enum OutboxEventStatus {
 }
 
 export interface OutboxPublishInput<TPayload extends EventPayload = EventPayload> {
+  eventId: string;
   type: string;
   source: string;
   aggregateType: string;
   aggregateId: string;
   streamId: string;
+  version: number;
   payload: TPayload;
   metadata?: EventBackboneMetadata;
   occurredAt?: Date;
@@ -132,7 +134,7 @@ export const eventBackboneEnvSchema = {
     .when("PULSAR_ENABLED", {
       is: true,
       then: Joi.required(),
-      otherwise: Joi.optional(),
+      otherwise: Joi.string().allow("").optional(),
     }),
   PULSAR_TENANT: Joi.string().default("public"),
   PULSAR_NAMESPACE: Joi.string().default("default"),
@@ -259,6 +261,9 @@ export class OutboxEventOrmEntity {
 
   @Column({ type: "varchar", length: 160, name: "stream_id" })
   streamId!: string;
+
+  @Column({ type: "int" })
+  version!: number;
 
   @Column({ type: "varchar", length: 160, nullable: true })
   subject!: string | null;
@@ -466,8 +471,7 @@ export class EventStoreService {
 
   await writeFile(path.join(eventBackbonePath, 'event-store.service.ts'), eventStoreServiceContent);
 
-  const outboxServiceContent = `import { randomUUID } from "crypto";
-import { Injectable } from "@nestjs/common";
+  const outboxServiceContent = `import { Injectable } from "@nestjs/common";
 import { DataSource, EntityManager } from "typeorm";
 import {
   OutboxEventStatus,
@@ -491,13 +495,14 @@ export class OutboxService {
     const now = new Date();
     const repository = manager.getRepository(OutboxEventOrmEntity);
     const event = repository.create({
-      id: randomUUID(),
+      id: input.eventId,
       reference: input.reference ?? null,
       eventType: input.type,
       source: input.source,
       aggregateType: input.aggregateType,
       aggregateId: input.aggregateId,
       streamId: input.streamId,
+      version: input.version,
       subject: input.subject ?? null,
       payload: input.payload,
       metadata: input.metadata ?? {},
@@ -631,11 +636,11 @@ import { ConfigService } from "@nestjs/config";
 import { Interval } from "@nestjs/schedule";
 import { DataSource } from "typeorm";
 import { EVENT_BACKBONE_ENV, EVENT_BACKBONE_PUBLISHER } from "./event-backbone.constants";
-import {
+import type {
   EventBackboneEnvelope,
   EventBackbonePublisher,
-  OutboxEventStatus,
 } from "./event-backbone.types";
+import { OutboxEventStatus } from "./event-backbone.types";
 import { OutboxEventOrmEntity } from "./entities/outbox-event.orm-entity";
 
 interface ClaimedOutboxRow {
@@ -646,6 +651,7 @@ interface ClaimedOutboxRow {
   aggregate_type: string;
   aggregate_id: string;
   stream_id: string;
+  version: number;
   subject: string | null;
   payload: Record<string, unknown>;
   metadata: Record<string, unknown>;
@@ -683,7 +689,10 @@ export class OutboxRelayService {
   }
 
   private enabled(): boolean {
-    return this.configService.get<string>(EVENT_BACKBONE_ENV.relayEnabled, "true") !== "false";
+    return (
+      this.booleanEnv(EVENT_BACKBONE_ENV.relayEnabled, true) &&
+      this.booleanEnv(EVENT_BACKBONE_ENV.pulsarEnabled, false)
+    );
   }
 
   private async claimBatch(): Promise<ClaimedOutboxRow[]> {
@@ -691,25 +700,29 @@ export class OutboxRelayService {
     const maxAttempts = this.integerEnv(EVENT_BACKBONE_ENV.relayMaxAttempts, 10);
 
     return this.dataSource.transaction(async (manager) => {
-      const rows = await manager.query(
+      const result = await manager.query(
         "UPDATE outbox_events " +
           "SET status = $1, attempts = attempts + 1, updated_at = now() " +
           "WHERE id IN (" +
           "SELECT id FROM outbox_events " +
-          "WHERE status IN ($2, $3) AND available_at <= now() AND attempts < $4 " +
+          "WHERE ((status IN ($2, $3) AND available_at <= now()) " +
+          "OR (status = $4 AND updated_at < now() - interval '5 minutes')) " +
+          "AND attempts < $5 " +
           "ORDER BY available_at ASC " +
-          "LIMIT $5 " +
+          "LIMIT $6 " +
           "FOR UPDATE SKIP LOCKED" +
           ") RETURNING *",
         [
           OutboxEventStatus.Publishing,
           OutboxEventStatus.Pending,
           OutboxEventStatus.Failed,
+          OutboxEventStatus.Publishing,
           maxAttempts,
           batchSize,
         ],
       );
 
+      const rows = Array.isArray(result[0]) ? result[0] : result;
       return rows as ClaimedOutboxRow[];
     });
   }
@@ -753,6 +766,7 @@ export class OutboxRelayService {
       aggregateType: row.aggregate_type,
       aggregateId: row.aggregate_id,
       streamId: row.stream_id,
+      version: row.version,
       subject: row.subject ?? undefined,
       payload: row.payload,
       metadata: row.metadata ?? {},
@@ -763,6 +777,11 @@ export class OutboxRelayService {
   private integerEnv(key: string, fallback: number): number {
     const value = Number(this.configService.get<string>(key));
     return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+  }
+
+  private booleanEnv(key: string, fallback: boolean): boolean {
+    const value = this.configService.get<boolean | string>(key, fallback);
+    return value === true || value === "true";
   }
 }
 `;
@@ -803,8 +822,11 @@ import { PulsarEventPublisher } from "./publishers/pulsar-event.publisher";
       provide: EVENT_BACKBONE_PUBLISHER,
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
-        const pulsarEnabled =
-          configService.get<string>(EVENT_BACKBONE_ENV.pulsarEnabled) === "true";
+        const configured = configService.get<boolean | string>(
+          EVENT_BACKBONE_ENV.pulsarEnabled,
+          false,
+        );
+        const pulsarEnabled = configured === true || configured === "true";
         return pulsarEnabled
           ? new PulsarEventPublisher(configService)
           : new NoopEventPublisher();
@@ -842,10 +864,11 @@ export class ${migrationName} implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query('CREATE TABLE IF NOT EXISTS "event_store" ("global_seq" bigserial PRIMARY KEY, "event_id" uuid NOT NULL, "reference" varchar(96), "stream_id" varchar(160) NOT NULL, "version" int NOT NULL, "type" varchar(160) NOT NULL, "aggregate_type" varchar(96) NOT NULL, "aggregate_id" varchar(96) NOT NULL, "payload" jsonb NOT NULL, "metadata" jsonb NOT NULL DEFAULT \\'{}\\'::jsonb, "occurred_at" timestamptz NOT NULL, "created_at" timestamptz NOT NULL DEFAULT now(), CONSTRAINT "uq_event_store_stream_version" UNIQUE ("stream_id", "version"))');
     await queryRunner.query('CREATE INDEX IF NOT EXISTS "idx_event_store_stream" ON "event_store" ("stream_id")');
+    await queryRunner.query('CREATE UNIQUE INDEX IF NOT EXISTS "idx_event_store_event_id" ON "event_store" ("event_id")');
     await queryRunner.query('CREATE INDEX IF NOT EXISTS "idx_event_store_type" ON "event_store" ("type")');
     await queryRunner.query('CREATE INDEX IF NOT EXISTS "idx_event_store_aggregate" ON "event_store" ("aggregate_type", "aggregate_id")');
 
-    await queryRunner.query('CREATE TABLE IF NOT EXISTS "outbox_events" ("id" uuid PRIMARY KEY, "reference" varchar(96), "event_type" varchar(160) NOT NULL, "source" varchar(160) NOT NULL, "aggregate_type" varchar(96) NOT NULL, "aggregate_id" varchar(96) NOT NULL, "stream_id" varchar(160) NOT NULL, "subject" varchar(160), "payload" jsonb NOT NULL, "metadata" jsonb NOT NULL DEFAULT \\'{}\\'::jsonb, "status" varchar(20) NOT NULL DEFAULT \\'PENDING\\', "attempts" int NOT NULL DEFAULT 0, "available_at" timestamptz NOT NULL, "occurred_at" timestamptz NOT NULL, "published_at" timestamptz, "last_error" text, "created_at" timestamptz NOT NULL DEFAULT now(), "updated_at" timestamptz NOT NULL DEFAULT now(), CONSTRAINT "chk_outbox_events_status" CHECK ("status" IN (\\'PENDING\\', \\'PUBLISHING\\', \\'PUBLISHED\\', \\'FAILED\\')))');
+    await queryRunner.query('CREATE TABLE IF NOT EXISTS "outbox_events" ("id" uuid PRIMARY KEY, "reference" varchar(96), "event_type" varchar(160) NOT NULL, "source" varchar(160) NOT NULL, "aggregate_type" varchar(96) NOT NULL, "aggregate_id" varchar(96) NOT NULL, "stream_id" varchar(160) NOT NULL, "version" int NOT NULL, "subject" varchar(160), "payload" jsonb NOT NULL, "metadata" jsonb NOT NULL DEFAULT \\'{}\\'::jsonb, "status" varchar(20) NOT NULL DEFAULT \\'PENDING\\', "attempts" int NOT NULL DEFAULT 0, "available_at" timestamptz NOT NULL, "occurred_at" timestamptz NOT NULL, "published_at" timestamptz, "last_error" text, "created_at" timestamptz NOT NULL DEFAULT now(), "updated_at" timestamptz NOT NULL DEFAULT now(), CONSTRAINT "chk_outbox_events_status" CHECK ("status" IN (\\'PENDING\\', \\'PUBLISHING\\', \\'PUBLISHED\\', \\'FAILED\\')))');
     await queryRunner.query('CREATE INDEX IF NOT EXISTS "idx_outbox_events_status_available" ON "outbox_events" ("status", "available_at")');
     await queryRunner.query('CREATE INDEX IF NOT EXISTS "idx_outbox_events_aggregate" ON "outbox_events" ("aggregate_type", "aggregate_id")');
     await queryRunner.query('CREATE UNIQUE INDEX IF NOT EXISTS "idx_outbox_events_reference" ON "outbox_events" ("reference") WHERE "reference" IS NOT NULL');
