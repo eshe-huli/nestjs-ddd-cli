@@ -51,7 +51,7 @@ export const envValidationSchema = Joi.object({
   APP_NAME: Joi.string().trim().default('nestjs-ddd-service'),
 
   DATABASE_URL: requiredInProduction(
-    Joi.string().trim().uri({ scheme: [/postgresql?/] }),
+    Joi.string().trim().uri({ scheme: ['postgres', 'postgresql'] }),
   ),
   DATABASE_SSL: Joi.boolean().truthy('true').falsy('false').default(false),
   DATABASE_LOGGING: Joi.boolean().truthy('true').falsy('false').default(false),
