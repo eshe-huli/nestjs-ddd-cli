@@ -1,7 +1,12 @@
 import * as path from 'path';
 import chalk from 'chalk';
-import { getModulePath, prepareTemplateData, generateFromTemplate } from '../utils/file.utils';
-import { toKebabCase } from '../utils/naming.utils';
+import {
+  generateFromTemplate,
+  getModulePath,
+  prepareTemplateData,
+  updateBarrelFile,
+} from '../utils/file.utils';
+import { toKebabCase, toPascalCase } from '../utils/naming.utils';
 
 export async function generateQuery(queryName: string, options: any) {
   if (!options.module) {
@@ -24,6 +29,15 @@ export async function generateQuery(queryName: string, options: any) {
   );
 
   await generateFromTemplate(templatePath, outputPath, templateData, dryRun);
+  await updateBarrelFile(path.join(modulePath, 'application/queries/index.ts'), {
+    exports: [`export * from './${toKebabCase(queryName)}.handler';`],
+    imports: [
+      `import { ${toPascalCase(queryName)}Handler } from './${toKebabCase(queryName)}.handler';`,
+    ],
+    arrayName: 'Queries',
+    arrayItems: [`${toPascalCase(queryName)}Handler`],
+    dryRun,
+  });
 
   console.log(
     chalk.green(

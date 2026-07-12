@@ -140,6 +140,13 @@ describe('Command Generators', () => {
       expect(content).toContain('TestQueryQuery');
       expect(content).toContain('TestQueryHandler');
       expect(content).toContain('IQueryHandler');
+
+      const queryIndex = await fs.readFile(
+        path.join(testDir, 'src/modules/test-module/application/queries/index.ts'),
+        'utf-8',
+      );
+      expect(queryIndex).toContain("import { TestQueryHandler } from './test-query.handler';");
+      expect(queryIndex).toContain('export const Queries = [\n  TestQueryHandler,\n];');
     });
   });
 
