@@ -1,5 +1,7 @@
 import { toCamelCase, toSnakeCase, toPascalCase } from './naming.utils';
 
+const BASE_ENTITY_FIELD_NAMES = new Set(['id', 'isActive', 'createdAt', 'updatedAt', 'deletedAt']);
+
 export interface FieldDefinition {
   name: string;
   camelCase: string;
@@ -50,7 +52,13 @@ export function parseFields(fieldsString: string): ParsedFields {
     return { fields: [], hasEmail: false, hasDate: false, hasEnum: false, hasRelation: false };
   }
 
-  const fieldDefs = fieldsString.split(' ').filter((f) => f.trim() !== '');
+  const fieldDefs = fieldsString
+    .split(' ')
+    .filter((fieldDefinition) => fieldDefinition.trim() !== '')
+    .filter((fieldDefinition) => {
+      const fieldName = toCamelCase(fieldDefinition.split(':')[0]?.trim() ?? '');
+      return !BASE_ENTITY_FIELD_NAMES.has(fieldName);
+    });
   let hasEmail = false;
   let hasDate = false;
   let hasEnum = false;
