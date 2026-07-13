@@ -1,0 +1,126 @@
+import type {
+  ActiveRequestContextIntrospectionResponse,
+  ServiceAccessRequestContextProvenance,
+  ServiceAccessVerifiedPrincipal,
+} from "./request-context-introspection.types";
+
+type UnknownRecord = Record<string, unknown>;
+
+export class RequestContextIntrospectionParseError extends Error {
+  constructor() {
+    super("Invalid Service Access request-context introspection response");
+    this.name = "RequestContextIntrospectionParseError";
+  }
+}
+
+export function parseActiveRequestContextIntrospection(
+  payload: unknown,
+  expectedAudience: string,
+  now = new Date(),
+): ActiveRequestContextIntrospectionResponse {
+  const record = requiredRecord(payload);
+  if (record["active"] !== true) {
+    throw invalidResponse();
+  }
+
+  const audience = requiredString(record["audience"]);
+  if (audience !== requiredString(expectedAudience)) {
+    throw invalidResponse();
+  }
+
+  const expiresAt = requiredIsoDate(record["expiresAt"]);
+  if (new Date(expiresAt).getTime() <= now.getTime()) {
+    throw invalidResponse();
+  }
+
+  const principal = parsePrincipal(record["principal"]);
+  if (principal.machine.serviceName !== audience) {
+    throw invalidResponse();
+  }
+
+  return {
+    active: true,
+    audience,
+    expiresAt,
+    principal,
+    provenance: parseProvenance(record["provenance"]),
+  };
+}
+
+function parsePrincipal(value: unknown): ServiceAccessVerifiedPrincipal {
+  const principal = requiredRecord(value);
+  const actor = requiredRecord(principal["actor"]);
+  const machine = requiredRecord(principal["machine"]);
+  const sessionId = optionalString(actor["sessionId"]);
+  const tokenId = optionalString(actor["tokenId"]);
+  const serviceInstanceId = optionalString(machine["serviceInstanceId"]);
+
+  return {
+    actor: {
+      subjectId: requiredString(actor["subjectId"]),
+      businessId: requiredString(actor["businessId"]),
+      applicationId: requiredString(actor["applicationId"]),
+      ...(sessionId ? { sessionId } : {}),
+      ...(tokenId ? { tokenId } : {}),
+      authenticatedBy: requiredString(actor["authenticatedBy"]),
+    },
+    machine: {
+      serviceName: requiredString(machine["serviceName"]),
+      clientId: requiredString(machine["clientId"]),
+      ...(serviceInstanceId ? { serviceInstanceId } : {}),
+      grantId: requiredString(machine["grantId"]),
+      credentialId: requiredString(machine["credentialId"]),
+    },
+  };
+}
+
+function parseProvenance(value: unknown): ServiceAccessRequestContextProvenance {
+  const provenance = requiredRecord(value);
+  if (
+    provenance["identityAuthority"] !== "identity-manager" ||
+    provenance["credentialAuthority"] !== "service-access"
+  ) {
+    throw invalidResponse();
+  }
+
+  return {
+    identityAuthority: "identity-manager",
+    membershipId: requiredString(provenance["membershipId"]),
+    credentialAuthority: "service-access",
+    parcDecisionReference: requiredString(provenance["parcDecisionReference"]),
+  };
+}
+
+function requiredRecord(value: unknown): UnknownRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw invalidResponse();
+  }
+  return value as UnknownRecord;
+}
+
+function requiredString(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw invalidResponse();
+  }
+  return value.trim();
+}
+
+function optionalString(value: unknown): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return requiredString(value);
+}
+
+function requiredIsoDate(value: unknown): string {
+  const date = requiredString(value);
+  const parsed = new Date(date);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== date) {
+    throw invalidResponse();
+  }
+  return date;
+}
+
+function invalidResponse(): RequestContextIntrospectionParseError {
+  return new RequestContextIntrospectionParseError();
+}

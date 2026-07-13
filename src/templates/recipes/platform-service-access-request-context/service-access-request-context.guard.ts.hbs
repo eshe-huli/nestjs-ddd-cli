@@ -1,0 +1,77 @@
+import {
+  CanActivate,
+  ExecutionContext,
+  Injectable,
+  Logger,
+  UnauthorizedException,
+} from "@nestjs/common";
+import { createPlatformRequestContext } from "../../platform-context";
+import type { PlatformRequestContext } from "../../platform-context";
+import {
+  serviceAccessRequestContextConfigFromEnv,
+  serviceAccessRequestContextModeFromEnv,
+} from "./service-access-request-context.config";
+import {
+  extractOpaqueRequestContextLease,
+  platformRequestMetadataFromHeaders,
+} from "./request-context-headers";
+import type { RequestHeaders } from "./request-context-headers";
+import { ServiceAccessRequestContextClient } from "./service-access-request-context.client";
+
+export interface RequestWithServiceAccessRequestContext {
+  headers: RequestHeaders;
+  platformContext?: PlatformRequestContext;
+}
+
+@Injectable()
+export class ServiceAccessRequestContextGuard implements CanActivate {
+  private readonly logger = new Logger(ServiceAccessRequestContextGuard.name);
+
+  constructor(private readonly client: ServiceAccessRequestContextClient) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context
+      .switchToHttp()
+      .getRequest<RequestWithServiceAccessRequestContext>();
+
+    delete request.platformContext;
+
+    let mode;
+    try {
+      mode = serviceAccessRequestContextModeFromEnv();
+    } catch {
+      throw this.denied();
+    }
+
+    if (mode === "disabled") {
+      return true;
+    }
+
+    try {
+      const config = serviceAccessRequestContextConfigFromEnv(mode);
+      const token = extractOpaqueRequestContextLease(request.headers);
+      const introspection = await this.client.introspect(token, config);
+      const metadata = platformRequestMetadataFromHeaders(request.headers);
+
+      request.platformContext = createPlatformRequestContext({
+        principal: introspection.principal,
+        requestId: metadata.requestId,
+        correlationId: metadata.correlationId,
+        idempotencyKey: metadata.idempotencyKey,
+      });
+      return true;
+    } catch {
+      if (mode === "shadow") {
+        this.logger.warn(
+          "Service Access request-context shadow verification failed",
+        );
+        return true;
+      }
+      throw this.denied();
+    }
+  }
+
+  private denied(): UnauthorizedException {
+    return new UnauthorizedException("Service Access request context denied");
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "active": {
+    "active": true,
+    "audience": "owner-service",
+    "expiresAt": "2099-01-01T00:00:00.000Z",
+    "principal": {
+      "actor": {
+        "subjectId": "10000000-0000-4000-8000-000000000001",
+        "businessId": "10000000-0000-4000-8000-000000000002",
+        "applicationId": "10000000-0000-4000-8000-000000000003",
+        "sessionId": "actor-session",
+        "tokenId": "actor-token-id",
+        "authenticatedBy": "zitadel"
+      },
+      "machine": {
+        "serviceName": "owner-service",
+        "clientId": "owner-client",
+        "serviceInstanceId": "owner-instance",
+        "grantId": "10000000-0000-4000-8000-000000000004",
+        "credentialId": "10000000-0000-4000-8000-000000000005"
+      }
+    },
+    "provenance": {
+      "identityAuthority": "identity-manager",
+      "membershipId": "10000000-0000-4000-8000-000000000006",
+      "credentialAuthority": "service-access",
+      "parcDecisionReference": "parc-decision-reference"
+    }
+  },
+  "inactiveUnknownOrReplay": {
+    "active": false
+  },
+  "mismatchedMachineAudience": {
+    "active": true,
+    "audience": "owner-service",
+    "expiresAt": "2099-01-01T00:00:00.000Z",
+    "principal": {
+      "actor": {
+        "subjectId": "10000000-0000-4000-8000-000000000001",
+        "businessId": "10000000-0000-4000-8000-000000000002",
+        "applicationId": "10000000-0000-4000-8000-000000000003",
+        "authenticatedBy": "zitadel"
+      },
+      "machine": {
+        "serviceName": "another-service",
+        "clientId": "owner-client",
+        "grantId": "10000000-0000-4000-8000-000000000004",
+        "credentialId": "10000000-0000-4000-8000-000000000005"
+      }
+    },
+    "provenance": {
+      "identityAuthority": "identity-manager",
+      "membershipId": "10000000-0000-4000-8000-000000000006",
+      "credentialAuthority": "service-access",
+      "parcDecisionReference": "parc-decision-reference"
+    }
+  },
+  "malformedPrincipal": {
+    "active": true,
+    "audience": "owner-service",
+    "expiresAt": "2099-01-01T00:00:00.000Z",
+    "principal": {
+      "actor": {
+        "subjectId": "10000000-0000-4000-8000-000000000001",
+        "businessId": "10000000-0000-4000-8000-000000000002",
+        "applicationId": "10000000-0000-4000-8000-000000000003"
+      },
+      "machine": {
+        "serviceName": "owner-service",
+        "clientId": "owner-client",
+        "grantId": "10000000-0000-4000-8000-000000000004",
+        "credentialId": "10000000-0000-4000-8000-000000000005"
+      }
+    },
+    "provenance": {
+      "identityAuthority": "identity-manager",
+      "membershipId": "10000000-0000-4000-8000-000000000006",
+      "credentialAuthority": "service-access",
+      "parcDecisionReference": "parc-decision-reference"
+    }
+  }
+}

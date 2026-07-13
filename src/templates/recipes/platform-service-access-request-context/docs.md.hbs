@@ -1,0 +1,55 @@
+# Platform Service Access Request Context
+
+Use this recipe in a NestJS owner service to exchange the opaque, single-use
+`x-service-access-request-context` lease for canonical actor and machine
+principal context. Service Access owns lease verification. The owner service
+must not decode the lease or reconstruct identity from caller headers.
+
+## Guard Order
+
+Import `ServiceAccessRequestContextModule`, then run its guard before the
+route-specific PARC guard:
+
+```typescript
+@RequireParcAuthorization({
+  service: "owner-service",
+  capability: "records.write",
+  action: "create",
+})
+@UseGuards(
+  ServiceAccessRequestContextGuard,
+  PlatformParcAuthorizationGuard,
+)
+```
+
+The generated client sends only `{token}`, `x-internal-api-key`, and
+`x-service-access-credential` to
+`POST /api/v1/internal/request-context/introspect`. It never forwards the
+actor's bearer token. A response is trusted only when it is well formed,
+`active:true`, unexpired, and its audience exactly matches
+`SERVICE_ACCESS_EXPECTED_AUDIENCE`. Inactive results cover unknown, expired,
+revoked, and replayed leases. Non-2xx responses, malformed bodies, audience
+mismatches, and Service Access failures deny in enforce mode.
+
+## Environment Contract
+
+- `SERVICE_ACCESS_URL`: Service Access base URL, without `/api/v1`.
+- `SERVICE_ACCESS_ALLOW_INSECURE_HTTP`: defaults to `false`; may be `true` only
+  for loopback or Kubernetes `.svc`/`.svc.cluster.local` URLs.
+- `SERVICE_ACCESS_INTERNAL_API_KEY`: internal transport authentication key.
+- `SERVICE_ACCESS_CREDENTIAL`: this owner service's active Service Access machine credential.
+- `SERVICE_ACCESS_EXPECTED_AUDIENCE`: exact owner-service slug expected in the lease.
+- `SERVICE_ACCESS_REQUEST_CONTEXT_MODE`: `enforce` by default, or explicit `shadow`/`disabled` rollout mode.
+- `SERVICE_ACCESS_TIMEOUT_MS`: positive introspection timeout; defaults to 3000.
+
+`enforce` requires successful introspection. `shadow` attempts introspection and
+attaches context only on success, but allows failure for rollout observation.
+`disabled` skips lease consumption. The guard clears any earlier request
+`platformContext`, so shadow and disabled modes never turn actor, business,
+application, or machine headers into identity. A following PARC guard therefore
+still fails closed unless verified platform context exists.
+
+Only `x-request-id`, `x-correlation-id`, and `idempotency-key` are copied as
+request metadata. They are not identity or authorization evidence. Owner domain
+invariants and transactional audit/outbox recording still apply after PARC
+allows the route-specific action.

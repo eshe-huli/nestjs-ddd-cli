@@ -1,0 +1,40 @@
+import type {
+  PlatformActorContext,
+  PlatformMachineContext,
+  VerifiedPlatformPrincipal,
+} from "../../platform-context";
+
+export interface ServiceAccessVerifiedPrincipal extends VerifiedPlatformPrincipal {
+  actor: PlatformActorContext & {
+    businessId: string;
+    applicationId: string;
+  };
+  machine: PlatformMachineContext & {
+    clientId: string;
+    grantId: string;
+    credentialId: string;
+  };
+}
+
+export interface ServiceAccessRequestContextProvenance {
+  identityAuthority: "identity-manager";
+  membershipId: string;
+  credentialAuthority: "service-access";
+  parcDecisionReference: string;
+}
+
+export interface ActiveRequestContextIntrospectionResponse {
+  active: true;
+  audience: string;
+  expiresAt: string;
+  principal: ServiceAccessVerifiedPrincipal;
+  provenance: ServiceAccessRequestContextProvenance;
+}
+
+export interface InactiveRequestContextIntrospectionResponse {
+  active: false;
+}
+
+export type RequestContextIntrospectionResponse =
+  | ActiveRequestContextIntrospectionResponse
+  | InactiveRequestContextIntrospectionResponse;

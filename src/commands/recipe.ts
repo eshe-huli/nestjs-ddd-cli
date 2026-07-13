@@ -16,6 +16,7 @@ import { applyBusinessReferenceIdentifiersRecipe } from './recipes/business-refe
 import { applyEventBackboneRecipe } from './recipes/event-backbone.recipe';
 import { applyPlatformServiceRuntimeRecipe } from './recipes/platform-service-runtime.recipe';
 import { applyPlatformContextRecipe } from './recipes/platform-context.recipe';
+import { applyPlatformServiceAccessRequestContextRecipe } from './recipes/platform-service-access-request-context.recipe';
 import { applyPlatformParcAuthorizationRecipe } from './recipes/platform-parc-authorization.recipe';
 import { applyBanklinkConnectorContractRecipe } from './recipes/banklink-connector-contract.recipe';
 import { applyOidcDashboardRecipe } from './recipes/oidc-dashboard.recipe';
@@ -214,6 +215,12 @@ const AVAILABLE_RECIPES = {
     dependencies: [],
     devDependencies: [],
   },
+  'platform-service-access-request-context': {
+    name: 'Platform Service Access Request Context',
+    description: 'Service Access lease introspection and verified platform context before PARC',
+    dependencies: [],
+    devDependencies: [],
+  },
   'platform-parc-authorization': {
     name: 'Platform PARC Authorization',
     description:
@@ -340,6 +347,9 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
       break;
     case 'platform-context':
       await applyPlatformContextRecipe(basePath);
+      break;
+    case 'platform-service-access-request-context':
+      await applyPlatformServiceAccessRequestContextRecipe(basePath);
       break;
     case 'platform-parc-authorization':
       await applyPlatformParcAuthorizationRecipe(basePath);

@@ -1,0 +1,45 @@
+import { Injectable, UnauthorizedException } from "@nestjs/common";
+import type { ActiveServiceAccessRequestContextConfig } from "./service-access-request-context.config";
+import { parseActiveRequestContextIntrospection } from "./request-context-introspection.parser";
+import type { ActiveRequestContextIntrospectionResponse } from "./request-context-introspection.types";
+
+@Injectable()
+export class ServiceAccessRequestContextClient {
+  async introspect(
+    token: string,
+    config: ActiveServiceAccessRequestContextConfig,
+  ): Promise<ActiveRequestContextIntrospectionResponse> {
+    try {
+      const response = await fetch(
+        config.serviceAccessUrl + "/api/v1/internal/request-context/introspect",
+        {
+          method: "POST",
+          redirect: "error",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "x-internal-api-key": config.internalApiKey,
+            "x-service-access-credential": config.serviceAccessCredential,
+          },
+          signal: AbortSignal.timeout(config.timeoutMs),
+          body: JSON.stringify({ token }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error("Service Access request-context introspection failed");
+      }
+
+      return parseActiveRequestContextIntrospection(
+        await response.json(),
+        config.expectedAudience,
+      );
+    } catch {
+      throw this.denied();
+    }
+  }
+
+  private denied(): UnauthorizedException {
+    return new UnauthorizedException("Service Access request context denied");
+  }
+}

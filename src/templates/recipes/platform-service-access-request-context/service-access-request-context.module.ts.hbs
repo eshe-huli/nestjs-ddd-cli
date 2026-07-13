@@ -1,0 +1,17 @@
+import { Module } from "@nestjs/common";
+import { PlatformContextModule } from "../../platform-context";
+import { ServiceAccessRequestContextClient } from "./service-access-request-context.client";
+import { ServiceAccessRequestContextGuard } from "./service-access-request-context.guard";
+
+@Module({
+  imports: [PlatformContextModule],
+  providers: [
+    ServiceAccessRequestContextClient,
+    ServiceAccessRequestContextGuard,
+  ],
+  exports: [
+    ServiceAccessRequestContextClient,
+    ServiceAccessRequestContextGuard,
+  ],
+})
+export class ServiceAccessRequestContextModule {}

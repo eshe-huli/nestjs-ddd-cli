@@ -1,0 +1,142 @@
+export const SERVICE_ACCESS_REQUEST_CONTEXT_MODES = [
+  "disabled",
+  "shadow",
+  "enforce",
+] as const;
+
+export type ServiceAccessRequestContextMode =
+  (typeof SERVICE_ACCESS_REQUEST_CONTEXT_MODES)[number];
+export type ActiveServiceAccessRequestContextMode = Exclude<
+  ServiceAccessRequestContextMode,
+  "disabled"
+>;
+
+export interface DisabledServiceAccessRequestContextConfig {
+  mode: "disabled";
+}
+
+export interface ActiveServiceAccessRequestContextConfig {
+  mode: ActiveServiceAccessRequestContextMode;
+  serviceAccessUrl: string;
+  allowInsecureHttp: boolean;
+  internalApiKey: string;
+  serviceAccessCredential: string;
+  expectedAudience: string;
+  timeoutMs: number;
+}
+
+export type ServiceAccessRequestContextConfig =
+  | DisabledServiceAccessRequestContextConfig
+  | ActiveServiceAccessRequestContextConfig;
+
+export function serviceAccessRequestContextModeFromEnv(): ServiceAccessRequestContextMode {
+  const mode = clean(process.env["SERVICE_ACCESS_REQUEST_CONTEXT_MODE"]) ?? "enforce";
+  if (!SERVICE_ACCESS_REQUEST_CONTEXT_MODES.includes(mode as ServiceAccessRequestContextMode)) {
+    throw new Error("SERVICE_ACCESS_REQUEST_CONTEXT_MODE must be disabled, shadow, or enforce");
+  }
+  return mode as ServiceAccessRequestContextMode;
+}
+
+export function serviceAccessRequestContextConfigFromEnv(
+  mode: "disabled",
+): DisabledServiceAccessRequestContextConfig;
+export function serviceAccessRequestContextConfigFromEnv(
+  mode: ActiveServiceAccessRequestContextMode,
+): ActiveServiceAccessRequestContextConfig;
+export function serviceAccessRequestContextConfigFromEnv(
+  mode?: ServiceAccessRequestContextMode,
+): ServiceAccessRequestContextConfig;
+export function serviceAccessRequestContextConfigFromEnv(
+  mode = serviceAccessRequestContextModeFromEnv(),
+): ServiceAccessRequestContextConfig {
+  if (mode === "disabled") {
+    return { mode };
+  }
+
+  const allowInsecureHttp = booleanEnv(
+    "SERVICE_ACCESS_ALLOW_INSECURE_HTTP",
+    false,
+  );
+
+  return {
+    mode,
+    serviceAccessUrl: requiredServiceAccessUrl(allowInsecureHttp),
+    allowInsecureHttp,
+    internalApiKey: requiredEnv("SERVICE_ACCESS_INTERNAL_API_KEY"),
+    serviceAccessCredential: requiredEnv("SERVICE_ACCESS_CREDENTIAL"),
+    expectedAudience: requiredEnv("SERVICE_ACCESS_EXPECTED_AUDIENCE"),
+    timeoutMs: positiveIntegerEnv("SERVICE_ACCESS_TIMEOUT_MS", 3000),
+  };
+}
+
+function requiredServiceAccessUrl(allowInsecureHttp: boolean): string {
+  const value = requiredEnv("SERVICE_ACCESS_URL").replace(/\/+$/, "");
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("SERVICE_ACCESS_URL must be an absolute HTTP(S) URL");
+  }
+  if (parsed.protocol === "https:") {
+    return value;
+  }
+  if (
+    parsed.protocol === "http:" &&
+    allowInsecureHttp &&
+    isApprovedInsecureHostname(parsed.hostname)
+  ) {
+    return value;
+  }
+  throw new Error(
+    "SERVICE_ACCESS_URL must use HTTPS unless insecure HTTP is explicitly enabled for loopback or cluster service DNS",
+  );
+}
+
+function requiredEnv(name: string): string {
+  const value = clean(process.env[name]);
+  if (!value) {
+    throw new Error(name + " is required for Service Access request context");
+  }
+  return value;
+}
+
+function positiveIntegerEnv(name: string, fallback: number): number {
+  const value = clean(process.env[name]);
+  if (!value) {
+    return fallback;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(name + " must be a positive integer");
+  }
+  return parsed;
+}
+
+function booleanEnv(name: string, fallback: boolean): boolean {
+  const value = clean(process.env[name]);
+  if (!value) {
+    return fallback;
+  }
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  throw new Error(name + " must be true or false");
+}
+
+function isApprovedInsecureHostname(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname.endsWith(".svc") ||
+    hostname.endsWith(".svc.cluster.local")
+  );
+}
+
+function clean(value: string | undefined): string | undefined {
+  const cleaned = value?.trim();
+  return cleaned || undefined;
+}

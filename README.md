@@ -142,6 +142,7 @@ ddd recipe
 ddd recipe auth-jwt --install-deps
 ddd recipe event-backbone --install-deps
 ddd recipe oidc-dashboard --install-deps
+ddd recipe platform-service-access-request-context
 ```
 
 | Recipe | Description |
@@ -154,6 +155,7 @@ ddd recipe oidc-dashboard --install-deps
 | `event-backbone` | Postgres event store/outbox source of truth with Pulsar transport |
 | `business-reference-identifiers` | Human-readable sidecar references beside canonical IDs |
 | `platform-service-runtime` | Service manifest, capabilities, actions, events, dependencies, and health contract |
+| `platform-service-access-request-context` | Fail-closed Service Access lease introspection before route-specific PARC authorization |
 | `banklink-connector-contract` | BankLink NestJS control-plane and Go sidecar connector boundary contract |
 | `oidc-dashboard` | OIDC broker integration for internal dashboards and admin APIs |
 

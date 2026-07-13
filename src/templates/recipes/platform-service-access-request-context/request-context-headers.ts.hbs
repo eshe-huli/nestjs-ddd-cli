@@ -1,0 +1,61 @@
+export const SERVICE_ACCESS_REQUEST_CONTEXT_HEADER =
+  "x-service-access-request-context";
+
+export type RequestHeaders = Record<string, string | string[] | undefined>;
+
+export interface PlatformRequestMetadataHeaders {
+  requestId?: string;
+  correlationId?: string;
+  idempotencyKey?: string;
+}
+
+export class RequestContextHeaderError extends Error {
+  constructor() {
+    super("Invalid Service Access request-context headers");
+    this.name = "RequestContextHeaderError";
+  }
+}
+
+export function extractOpaqueRequestContextLease(headers: RequestHeaders): string {
+  const token = requiredSingleHeader(headers, SERVICE_ACCESS_REQUEST_CONTEXT_HEADER);
+  if (token.length > 512) {
+    throw new RequestContextHeaderError();
+  }
+  return token;
+}
+
+export function platformRequestMetadataFromHeaders(
+  headers: RequestHeaders,
+): PlatformRequestMetadataHeaders {
+  return {
+    requestId: optionalSingleHeader(headers, "x-request-id"),
+    correlationId: optionalSingleHeader(headers, "x-correlation-id"),
+    idempotencyKey: optionalSingleHeader(headers, "idempotency-key"),
+  };
+}
+
+function requiredSingleHeader(headers: RequestHeaders, name: string): string {
+  const value = optionalSingleHeader(headers, name);
+  if (!value) {
+    throw new RequestContextHeaderError();
+  }
+  return value;
+}
+
+function optionalSingleHeader(
+  headers: RequestHeaders,
+  name: string,
+): string | undefined {
+  const value = headers[name];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw new RequestContextHeaderError();
+  }
+  const cleaned = value.trim();
+  if (!cleaned || cleaned.includes(",")) {
+    throw new RequestContextHeaderError();
+  }
+  return cleaned;
+}
