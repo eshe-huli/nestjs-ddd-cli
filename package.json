@@ -107,7 +107,7 @@
     "*.ts": [
       "eslint --fix",
       "prettier --write",
-      "jest --bail --findRelatedTests --passWithNoTests"
+      "jest --runInBand --bail --findRelatedTests --passWithNoTests"
     ],
     "*.{json,md,yml,yaml}": [
       "prettier --write"
