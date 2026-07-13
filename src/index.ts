@@ -289,7 +289,7 @@ program
 program
   .command('recipe [recipeName]')
   .description(
-    'Apply a selectable common pattern recipe (service-foundation, event-backbone, platform-service-runtime, oidc-dashboard, banklink-connector-contract, business-reference-identifiers, auth-jwt, pagination, joi-env)',
+    'Apply a selectable common pattern recipe; run without a recipe name to list available recipes',
   )
   .option('-p, --path <path>', 'Path to the project', process.cwd())
   .option('--install-deps', 'Install required dependencies', false)

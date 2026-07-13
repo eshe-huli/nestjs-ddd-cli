@@ -175,7 +175,8 @@ const AVAILABLE_RECIPES = {
   },
   'event-backbone': {
     name: 'Event Backbone',
-    description: 'Postgres event store/outbox source of truth with Pulsar transport and relay',
+    description:
+      'Postgres event store/outbox source of truth with opt-in Relay HTTP or Pulsar transport',
     dependencies: [
       '@nestjs/config',
       '@nestjs/schedule',
@@ -202,7 +203,7 @@ const AVAILABLE_RECIPES = {
   'platform-service-runtime': {
     name: 'Platform Service Runtime',
     description:
-      'Service manifest, capabilities, actions, events, dependencies, and health contract',
+      'Service manifest, health contract, and authenticated idempotent Service Access registration',
     dependencies: [],
     devDependencies: [],
   },
@@ -229,7 +230,7 @@ const AVAILABLE_RECIPES = {
   'oidc-dashboard': {
     name: 'OIDC Dashboard SSO',
     description:
-      'OIDC broker integration for internal dashboards and admin APIs with local/PARC authorization',
+      'OIDC verification plus canonical platform principal resolution for internal dashboards',
     dependencies: ['jose'],
     devDependencies: ['@types/express'],
   },
