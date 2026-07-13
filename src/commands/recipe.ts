@@ -15,6 +15,7 @@ import { applyJoiEnvRecipe } from './recipes/joi-env.recipe';
 import { applyBusinessReferenceIdentifiersRecipe } from './recipes/business-reference-identifiers.recipe';
 import { applyEventBackboneRecipe } from './recipes/event-backbone.recipe';
 import { applyPlatformServiceRuntimeRecipe } from './recipes/platform-service-runtime.recipe';
+import { applyPlatformContextRecipe } from './recipes/platform-context.recipe';
 import { applyBanklinkConnectorContractRecipe } from './recipes/banklink-connector-contract.recipe';
 import { applyOidcDashboardRecipe } from './recipes/oidc-dashboard.recipe';
 
@@ -204,6 +205,13 @@ const AVAILABLE_RECIPES = {
     dependencies: [],
     devDependencies: [],
   },
+  'platform-context': {
+    name: 'Platform Request Context',
+    description:
+      'Trusted actor, business, application, machine, correlation, and authorization context',
+    dependencies: [],
+    devDependencies: [],
+  },
   'banklink-connector-contract': {
     name: 'BankLink Connector Contract',
     description: 'BankLink NestJS control-plane and Go sidecar connector boundary contract',
@@ -320,6 +328,9 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
       break;
     case 'platform-service-runtime':
       await applyPlatformServiceRuntimeRecipe(basePath);
+      break;
+    case 'platform-context':
+      await applyPlatformContextRecipe(basePath);
       break;
     case 'banklink-connector-contract':
       await applyBanklinkConnectorContractRecipe(basePath);

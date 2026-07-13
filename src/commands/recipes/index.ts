@@ -9,5 +9,6 @@ export * from './event-backbone.recipe';
 export * from './business-reference-identifiers.recipe';
 export * from './joi-env.recipe';
 export * from './platform-service-runtime.recipe';
+export * from './platform-context.recipe';
 export * from './banklink-connector-contract.recipe';
 export * from './oidc-dashboard.recipe';
