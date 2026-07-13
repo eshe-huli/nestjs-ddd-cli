@@ -22,6 +22,11 @@ describe('OIDC dashboard recipe', () => {
     const config = await fs.readFile(path.join(authPath, 'oidc-dashboard.config.ts'), 'utf-8');
     const principal = await fs.readFile(path.join(authPath, 'oidc-principal.ts'), 'utf-8');
     const mapping = await fs.readFile(path.join(authPath, 'oidc-access-mapping.ts'), 'utf-8');
+    const resolver = await fs.readFile(
+      path.join(authPath, 'canonical-platform-principal.resolver.ts'),
+      'utf-8',
+    );
+    const guard = await fs.readFile(path.join(authPath, 'oidc-dashboard.guard.ts'), 'utf-8');
     const docs = await fs.readFile(path.join(testDir, 'docs/auth/oidc-dashboard.md'), 'utf-8');
     const env = await fs.readFile(path.join(testDir, '.env.example'), 'utf-8');
 
@@ -39,10 +44,23 @@ describe('OIDC dashboard recipe', () => {
     expect(mapping).toContain('defaultOidcDashboardAccessMapping');
     expect(mapping).toContain('Object.entries');
 
+    expect(resolver).toContain('CanonicalPlatformPrincipalResolver');
+    expect(resolver).toContain('VerifiedPlatformPrincipal');
+    expect(resolver).toContain('Canonical platform principal mapping is not configured');
+    expect(resolver).not.toContain('subjectId: principal.subject');
+    expect(guard).toContain('this.principalResolver.resolve(oidcPrincipal)');
+    expect(guard).toContain('createPlatformRequestContext');
+    expect(guard).toContain('request.platformContext');
+    expect(guard).not.toContain('headers["x-actor');
+    expect(guard).not.toContain('request.query');
+
     expect(docs).toContain('Laravel/Filament Pattern');
     expect(docs).toContain('Next.js/Node Pattern');
     expect(docs).toContain('ZITADEL');
     expect(docs).toContain('Product authorization stays local or PARC-backed');
+    expect(docs).toContain('Do not set `actor.subjectId` to the');
+    expect(docs).toContain('Service Access capability grants');
+    expect(docs).toContain('PARC action checks');
 
     expect(env).toContain('OIDC_GROUP_CLAIM=groups');
     expect(env).not.toContain('payswitch');

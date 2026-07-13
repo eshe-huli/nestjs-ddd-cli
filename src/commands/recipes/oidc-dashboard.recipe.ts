@@ -1,8 +1,11 @@
 import * as path from 'path';
 import chalk from 'chalk';
 import { ensureDir, fileExists, writeFile } from '../../utils/file.utils';
+import { applyPlatformContextRecipe } from './platform-context.recipe';
 
 export async function applyOidcDashboardRecipe(basePath: string): Promise<void> {
+  await applyPlatformContextRecipe(basePath);
+
   const authPath = path.join(basePath, 'src/shared/auth/oidc-dashboard');
   const docsPath = path.join(basePath, 'docs/auth');
 
@@ -13,6 +16,7 @@ export async function applyOidcDashboardRecipe(basePath: string): Promise<void> 
   await writeFile(path.join(authPath, 'oidc-principal.ts'), principalContent);
   await writeFile(path.join(authPath, 'oidc-access-mapping.ts'), mappingContent);
   await writeFile(path.join(authPath, 'oidc-token-verifier.service.ts'), verifierContent);
+  await writeFile(path.join(authPath, 'canonical-platform-principal.resolver.ts'), resolverContent);
   await writeFile(path.join(authPath, 'oidc-dashboard.guard.ts'), guardContent);
   await writeFile(path.join(authPath, 'index.ts'), indexContent);
   await writeFile(path.join(docsPath, 'oidc-dashboard.md'), docsContent);
@@ -25,10 +29,12 @@ export async function applyOidcDashboardRecipe(basePath: string): Promise<void> 
 
   await writeFile(targetExamplePath, envExampleContent);
 
+  console.log(chalk.green('  ✓ Platform request context contract'));
   console.log(chalk.green('  ✓ OIDC dashboard config contract'));
+  console.log(chalk.green('  ✓ Canonical platform principal resolver hook'));
   console.log(chalk.green('  ✓ Role/group mapping hook'));
   console.log(chalk.green('  ✓ JWKS-backed bearer token verifier'));
-  console.log(chalk.green('  ✓ NestJS dashboard/API guard'));
+  console.log(chalk.green('  ✓ NestJS dashboard/API guard with platform context'));
   console.log(chalk.green('  ✓ Laravel/Filament and Next/Node integration notes'));
   console.log(
     chalk.yellow(
@@ -239,30 +245,73 @@ export class OidcTokenVerifierService {
 }
 `;
 
+const resolverContent = `import { UnauthorizedException } from "@nestjs/common";
+import { VerifiedPlatformPrincipal } from "../../platform-context/platform-context.types";
+import { OidcDashboardPrincipal } from "./oidc-principal";
+
+export const CANONICAL_PLATFORM_PRINCIPAL_RESOLVER = Symbol(
+  "CANONICAL_PLATFORM_PRINCIPAL_RESOLVER",
+);
+
+export interface CanonicalPlatformPrincipalResolver {
+  resolve(
+    principal: OidcDashboardPrincipal,
+  ): VerifiedPlatformPrincipal | Promise<VerifiedPlatformPrincipal>;
+}
+
+export const defaultCanonicalPlatformPrincipalResolver: CanonicalPlatformPrincipalResolver =
+  {
+    resolve() {
+      throw new UnauthorizedException(
+        "Canonical platform principal mapping is not configured",
+      );
+    },
+  };
+`;
+
 const guardContent = `import {
   CanActivate,
   ExecutionContext,
+  Inject,
   Injectable,
   UnauthorizedException,
 } from "@nestjs/common";
 import { Request } from "express";
+import { createPlatformRequestContext } from "../../platform-context/platform-context.factory";
+import { PlatformRequestContext } from "../../platform-context/platform-context.types";
+import {
+  CANONICAL_PLATFORM_PRINCIPAL_RESOLVER,
+  CanonicalPlatformPrincipalResolver,
+} from "./canonical-platform-principal.resolver";
 import { OidcTokenVerifierService } from "./oidc-token-verifier.service";
 
 export interface RequestWithOidcPrincipal extends Request {
   oidcPrincipal?: Awaited<
     ReturnType<OidcTokenVerifierService["verifyBearerToken"]>
   >;
+  platformContext?: PlatformRequestContext;
 }
 
 @Injectable()
 export class OidcDashboardGuard implements CanActivate {
-  constructor(private readonly verifier: OidcTokenVerifierService) {}
+  constructor(
+    private readonly verifier: OidcTokenVerifierService,
+    @Inject(CANONICAL_PLATFORM_PRINCIPAL_RESOLVER)
+    private readonly principalResolver: CanonicalPlatformPrincipalResolver,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<RequestWithOidcPrincipal>();
     const token = this.extractBearerToken(request.headers.authorization);
 
-    request.oidcPrincipal = await this.verifier.verifyBearerToken(token);
+    const oidcPrincipal = await this.verifier.verifyBearerToken(token);
+    request.oidcPrincipal = oidcPrincipal;
+
+    const verifiedPrincipal = await this.principalResolver.resolve(oidcPrincipal);
+    request.platformContext = createPlatformRequestContext({
+      principal: verifiedPrincipal,
+    });
+
     return true;
   }
 
@@ -280,6 +329,7 @@ const indexContent = `export * from "./oidc-dashboard.config";
 export * from "./oidc-principal";
 export * from "./oidc-access-mapping";
 export * from "./oidc-token-verifier.service";
+export * from "./canonical-platform-principal.resolver";
 export * from "./oidc-dashboard.guard";
 `;
 
@@ -302,12 +352,24 @@ delegate authentication to an OIDC broker such as ZITADEL.
 
 1. Configure env values from \`.env.oidc-dashboard.example\`.
 2. Register \`OidcTokenVerifierService\` as a provider.
-3. Apply \`OidcDashboardGuard\` to dashboard/admin API controllers.
-4. On first successful login, map \`sub\` and \`email\` to your local operator
-   table or ask PARC for roles/permissions.
-5. Keep the OIDC client secret in Vault, External Secrets, or the deployment
+3. Provide \`CANONICAL_PLATFORM_PRINCIPAL_RESOLVER\` with an implementation that
+   maps the verified OIDC principal to \`VerifiedPlatformPrincipal\` through
+   Identity Manager and Business Entity. Do not set \`actor.subjectId\` to the
+   OIDC \`sub\` automatically; canonical subjects come from platform identity
+   services after broker verification.
+4. Apply \`OidcDashboardGuard\` to dashboard/admin API controllers. The guard
+   verifies the bearer token, resolves the canonical principal, builds
+   \`platformContext\` with \`createPlatformRequestContext\`, and attaches it to
+   the request. Do not read actor, business, or application identity from custom
+   headers or query parameters.
+5. Before privileged mutations, require both Service Access capability grants and
+   PARC action checks. Record Service Access and PARC decision references in the owner
+   audit trail.
+6. On first successful login, map broker identity to your local operator record
+   or ask PARC for roles/permissions.
+7. Keep the OIDC client secret in Vault, External Secrets, or the deployment
    secret store. Never commit it.
-6. Set \`OIDC_JWKS_URL\` only when the broker does not expose keys at the
+8. Set \`OIDC_JWKS_URL\` only when the broker does not expose keys at the
    default ZITADEL-compatible \`/oauth/v2/keys\` path.
 
 ## Environment Contract
