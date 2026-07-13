@@ -39,6 +39,15 @@ describe('Command Generators', () => {
       const content = await fs.readFile(servicePath, 'utf-8');
       expect(content).toContain('TestServiceService');
       expect(content).toContain('@Injectable()');
+
+      const serviceIndex = await fs.readFile(
+        path.join(testDir, 'src/modules/test-module/application/domain/services/index.ts'),
+        'utf-8',
+      );
+      expect(serviceIndex).toContain(
+        "import { TestServiceService } from './test-service.service';",
+      );
+      expect(serviceIndex).toContain('export const Services = [\n  TestServiceService,\n];');
     });
 
     it('keeps advanced domain services in the same configured DDD layer', async () => {
