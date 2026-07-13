@@ -16,6 +16,7 @@ import { applyBusinessReferenceIdentifiersRecipe } from './recipes/business-refe
 import { applyEventBackboneRecipe } from './recipes/event-backbone.recipe';
 import { applyPlatformServiceRuntimeRecipe } from './recipes/platform-service-runtime.recipe';
 import { applyPlatformContextRecipe } from './recipes/platform-context.recipe';
+import { applyPlatformParcAuthorizationRecipe } from './recipes/platform-parc-authorization.recipe';
 import { applyBanklinkConnectorContractRecipe } from './recipes/banklink-connector-contract.recipe';
 import { applyOidcDashboardRecipe } from './recipes/oidc-dashboard.recipe';
 
@@ -212,6 +213,13 @@ const AVAILABLE_RECIPES = {
     dependencies: [],
     devDependencies: [],
   },
+  'platform-parc-authorization': {
+    name: 'Platform PARC Authorization',
+    description:
+      'PARC capability decorator, orchestration guard, fail-closed client, and audit receipt',
+    dependencies: [],
+    devDependencies: [],
+  },
   'banklink-connector-contract': {
     name: 'BankLink Connector Contract',
     description: 'BankLink NestJS control-plane and Go sidecar connector boundary contract',
@@ -331,6 +339,9 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
       break;
     case 'platform-context':
       await applyPlatformContextRecipe(basePath);
+      break;
+    case 'platform-parc-authorization':
+      await applyPlatformParcAuthorizationRecipe(basePath);
       break;
     case 'banklink-connector-contract':
       await applyBanklinkConnectorContractRecipe(basePath);
