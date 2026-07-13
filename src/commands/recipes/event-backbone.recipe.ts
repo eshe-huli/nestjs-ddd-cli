@@ -2,6 +2,7 @@ import * as path from 'path';
 import chalk from 'chalk';
 import { ensureDir, writeFile } from '../../utils/file.utils';
 import { applyBusinessReferenceIdentifiersRecipe } from './business-reference-identifiers.recipe';
+import { applyPlatformContextRecipe } from './platform-context.recipe';
 
 export async function applyEventBackboneRecipe(basePath: string) {
   const sharedPath = path.join(basePath, 'src/shared');
@@ -11,6 +12,7 @@ export async function applyEventBackboneRecipe(basePath: string) {
   const migrationsPath = path.join(basePath, 'src/migrations');
 
   await applyBusinessReferenceIdentifiersRecipe(basePath);
+  await applyPlatformContextRecipe(basePath);
   await ensureDir(eventBackbonePath);
   await ensureDir(entitiesPath);
   await ensureDir(publishersPath);
@@ -18,11 +20,25 @@ export async function applyEventBackboneRecipe(basePath: string) {
 
   const constantsContent = `export const EVENT_BACKBONE_PUBLISHER = Symbol("EVENT_BACKBONE_PUBLISHER");
 
+export const EVENT_BACKBONE_TRANSPORT = {
+  relayHttp: "relay-http",
+  pulsar: "pulsar",
+  none: "none",
+} as const;
+
+export type EventBackboneTransport =
+  (typeof EVENT_BACKBONE_TRANSPORT)[keyof typeof EVENT_BACKBONE_TRANSPORT];
+
 export const EVENT_BACKBONE_ENV = {
+  transport: "EVENT_BACKBONE_TRANSPORT",
   relayEnabled: "EVENT_BACKBONE_RELAY_ENABLED",
   relayBatchSize: "EVENT_BACKBONE_RELAY_BATCH_SIZE",
   relayMaxAttempts: "EVENT_BACKBONE_RELAY_MAX_ATTEMPTS",
   relayRetryBaseMs: "EVENT_BACKBONE_RELAY_RETRY_BASE_MS",
+  relayHttpUrl: "EVENT_BACKBONE_RELAY_HTTP_URL",
+  relayServiceCredential: "EVENT_BACKBONE_RELAY_SERVICE_CREDENTIAL",
+  relayAudience: "EVENT_BACKBONE_RELAY_AUDIENCE",
+  relayTimeoutMs: "EVENT_BACKBONE_RELAY_TIMEOUT_MS",
   pulsarEnabled: "PULSAR_ENABLED",
   pulsarServiceUrl: "PULSAR_SERVICE_URL",
   pulsarTenant: "PULSAR_TENANT",
@@ -35,11 +51,29 @@ export const EVENT_BACKBONE_ENV = {
 
   const typesContent = `export type EventPayload = Record<string, unknown>;
 
+export enum EventPiiClassification {
+  None = "NONE",
+  Internal = "INTERNAL",
+  Restricted = "RESTRICTED",
+  Sensitive = "SENSITIVE",
+}
+
+export interface EventBackboneActorMetadata {
+  subjectId?: string;
+  businessId?: string;
+  applicationId?: string;
+  serviceName?: string;
+}
+
 export interface EventBackboneMetadata {
+  schemaVersion?: number;
   correlationId?: string;
   causationId?: string;
   idempotencyKey?: string;
-  actorId?: string;
+  actor?: EventBackboneActorMetadata;
+  businessId?: string;
+  applicationId?: string;
+  piiClassification?: EventPiiClassification;
   tenantId?: string;
   traceId?: string;
   source?: string;
@@ -48,6 +82,7 @@ export interface EventBackboneMetadata {
 
 export interface EventBackboneEnvelope<TPayload extends EventPayload = EventPayload> {
   id: string;
+  schemaVersion: number;
   reference?: string;
   type: string;
   source: string;
@@ -124,17 +159,46 @@ export interface EventBackbonePublisher {
   const envContent = `import * as Joi from "joi";
 
 export const eventBackboneEnvSchema = {
+  EVENT_BACKBONE_TRANSPORT: Joi.string()
+    .valid("relay-http", "pulsar", "none")
+    .default("none"),
   EVENT_BACKBONE_RELAY_ENABLED: Joi.boolean().truthy("true").falsy("false").default(true),
   EVENT_BACKBONE_RELAY_BATCH_SIZE: Joi.number().integer().min(1).max(500).default(50),
   EVENT_BACKBONE_RELAY_MAX_ATTEMPTS: Joi.number().integer().min(1).max(100).default(10),
   EVENT_BACKBONE_RELAY_RETRY_BASE_MS: Joi.number().integer().min(1000).default(30000),
+  EVENT_BACKBONE_RELAY_HTTP_URL: Joi.string()
+    .uri()
+    .when("EVENT_BACKBONE_TRANSPORT", {
+      is: "relay-http",
+      then: Joi.required(),
+      otherwise: Joi.string().allow("").optional(),
+    }),
+  EVENT_BACKBONE_RELAY_SERVICE_CREDENTIAL: Joi.string()
+    .min(1)
+    .when("EVENT_BACKBONE_TRANSPORT", {
+      is: "relay-http",
+      then: Joi.required(),
+      otherwise: Joi.string().allow("").optional(),
+    }),
+  EVENT_BACKBONE_RELAY_AUDIENCE: Joi.string()
+    .min(1)
+    .when("EVENT_BACKBONE_TRANSPORT", {
+      is: "relay-http",
+      then: Joi.required(),
+      otherwise: Joi.string().allow("").optional(),
+    }),
+  EVENT_BACKBONE_RELAY_TIMEOUT_MS: Joi.number().integer().min(1000).max(60000).default(10000),
   PULSAR_ENABLED: Joi.boolean().truthy("true").falsy("false").default(false),
   PULSAR_SERVICE_URL: Joi.string()
     .pattern(/^pulsars?:\\/\\/.+/)
-    .when("PULSAR_ENABLED", {
-      is: true,
+    .when("EVENT_BACKBONE_TRANSPORT", {
+      is: "pulsar",
       then: Joi.required(),
-      otherwise: Joi.string().allow("").optional(),
+      otherwise: Joi.when("PULSAR_ENABLED", {
+        is: true,
+        then: Joi.required(),
+        otherwise: Joi.string().allow("").optional(),
+      }),
     }),
   PULSAR_TENANT: Joi.string().default("public"),
   PULSAR_NAMESPACE: Joi.string().default("default"),
@@ -162,6 +226,26 @@ export class OutboxTransactionRequiredError extends Error {
   constructor() {
     super("Outbox writes must use the same active database transaction as the business write");
     this.name = "OutboxTransactionRequiredError";
+  }
+}
+
+export class RelayHttpRetryableError extends Error {
+  readonly statusCode?: number;
+
+  constructor(message: string, statusCode?: number) {
+    super(message);
+    this.name = "RelayHttpRetryableError";
+    this.statusCode = statusCode;
+  }
+}
+
+export class RelayHttpNonRetryableError extends Error {
+  readonly statusCode?: number;
+
+  constructor(message: string, statusCode?: number) {
+    super(message);
+    this.name = "RelayHttpNonRetryableError";
+    this.statusCode = statusCode;
   }
 }
 `;
@@ -540,13 +624,125 @@ export class NoopEventPublisher implements EventBackbonePublisher {
 
   async publish(envelope: EventBackboneEnvelope): Promise<void> {
     this.logger.debug(
-      "Event backbone publish skipped because Pulsar is disabled: " + envelope.type,
+      "Event backbone publish skipped because transport is none: " + envelope.type,
     );
   }
 }
 `;
 
   await writeFile(path.join(publishersPath, 'noop-event.publisher.ts'), noopPublisherContent);
+
+  const relayHttpPublisherContent = `import { Injectable } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { EVENT_BACKBONE_ENV } from "../event-backbone.constants";
+import {
+  RelayHttpNonRetryableError,
+  RelayHttpRetryableError,
+} from "../event-backbone.errors";
+import { EventBackboneEnvelope, EventBackbonePublisher } from "../event-backbone.types";
+
+const RELAY_EVENTS_PATH = "/api/v1/events";
+const RELAY_AUDIENCE_HEADER = "X-Relay-Audience";
+const CORRELATION_HEADER = "X-Correlation-Id";
+
+@Injectable()
+export class RelayHttpPublisher implements EventBackbonePublisher {
+  constructor(private readonly configService: ConfigService) {}
+
+  async publish(envelope: EventBackboneEnvelope): Promise<void> {
+    const relayUrl = this.requireConfig(EVENT_BACKBONE_ENV.relayHttpUrl, "relay URL");
+    const machineToken = this.requireConfig(
+      EVENT_BACKBONE_ENV.relayServiceCredential,
+      "relay machine token",
+    );
+    const audience = this.requireConfig(EVENT_BACKBONE_ENV.relayAudience, "relay audience");
+    const timeoutMs = this.timeoutMs();
+    const url = this.joinUrl(relayUrl, RELAY_EVENTS_PATH);
+
+    const headers: Record<string, string> = {
+      Authorization: "Bearer " + machineToken,
+      [RELAY_AUDIENCE_HEADER]: audience,
+      "Content-Type": "application/json",
+      "Idempotency-Key": envelope.id,
+    };
+
+    const correlationId = envelope.metadata?.correlationId;
+    if (typeof correlationId === "string" && correlationId.length > 0) {
+      headers[CORRELATION_HEADER] = correlationId;
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          ...envelope,
+          reference: envelope.reference || envelope.id,
+        }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error) {
+      if (this.isTimeout(error)) {
+        throw new RelayHttpRetryableError(
+          "Relay HTTP request timed out after " + String(timeoutMs) + "ms",
+        );
+      }
+
+      throw new RelayHttpRetryableError(
+        error instanceof Error ? error.message : "Relay HTTP request failed",
+      );
+    }
+
+    if (response.status >= 200 && response.status < 300) {
+      return;
+    }
+
+    const body = await response.text().catch(() => "");
+    const message =
+      "Relay HTTP publish failed with status " +
+      String(response.status) +
+      (body ? ": " + body.slice(0, 500) : "");
+
+    if (this.isRetryableStatus(response.status)) {
+      throw new RelayHttpRetryableError(message, response.status);
+    }
+
+    throw new RelayHttpNonRetryableError(message, response.status);
+  }
+
+  private requireConfig(key: string, label: string): string {
+    const value = this.configService.get<string>(key);
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+
+    throw new RelayHttpNonRetryableError("Missing event backbone " + label + " (" + key + ")");
+  }
+
+  private timeoutMs(): number {
+    const configured = Number(this.configService.get<string>(EVENT_BACKBONE_ENV.relayTimeoutMs));
+    return Number.isFinite(configured) && configured >= 1000 ? Math.floor(configured) : 10000;
+  }
+
+  private isRetryableStatus(status: number): boolean {
+    return status === 408 || status === 425 || status === 429 || status >= 500;
+  }
+
+  private isTimeout(error: unknown): boolean {
+    return (
+      error instanceof Error &&
+      (error.name === "TimeoutError" || error.name === "AbortError")
+    );
+  }
+
+  private joinUrl(baseUrl: string, path: string): string {
+    return baseUrl.replace(/\\/+$/, "") + path;
+  }
+}
+`;
+
+  await writeFile(path.join(publishersPath, 'relay-http.publisher.ts'), relayHttpPublisherContent);
 
   const pulsarPublisherContent = `import { Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
@@ -635,7 +831,11 @@ export class PulsarEventPublisher implements EventBackbonePublisher, OnModuleDes
 import { ConfigService } from "@nestjs/config";
 import { Interval } from "@nestjs/schedule";
 import { DataSource } from "typeorm";
-import { EVENT_BACKBONE_ENV, EVENT_BACKBONE_PUBLISHER } from "./event-backbone.constants";
+import {
+  EVENT_BACKBONE_ENV,
+  EVENT_BACKBONE_PUBLISHER,
+  EVENT_BACKBONE_TRANSPORT,
+} from "./event-backbone.constants";
 import type {
   EventBackboneEnvelope,
   EventBackbonePublisher,
@@ -689,10 +889,15 @@ export class OutboxRelayService {
   }
 
   private enabled(): boolean {
-    return (
-      this.booleanEnv(EVENT_BACKBONE_ENV.relayEnabled, true) &&
-      this.booleanEnv(EVENT_BACKBONE_ENV.pulsarEnabled, false)
-    );
+    if (!this.booleanEnv(EVENT_BACKBONE_ENV.relayEnabled, true)) {
+      return false;
+    }
+
+    const transport =
+      this.configService.get<string>(EVENT_BACKBONE_ENV.transport) ??
+      EVENT_BACKBONE_TRANSPORT.none;
+
+    return transport !== EVENT_BACKBONE_TRANSPORT.none;
   }
 
   private async claimBatch(): Promise<ClaimedOutboxRow[]> {
@@ -757,9 +962,15 @@ export class OutboxRelayService {
   private envelopeFromRow(row: ClaimedOutboxRow): EventBackboneEnvelope {
     const occurredAt =
       row.occurred_at instanceof Date ? row.occurred_at.toISOString() : row.occurred_at;
+    const metadata = row.metadata ?? {};
+    const schemaVersion =
+      typeof metadata.schemaVersion === "number" && Number.isFinite(metadata.schemaVersion)
+        ? Math.floor(metadata.schemaVersion)
+        : 1;
 
     return {
       id: row.id,
+      schemaVersion,
       reference: row.reference ?? undefined,
       type: row.event_type,
       source: row.source,
@@ -769,7 +980,7 @@ export class OutboxRelayService {
       version: row.version,
       subject: row.subject ?? undefined,
       payload: row.payload,
-      metadata: row.metadata ?? {},
+      metadata,
       occurredAt,
     };
   }
@@ -793,7 +1004,11 @@ import { ConfigModule, ConfigService } from "@nestjs/config";
 import { ScheduleModule } from "@nestjs/schedule";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { BusinessReferenceModule } from "../business-references";
-import { EVENT_BACKBONE_ENV, EVENT_BACKBONE_PUBLISHER } from "./event-backbone.constants";
+import {
+  EVENT_BACKBONE_ENV,
+  EVENT_BACKBONE_PUBLISHER,
+  EVENT_BACKBONE_TRANSPORT,
+} from "./event-backbone.constants";
 import { EventStoreService } from "./event-store.service";
 import { OutboxRelayService } from "./outbox-relay.service";
 import { OutboxService } from "./outbox.service";
@@ -802,6 +1017,7 @@ import { OutboxEventOrmEntity } from "./entities/outbox-event.orm-entity";
 import { ProjectionCheckpointOrmEntity } from "./entities/projection-checkpoint.orm-entity";
 import { NoopEventPublisher } from "./publishers/noop-event.publisher";
 import { PulsarEventPublisher } from "./publishers/pulsar-event.publisher";
+import { RelayHttpPublisher } from "./publishers/relay-http.publisher";
 
 @Module({
   imports: [
@@ -822,14 +1038,19 @@ import { PulsarEventPublisher } from "./publishers/pulsar-event.publisher";
       provide: EVENT_BACKBONE_PUBLISHER,
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
-        const configured = configService.get<boolean | string>(
-          EVENT_BACKBONE_ENV.pulsarEnabled,
-          false,
-        );
-        const pulsarEnabled = configured === true || configured === "true";
-        return pulsarEnabled
-          ? new PulsarEventPublisher(configService)
-          : new NoopEventPublisher();
+        const transport =
+          configService.get<string>(EVENT_BACKBONE_ENV.transport) ??
+          EVENT_BACKBONE_TRANSPORT.none;
+
+        if (transport === EVENT_BACKBONE_TRANSPORT.pulsar) {
+          return new PulsarEventPublisher(configService);
+        }
+
+        if (transport === EVENT_BACKBONE_TRANSPORT.relayHttp) {
+          return new RelayHttpPublisher(configService);
+        }
+
+        return new NoopEventPublisher();
       },
     },
   ],
@@ -893,6 +1114,6 @@ export class ${migrationName} implements MigrationInterface {
   console.log(chalk.green('  ✓ Joi environment schema fragment'));
   console.log(chalk.green('  ✓ Postgres event store entities and service'));
   console.log(chalk.green('  ✓ Transactional outbox service and relay'));
-  console.log(chalk.green('  ✓ Pulsar publisher adapter with no-op fallback'));
+  console.log(chalk.green('  ✓ Relay HTTP and Pulsar publishers with transport selection'));
   console.log(chalk.green('  ✓ TypeORM migration for event backbone tables'));
 }
