@@ -30,6 +30,8 @@ describe('platform context recipe', () => {
     expect(types).toContain('correlationId: string;');
     expect(types).toContain('idempotencyKey?: string;');
     expect(types).toContain('authority: "service-access" | "parc" | "owner-service";');
+    expect(types).toContain('decisionReference: string;');
+    expect(types).toContain('decisionId?: string;');
     expect(factory).toContain('assertVerifiedPrincipal(input.principal)');
     expect(factory).not.toContain('headers');
     expect(service).toContain('AsyncLocalStorage<PlatformRequestContext>');

@@ -74,7 +74,8 @@ export interface PlatformAuthorizationInput {
 export interface PlatformAccessDecision {
   authority: "service-access" | "parc" | "owner-service";
   allowed: boolean;
-  decisionId: string;
+  decisionReference: string;
+  decisionId?: string;
   decidedAt: string;
   policyVersion?: string;
   reasonCode?: string;
@@ -196,7 +197,7 @@ headers. Edge adapters may forward a signed internal context, but the receiving
 service must verify that signature and its intended audience before use.
 
 Both Service Access and PARC must allow privileged platform mutations. Their
-decision IDs and policy versions belong in the owner audit record. Correlation,
+decision references and policy versions belong in the owner audit record. Correlation,
 causation, and idempotency metadata must continue into transactional outbox
 events and Relay delivery receipts.
 `;
