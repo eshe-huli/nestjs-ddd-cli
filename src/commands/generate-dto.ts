@@ -82,6 +82,19 @@ export function resolveDtoKind(kind?: string): DtoKind {
   return normalized as DtoKind;
 }
 
+function normalizeDtoName(dtoName: string, kind: DtoKind): string {
+  if (kind !== 'filter-query') {
+    return dtoName;
+  }
+
+  const normalized = dtoName.replace(/(?:[-_\s]?filter)?[-_\s]?query$/i, '');
+  if (!normalized) {
+    throw new Error('Filter query DTO name must include an entity name.');
+  }
+
+  return normalized;
+}
+
 export async function generateDto(dtoName: string, options: any) {
   if (!options.module) {
     throw new Error('Module name is required. Use -m or --module option.');
@@ -89,14 +102,15 @@ export async function generateDto(dtoName: string, options: any) {
 
   const kind = resolveDtoKind(options.kind);
   const dryRun = !!options.dryRun;
-  const entityKebab = toKebabCase(dtoName);
+  const entityName = normalizeDtoName(dtoName, kind);
+  const entityKebab = toKebabCase(entityName);
   const config = DTO_KIND_CONFIG[kind];
 
   console.log(chalk.blue(`Generating ${kind} DTO: ${dtoName}`));
 
   const basePath = options.path || process.cwd();
   const modulePath = getModulePath(basePath, options.module);
-  const templateData = prepareTemplateData(dtoName, options.module, options.fields);
+  const templateData = prepareTemplateData(entityName, options.module, options.fields);
 
   const outputPath = path.join(
     modulePath,
