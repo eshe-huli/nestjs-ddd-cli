@@ -53,6 +53,10 @@ ddd observability
 | `ddd recipe [name]` | Apply common patterns (auth, caching, etc.) |
 | `ddd shared` | Generate shared utilities and base classes |
 
+```bash
+ddd generate dto Product -m inventory --kind create
+```
+
 ### Enterprise Commands
 
 | Command | Description |

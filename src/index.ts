@@ -7,6 +7,7 @@ import { generateEntity } from './commands/generate-entity';
 import { generateUseCase } from './commands/generate-usecase';
 import { generateService } from './commands/generate-service';
 import { generateController } from './commands/generate-controller';
+import { generateDto } from './commands/generate-dto';
 import { generateEvent } from './commands/generate-event';
 import { generateQuery } from './commands/generate-query';
 import { generateAll } from './commands/generate-all';
@@ -101,9 +102,14 @@ program
   .command('generate <type> <name>')
   .alias('g')
   .description(
-    'Generate boilerplate code (types: module, entity, controller, usecase, service, event, query, all)',
+    'Generate boilerplate code (types: module, entity, controller, usecase, service, event, query, dto, all)',
   )
   .option('-m, --module <module>', 'Module name')
+  .option(
+    '--kind <kind>',
+    'DTO kind (create, update, response, filter, filter-query, pagination, paginated-response)',
+    'create',
+  )
   .option('-p, --path <path>', 'Base path for generation', process.cwd())
   .option('-f, --fields <fields>', 'Entity fields (format: "name:type:modifier name2:type2")')
   .option('--skip-orm', 'Skip ORM entity generation')
@@ -143,6 +149,9 @@ program
         case 'query':
           await generateQuery(name, options);
           break;
+        case 'dto':
+          await generateDto(name, options);
+          break;
         case 'all':
           await generateAll(name, options);
           break;
@@ -150,7 +159,7 @@ program
           console.error(chalk.red(`Unknown type: ${type}`));
           console.log(
             chalk.yellow(
-              'Available types: module, entity, controller, usecase, service, event, query, all',
+              'Available types: module, entity, controller, usecase, service, event, query, dto, all',
             ),
           );
           process.exit(1);

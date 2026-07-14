@@ -1,7 +1,7 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
 import { IsOptional, IsString, IsBoolean, IsDate, IsUUID } from "class-validator";
 import { Type } from "class-transformer";
-import { PaginationQueryDto } from "./pagination.query.dto";
+import { PaginationQueryDto } from "./pagination-query.dto";
 
 export class {{entityNamePascal}}FilterDto extends PaginationQueryDto {
   @ApiPropertyOptional({ description: "Search by ID" })

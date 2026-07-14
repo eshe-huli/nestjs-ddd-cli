@@ -3,6 +3,7 @@ import * as fs from 'fs-extra';
 import * as path from 'path';
 import { generateEvent } from '../../src/commands/generate-event';
 import { generateController } from '../../src/commands/generate-controller';
+import { generateDto } from '../../src/commands/generate-dto';
 import { generateDomainService } from '../../src/commands/generate-domain-service';
 import { generateModule } from '../../src/commands/generate-module';
 import { createMigration, resolveMigrationOutputPath } from '../../src/commands/migration';
@@ -129,6 +130,103 @@ describe('Command Generators', () => {
       const content = await fs.readFile(eventPath, 'utf-8');
       expect(content).toContain('TestEventEvent');
       expect(content).toContain('IEvent');
+    });
+  });
+
+  describe('DTO Generator', () => {
+    it('generates a create request DTO and registers it in the requests barrel', async () => {
+      await generateModule('inventory', { path: testDir });
+      await generateDto('Product', { module: 'inventory', path: testDir, kind: 'create' });
+
+      const dtoPath = path.join(
+        testDir,
+        'src/modules/inventory/application/dto/requests/create-product.dto.ts',
+      );
+      const requestsIndex = await fs.readFile(
+        path.join(testDir, 'src/modules/inventory/application/dto/requests/index.ts'),
+        'utf-8',
+      );
+
+      expect(await fs.pathExists(dtoPath)).toBe(true);
+      expect(await fs.readFile(dtoPath, 'utf-8')).toContain('CreateProductDto');
+      expect(requestsIndex).toContain("export * from './create-product.dto';");
+    });
+
+    it('generates a response DTO and registers it in the responses barrel', async () => {
+      await generateModule('inventory', { path: testDir });
+      await generateDto('Product', { module: 'inventory', path: testDir, kind: 'response' });
+
+      const dtoPath = path.join(
+        testDir,
+        'src/modules/inventory/application/dto/responses/product.response.dto.ts',
+      );
+      const responsesIndex = await fs.readFile(
+        path.join(testDir, 'src/modules/inventory/application/dto/responses/index.ts'),
+        'utf-8',
+      );
+
+      expect(await fs.pathExists(dtoPath)).toBe(true);
+      expect(await fs.readFile(dtoPath, 'utf-8')).toContain('ProductResponseDto');
+      expect(responsesIndex).toContain("export * from './product.response.dto';");
+    });
+
+    it('keeps generated filter imports aligned with the pagination DTO filename', async () => {
+      await generateModule('inventory', { path: testDir });
+      await generateDto('Product', {
+        module: 'inventory',
+        path: testDir,
+        kind: 'pagination',
+      });
+      await generateDto('Product', {
+        module: 'inventory',
+        path: testDir,
+        kind: 'filter',
+      });
+
+      const filterPath = path.join(
+        testDir,
+        'src/modules/inventory/application/dto/requests/product-filter.dto.ts',
+      );
+      expect(await fs.readFile(filterPath, 'utf-8')).toContain('from "./pagination-query.dto"');
+    });
+
+    it('previews DTO generation without writing files on dry-run', async () => {
+      await generateModule('inventory', { path: testDir, dryRun: true });
+      await generateDto('Product', {
+        module: 'inventory',
+        path: testDir,
+        kind: 'update',
+        dryRun: true,
+      });
+
+      expect(
+        await fs.pathExists(
+          path.join(
+            testDir,
+            'src/modules/inventory/application/dto/requests/update-product.dto.ts',
+          ),
+        ),
+      ).toBe(false);
+
+      const plannedFiles = getDryRunFiles().map((change) =>
+        path.relative(testDir, change.filePath),
+      );
+      expect(plannedFiles).toContain(
+        'src/modules/inventory/application/dto/requests/update-product.dto.ts',
+      );
+    });
+
+    it('rejects unknown DTO kinds with allowed kind guidance', async () => {
+      await generateModule('inventory', { path: testDir });
+
+      await expect(
+        generateDto('Product', { module: 'inventory', path: testDir, kind: 'invalid-kind' }),
+      ).rejects.toThrow(/Unknown DTO kind/i);
+      await expect(
+        generateDto('Product', { module: 'inventory', path: testDir, kind: 'invalid-kind' }),
+      ).rejects.toThrow(
+        /create, update, response, filter, filter-query, pagination, paginated-response/,
+      );
     });
   });
 
