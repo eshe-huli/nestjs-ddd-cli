@@ -190,6 +190,25 @@ describe('Command Generators', () => {
       expect(await fs.readFile(filterPath, 'utf-8')).toContain('from "./pagination-query.dto"');
     });
 
+    it('normalizes conventional filter-query names without duplicating the query suffix', async () => {
+      await generateModule('inventory', { path: testDir });
+      await generateDto('ProductFilterQuery', {
+        module: 'inventory',
+        path: testDir,
+        kind: 'filter-query',
+      });
+
+      const queryPath = path.join(
+        testDir,
+        'src/modules/inventory/application/dto/requests/product-query.dto.ts',
+      );
+      const content = await fs.readFile(queryPath, 'utf-8');
+
+      expect(await fs.pathExists(queryPath)).toBe(true);
+      expect(content).toContain('export class ProductQueryDto extends ProductFilterDto');
+      expect(content).not.toContain('QueryQuery');
+    });
+
     it('previews DTO generation without writing files on dry-run', async () => {
       await generateModule('inventory', { path: testDir, dryRun: true });
       await generateDto('Product', {
@@ -237,23 +256,24 @@ describe('Command Generators', () => {
 
       const queryPath = path.join(
         testDir,
-        'src/modules/test-module/application/queries/test-query.handler.ts',
+        'src/modules/test-module/application/queries/test.handler.ts',
       );
       const queryExists = await fs.pathExists(queryPath);
 
       expect(queryExists).toBe(true);
 
       const content = await fs.readFile(queryPath, 'utf-8');
-      expect(content).toContain('TestQueryQuery');
-      expect(content).toContain('TestQueryHandler');
+      expect(content).toContain('TestQuery');
+      expect(content).not.toContain('TestQueryQuery');
+      expect(content).toContain('TestHandler');
       expect(content).toContain('IQueryHandler');
 
       const queryIndex = await fs.readFile(
         path.join(testDir, 'src/modules/test-module/application/queries/index.ts'),
         'utf-8',
       );
-      expect(queryIndex).toContain("import { TestQueryHandler } from './test-query.handler';");
-      expect(queryIndex).toContain('export const Queries = [\n  TestQueryHandler,\n];');
+      expect(queryIndex).toContain("import { TestHandler } from './test.handler';");
+      expect(queryIndex).toContain('export const Queries = [\n  TestHandler,\n];');
     });
   });
 

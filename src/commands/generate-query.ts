@@ -14,28 +14,32 @@ export async function generateQuery(queryName: string, options: any) {
   }
 
   const dryRun = !!options.dryRun;
+  const normalizedQueryName = queryName.replace(/[-_\s]?query$/i, '');
+  if (!normalizedQueryName) {
+    throw new Error('Query name must include an operation name.');
+  }
   console.log(chalk.blue(`Generating query handler: ${queryName}`));
 
   const basePath = options.path || process.cwd();
   const modulePath = getModulePath(basePath, options.module);
 
   // Generate query handler
-  const templateData = prepareTemplateData(queryName, options.module);
+  const templateData = prepareTemplateData(normalizedQueryName, options.module);
   const templatePath = path.join(__dirname, '../templates/query/query-handler.hbs');
   const outputPath = path.join(
     modulePath,
     'application/queries',
-    `${toKebabCase(queryName)}.handler.ts`,
+    `${toKebabCase(normalizedQueryName)}.handler.ts`,
   );
 
   await generateFromTemplate(templatePath, outputPath, templateData, dryRun);
   await updateBarrelFile(path.join(modulePath, 'application/queries/index.ts'), {
-    exports: [`export * from './${toKebabCase(queryName)}.handler';`],
+    exports: [`export * from './${toKebabCase(normalizedQueryName)}.handler';`],
     imports: [
-      `import { ${toPascalCase(queryName)}Handler } from './${toKebabCase(queryName)}.handler';`,
+      `import { ${toPascalCase(normalizedQueryName)}Handler } from './${toKebabCase(normalizedQueryName)}.handler';`,
     ],
     arrayName: 'Queries',
-    arrayItems: [`${toPascalCase(queryName)}Handler`],
+    arrayItems: [`${toPascalCase(normalizedQueryName)}Handler`],
     dryRun,
   });
 

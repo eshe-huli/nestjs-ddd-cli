@@ -59,6 +59,27 @@ describe('Scaffold Generator', () => {
 
     const entityContent = await fs.readFile(entityPath, 'utf-8');
     const repositoryContent = await fs.readFile(repositoryPath, 'utf-8');
+    const createCommandContent = await fs.readFile(
+      path.join(
+        testDir,
+        'src/modules/capital-markets/application/commands/create-capital-party.command.ts',
+      ),
+      'utf-8',
+    );
+    const updateCommandContent = await fs.readFile(
+      path.join(
+        testDir,
+        'src/modules/capital-markets/application/commands/update-capital-party.command.ts',
+      ),
+      'utf-8',
+    );
+    const deleteCommandContent = await fs.readFile(
+      path.join(
+        testDir,
+        'src/modules/capital-markets/application/commands/delete-capital-party.command.ts',
+      ),
+      'utf-8',
+    );
 
     expect(await fs.pathExists(queryPath)).toBe(true);
     expect(entityContent).toContain("status: 'active' | 'inactive';");
@@ -67,6 +88,14 @@ describe('Scaffold Generator', () => {
     expect(repositoryContent).toContain(
       '@modules/capital-markets/application/domain/entities/capital-party.entity',
     );
+    for (const commandContent of [
+      createCommandContent,
+      updateCommandContent,
+      deleteCommandContent,
+    ]) {
+      expect(commandContent).toContain('/application/domain/usecases/');
+      expect(commandContent).not.toContain('/application/usecases/');
+    }
   });
 
   it('preserves camelCase contracts and imports every emitted validator', async () => {
