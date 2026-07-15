@@ -14,6 +14,8 @@ import {
 } from '../utils/file.utils';
 import { toKebabCase, toPascalCase, toPlural } from '../utils/naming.utils';
 import { installDependencies } from '../utils/dependency.utils';
+import { loadConfig } from '../utils/config.utils';
+import { resolveMigrationOutputPath } from './migration';
 
 export async function generateAll(entityName: string, options: any) {
   console.log(chalk.blue(`\n🚀 Generating complete scaffolding for: ${entityName}`));
@@ -387,7 +389,13 @@ ${fieldsColumns}
 }
 `;
 
-  const migrationPath = path.join(basePath, 'src/migrations', fileName);
+  const config = await loadConfig(basePath);
+  const migrationsDir = resolveMigrationOutputPath(
+    basePath,
+    config.paths.migrations,
+    'src/migrations',
+  );
+  const migrationPath = path.join(migrationsDir, fileName);
   await writeGeneratedFile(migrationPath, content, dryRun);
   console.log(chalk.green(`   ✓ Migration: ${fileName}`));
 }

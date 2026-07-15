@@ -3,11 +3,13 @@ import * as fs from 'fs-extra';
 import * as path from 'path';
 import { generateAll } from '../../src/commands/generate-all';
 import { getDryRunFiles } from '../../src/utils/file.utils';
+import { resetConfigCache } from '../../src/utils/config.utils';
 
 describe('Scaffold Generator', () => {
   const testDir = path.join(__dirname, '../.test-scaffold-output');
 
   beforeEach(async () => {
+    resetConfigCache();
     await fs.remove(testDir);
     await fs.ensureDir(testDir);
   });
@@ -164,6 +166,48 @@ describe('Scaffold Generator', () => {
     expect(controllerTest).toContain('from "./permission-assignment.controller"');
     expect(repositoryTest).toContain('from "./permission-assignment.repository"');
     expect(useCaseTest).toContain('from "./create-permission-assignment.use-case"');
+  });
+
+  it('writes scaffold migrations to the default src/migrations directory', async () => {
+    await generateAll('LedgerEntry', {
+      module: 'ledger',
+      path: testDir,
+      fields: 'amount:decimal',
+    });
+
+    const migrationFiles = await fs.readdir(path.join(testDir, 'src/migrations'));
+    expect(
+      migrationFiles.some((fileName) => fileName.endsWith('-create_ledger_entries_table.ts')),
+    ).toBe(true);
+  });
+
+  it('uses paths.migrations from .dddrc.json for scaffold migrations', async () => {
+    const workspacePath = path.join(testDir, 'workspace');
+    const appPath = path.join(workspacePath, 'apps/api');
+    const migrationsPath = path.join(workspacePath, 'packages/infra/src/migrations');
+    await fs.ensureDir(path.join(workspacePath, '.git'));
+    await fs.ensureDir(appPath);
+    await fs.writeJson(path.join(appPath, '.dddrc.json'), {
+      paths: {
+        migrations: '../../packages/infra/src/migrations',
+      },
+    });
+
+    await generateAll('SettlementBatch', {
+      module: 'settlements',
+      path: appPath,
+      fields: 'reference:string',
+      dryRun: true,
+    });
+
+    expect(
+      getDryRunFiles().some(
+        (change) =>
+          path.dirname(change.filePath) === migrationsPath &&
+          path.basename(change.filePath).endsWith('-create_settlement_batches_table.ts'),
+      ),
+    ).toBe(true);
+    expect(await fs.pathExists(path.join(appPath, 'src/migrations'))).toBe(false);
   });
 
   it('merges barrel indexes across scaffold runs without dropping existing registrations', async () => {
