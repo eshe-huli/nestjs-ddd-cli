@@ -107,6 +107,7 @@ export class {{entityNamePascal}}Repository {
     return this.mapper.toDomainEntity(updated);
   }
 
+{{#if deleteEnabled}}
   async delete(id: string): Promise<void> {
 {{#if softDelete}}
     await this.prisma.{{entityNameCamel}}.update({
@@ -132,6 +133,7 @@ export class {{entityNamePascal}}Repository {
 
 {{/if}}
 
+{{/if}}
   async exists(id: string): Promise<boolean> {
     const count = await this.prisma.{{entityNameCamel}}.count({
 {{#if softDelete}}

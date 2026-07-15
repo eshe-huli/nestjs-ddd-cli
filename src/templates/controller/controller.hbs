@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+{{#if deleteEnabled}}
   Delete,
+{{/if}}
   Get,
   HttpCode,
   HttpStatus,
@@ -15,7 +17,9 @@ import { CommandBus, QueryBus } from "@nestjs/cqrs";
 import { ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { Create{{entityNamePascal}}Command } from "@modules/{{moduleNameKebab}}/application/commands/create-{{entityNameKebab}}.command";
 import { Update{{entityNamePascal}}Command } from "@modules/{{moduleNameKebab}}/application/commands/update-{{entityNameKebab}}.command";
+{{#if deleteEnabled}}
 import { Delete{{entityNamePascal}}Command } from "@modules/{{moduleNameKebab}}/application/commands/delete-{{entityNameKebab}}.command";
+{{/if}}
 import { Get{{entityNamePascal}}ByIdQuery } from "@modules/{{moduleNameKebab}}/application/queries/get-{{entityNameKebab}}-by-id.query";
 import { GetAll{{entityNamePluralPascal}}Query } from "@modules/{{moduleNameKebab}}/application/queries/get-all-{{entityNamePluralKebab}}.query";
 import { Create{{entityNamePascal}}Dto } from "@modules/{{moduleNameKebab}}/application/dto/requests/create-{{entityNameKebab}}.dto";
@@ -77,6 +81,7 @@ export class {{entityNamePascal}}Controller {
     return this.commandBus.execute(command);
   }
 
+{{#if deleteEnabled}}
   @Delete(":id")
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: "Delete {{entityNameCamel}}" })
@@ -87,4 +92,5 @@ export class {{entityNamePascal}}Controller {
     const command = new Delete{{entityNamePascal}}Command(id);
     return this.commandBus.execute(command);
   }
+{{/if}}
 }

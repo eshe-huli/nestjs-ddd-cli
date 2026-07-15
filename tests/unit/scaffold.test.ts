@@ -133,6 +133,73 @@ describe('Scaffold Generator', () => {
     expect(dtoContent).toMatch(/\bArrayMaxSize\b/);
   });
 
+  it('keeps money exact and server-owned fields out of request assignment paths', async () => {
+    await generateAll('LedgerLine', {
+      module: 'ledger',
+      path: testDir,
+      fields: 'amount:money memo:string:optional tenantId:uuid:serverOwned',
+    });
+
+    const modulePath = path.join(testDir, 'src/modules/ledger');
+    const [entity, ormEntity, createDto, responseDto, createCommand, createUseCase, updateUseCase] =
+      await Promise.all([
+        fs.readFile(
+          path.join(modulePath, 'application/domain/entities/ledger-line.entity.ts'),
+          'utf-8',
+        ),
+        fs.readFile(
+          path.join(modulePath, 'infrastructure/orm-entities/ledger-line.orm-entity.ts'),
+          'utf-8',
+        ),
+        fs.readFile(
+          path.join(modulePath, 'application/dto/requests/create-ledger-line.dto.ts'),
+          'utf-8',
+        ),
+        fs.readFile(
+          path.join(modulePath, 'application/dto/responses/ledger-line.response.dto.ts'),
+          'utf-8',
+        ),
+        fs.readFile(
+          path.join(modulePath, 'application/commands/create-ledger-line.command.ts'),
+          'utf-8',
+        ),
+        fs.readFile(
+          path.join(modulePath, 'application/domain/usecases/create-ledger-line.use-case.ts'),
+          'utf-8',
+        ),
+        fs.readFile(
+          path.join(modulePath, 'application/domain/usecases/update-ledger-line.use-case.ts'),
+          'utf-8',
+        ),
+      ]);
+
+    expect(entity).toContain('amount: string;');
+    expect(entity).toContain('tenantId: string;');
+    expect(ormEntity).toMatch(/@Column\(\{ type: "decimal" \}\)\s+amount: string;/);
+    expect(createDto).toContain('@IsDecimal({ decimal_digits: \'0,18\', force_decimal: false })');
+    expect(createDto).toContain('type: String, format: "decimal", example: "1250.00"');
+    expect(createDto).not.toContain('tenantId');
+    expect(responseDto).toContain('amount: string;');
+    expect(responseDto).toContain('tenantId: string;');
+    expect(createCommand).toContain('CreateLedgerLineServerOwnedFields');
+    expect(createUseCase).toContain('tenantId: serverOwnedFields.tenantId');
+    expect(createUseCase).toContain('amount: dto.amount');
+    expect(createUseCase).not.toContain('...dto');
+    expect(updateUseCase).not.toContain('dto.tenantId');
+    expect(updateUseCase).not.toContain('...dto');
+
+    const migrationFiles = await fs.readdir(path.join(testDir, 'src/migrations'));
+    const migration = await fs.readFile(
+      path.join(
+        testDir,
+        'src/migrations',
+        migrationFiles.find((fileName) => fileName.includes('create_ledger_lines_table'))!,
+      ),
+      'utf-8',
+    );
+    expect(migration).toMatch(/name: "amount",\s+type: "decimal"/);
+  });
+
   it('generates tests with resolvable sibling imports', async () => {
     await generateAll('PermissionAssignment', {
       module: 'permissions',

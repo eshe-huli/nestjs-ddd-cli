@@ -54,6 +54,11 @@
           "default": true,
           "description": "Include pagination support in list queries"
         },
+        "delete": {
+          "type": "boolean",
+          "default": true,
+          "description": "Generate the generic aggregate deletion surface"
+        },
         "softDelete": {
           "type": "boolean",
           "default": true,

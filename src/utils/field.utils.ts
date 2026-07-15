@@ -14,6 +14,8 @@ export interface FieldDefinition {
   isRequired: boolean;
   isOptional: boolean;
   isUnique: boolean;
+  isMoney: boolean;
+  isServerOwned: boolean;
   isArray: boolean;
   validators: string[];
   description: string;
@@ -33,6 +35,8 @@ export interface ParsedFields {
   hasDate: boolean;
   hasEnum: boolean;
   hasRelation: boolean;
+  hasMoney: boolean;
+  hasServerOwned: boolean;
 }
 
 /**
@@ -44,12 +48,22 @@ export interface ParsedFields {
  *   "email:string:unique"            -> required unique string with IsEmail
  *   "age:number:optional"            -> optional number
  *   "status:enum:active,inactive"    -> enum with values
+ *   "amount:money"                   -> exact decimal stored as a TypeScript string
+ *   "tenantId:uuid:serverOwned"      -> persisted field excluded from request DTOs
  *   "tags:string[]"                  -> string array
  *   "userId:uuid:relation"           -> foreign key relation
  */
 export function parseFields(fieldsString: string): ParsedFields {
   if (!fieldsString || fieldsString.trim() === '') {
-    return { fields: [], hasEmail: false, hasDate: false, hasEnum: false, hasRelation: false };
+    return {
+      fields: [],
+      hasEmail: false,
+      hasDate: false,
+      hasEnum: false,
+      hasRelation: false,
+      hasMoney: false,
+      hasServerOwned: false,
+    };
   }
 
   const fieldDefs = fieldsString
@@ -63,6 +77,8 @@ export function parseFields(fieldsString: string): ParsedFields {
   let hasDate = false;
   let hasEnum = false;
   let hasRelation = false;
+  let hasMoney = false;
+  let hasServerOwned = false;
 
   const fields: FieldDefinition[] = fieldDefs.map((fieldDef) => {
     const parts = fieldDef.split(':');
@@ -78,6 +94,8 @@ export function parseFields(fieldsString: string): ParsedFields {
 
     const isOptional = modifiers.includes('optional');
     const isUnique = modifiers.includes('unique');
+    const isMoney = baseType.toLowerCase() === 'money';
+    const isServerOwned = modifiers.includes('serverOwned') || modifiers.includes('internal');
 
     // Check for relation type
     const relationTypes = ['OneToOne', 'OneToMany', 'ManyToOne', 'ManyToMany'];
@@ -106,7 +124,9 @@ export function parseFields(fieldsString: string): ParsedFields {
             !relationTypes.includes(m) &&
             m !== relationTarget &&
             m !== 'optional' &&
-            m !== 'unique',
+            m !== 'unique' &&
+            m !== 'serverOwned' &&
+            m !== 'internal',
         );
       } else {
         // Legacy format or uuid:relation
@@ -146,6 +166,8 @@ export function parseFields(fieldsString: string): ParsedFields {
     if (baseType === 'date' || baseType === 'datetime') hasDate = true;
     if (baseType === 'enum') hasEnum = true;
     if (isRelation) hasRelation = true;
+    if (isMoney) hasMoney = true;
+    if (isServerOwned) hasServerOwned = true;
 
     const camelCase = toCamelCase(name);
     const snakeCase = toSnakeCase(name);
@@ -167,6 +189,8 @@ export function parseFields(fieldsString: string): ParsedFields {
       isRequired: !isOptional,
       isOptional,
       isUnique,
+      isMoney,
+      isServerOwned,
       isArray,
       validators,
       description: generateDescription(name, baseType),
@@ -179,7 +203,7 @@ export function parseFields(fieldsString: string): ParsedFields {
     };
   });
 
-  return { fields, hasEmail, hasDate, hasEnum, hasRelation };
+  return { fields, hasEmail, hasDate, hasEnum, hasRelation, hasMoney, hasServerOwned };
 }
 
 function mapToTsType(type: string, enumValues?: string[]): string {
@@ -190,6 +214,7 @@ function mapToTsType(type: string, enumValues?: string[]): string {
     integer: 'number',
     float: 'number',
     decimal: 'number',
+    money: 'string',
     boolean: 'boolean',
     bool: 'boolean',
     date: 'Date',
@@ -212,6 +237,7 @@ function mapToDbType(type: string, isArray: boolean): string {
     integer: 'int',
     float: 'float',
     decimal: 'decimal',
+    money: 'decimal',
     boolean: 'boolean',
     bool: 'boolean',
     date: 'date',
@@ -235,6 +261,7 @@ function mapToPrismaType(type: string, isArray: boolean): string {
     integer: 'Int',
     float: 'Float',
     decimal: 'Decimal',
+    money: 'Decimal',
     boolean: 'Boolean',
     bool: 'Boolean',
     date: 'DateTime',
@@ -337,6 +364,12 @@ function generateValidators(
       validators.push('@Max(1e15)');
       break;
 
+    case 'money':
+      validators.push('@IsString()');
+      validators.push("@IsDecimal({ decimal_digits: '0,18', force_decimal: false })");
+      validators.push('@MaxLength(64)');
+      break;
+
     case 'boolean':
     case 'bool':
       validators.push('@IsBoolean()');
@@ -393,19 +426,22 @@ function generateRelationDecorator(f: FieldDefinition): string {
   }
 }
 
-function generateDescription(name: string, _type: string): string {
+function generateDescription(name: string, type: string): string {
   const readableName = name
     .replace(/([A-Z])/g, ' $1')
     .replace(/[_-]/g, ' ')
     .trim()
     .toLowerCase();
 
-  return `The ${readableName} of the entity`;
+  return type.toLowerCase() === 'money'
+    ? `The ${readableName} of the entity as an exact decimal string`
+    : `The ${readableName} of the entity`;
 }
 
 function generateExample(name: string, type: string): string | undefined {
   const lowerName = name.toLowerCase();
 
+  if (type.toLowerCase() === 'money') return '1250.00';
   if (lowerName.includes('email')) return 'user@example.com';
   if (lowerName.includes('name')) return 'John Doe';
   if (lowerName.includes('phone')) return '+1234567890';
@@ -454,6 +490,7 @@ export function generateFieldsTemplateData(fields: FieldDefinition[]): {
     .join('\n');
 
   const dtoProperties = fields
+    .filter((field) => !field.isServerOwned)
     .map((f) => {
       const decorators = [
         `  @ApiProperty({ description: "${f.description}"${f.example ? `, example: "${f.example}"` : ''} })`,

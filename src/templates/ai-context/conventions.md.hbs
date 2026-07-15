@@ -17,7 +17,7 @@
 
 ## Class Naming
 
-- **Commands**: `Create[Entity]Command`, `Update[Entity]Command`, `Delete[Entity]Command`
+- **Commands**: `Create[Entity]Command`, `Update[Entity]Command`, and (when enabled) `Delete[Entity]Command`
 - **Command Handlers**: `Create[Entity]Handler`
 - **Queries**: `Get[Entity]ByIdQuery`, `GetAll[Entities]Query`
 - **Query Handlers**: `Get[Entity]ByIdHandler`
@@ -56,6 +56,8 @@ import { UserEntity } from "../../../application/domain/entities/user.entity";
 - Request DTOs use camelCase properties (API layer)
 - Domain entities use camelCase properties (business layer)
 - Response DTOs use camelCase properties (serialized from domain)
+- Financial values use the scaffold `money` type and remain decimal strings at API/domain boundaries
+- Fields marked `serverOwned`/`internal` never appear in request DTOs; supply them from authenticated application context
 
 ```typescript
 // Request DTO (camelCase input)
@@ -120,7 +122,8 @@ if (!isValid) {
 
 ## Repository Methods
 
-Standard repository interface:
+Standard repository interface (the delete method is omitted when scaffolding with
+`--no-delete` or `features.delete: false`):
 
 ```typescript
 interface Repository<T> {

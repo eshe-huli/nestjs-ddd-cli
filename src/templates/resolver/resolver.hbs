@@ -2,7 +2,9 @@ import { Args, ID, Mutation, Query, Resolver } from "@nestjs/graphql";
 import { CommandBus, QueryBus } from "@nestjs/cqrs";
 import { Create{{entityNamePascal}}Command } from "@modules/{{moduleNameKebab}}/application/commands/create-{{entityNameKebab}}.command";
 import { Update{{entityNamePascal}}Command } from "@modules/{{moduleNameKebab}}/application/commands/update-{{entityNameKebab}}.command";
+{{#if deleteEnabled}}
 import { Delete{{entityNamePascal}}Command } from "@modules/{{moduleNameKebab}}/application/commands/delete-{{entityNameKebab}}.command";
+{{/if}}
 import { Get{{entityNamePascal}}ByIdQuery } from "@modules/{{moduleNameKebab}}/application/queries/get-{{entityNameKebab}}-by-id.query";
 import { GetAll{{entityNamePluralPascal}}Query } from "@modules/{{moduleNameKebab}}/application/queries/get-all-{{entityNamePluralKebab}}.query";
 import { Create{{entityNamePascal}}Input } from "./inputs/create-{{entityNameKebab}}.input";
@@ -51,6 +53,7 @@ export class {{entityNamePascal}}Resolver {
     return this.commandBus.execute(command);
   }
 
+{{#if deleteEnabled}}
   @Mutation(() => Boolean)
   async delete{{entityNamePascal}}(
     @Args("id", { type: () => ID }) id: string,
@@ -59,4 +62,5 @@ export class {{entityNamePascal}}Resolver {
     await this.commandBus.execute(command);
     return true;
   }
+{{/if}}
 }

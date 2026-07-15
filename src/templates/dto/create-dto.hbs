@@ -3,6 +3,7 @@ import {
   IsArray,
   IsBoolean,
   IsDate,
+  IsDecimal,
   IsDefined,
   IsEmail,
   IsIn,
@@ -24,12 +25,12 @@ import {
 import { Type } from "class-transformer";
 
 export class Create{{entityNamePascal}}Dto {
-{{#if hasFields}}
-{{#each fields}}
+{{#if hasRequestFields}}
+{{#each requestFields}}
 {{#if this.isOptional}}
-  @ApiPropertyOptional({ description: "{{this.description}}"{{#if this.example}}, example: "{{this.example}}"{{/if}} })
+  @ApiPropertyOptional({ description: "{{this.description}}"{{#if this.isMoney}}, type: String, format: "decimal"{{/if}}{{#if this.example}}, example: "{{this.example}}"{{/if}} })
 {{else}}
-  @ApiProperty({ description: "{{this.description}}"{{#if this.example}}, example: "{{this.example}}"{{/if}} })
+  @ApiProperty({ description: "{{this.description}}"{{#if this.isMoney}}, type: String, format: "decimal"{{/if}}{{#if this.example}}, example: "{{this.example}}"{{/if}} })
 {{/if}}
 {{#each this.validators}}
   {{this}}
@@ -38,6 +39,9 @@ export class Create{{entityNamePascal}}Dto {
 
 {{/each}}
 {{else}}
+{{#if hasFields}}
+  // This aggregate has no client-writable scaffold fields.
+{{else}}
   // Add your DTO properties here in snake_case
   // Example:
   // @ApiProperty({ description: "User name" })
@@ -45,5 +49,6 @@ export class Create{{entityNamePascal}}Dto {
   // @IsNotEmpty()
   // @IsDefined()
   // name: string;
+{{/if}}
 {{/if}}
 }

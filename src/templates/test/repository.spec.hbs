@@ -46,7 +46,9 @@ describe("{{entityNamePascal}}Repository", () => {
             find: jest.fn(),
             findAndCount: jest.fn(),
             update: jest.fn(),
+{{#if deleteEnabled}}
             delete: jest.fn(),
+{{/if}}
             count: jest.fn(),
           },
         },
@@ -137,6 +139,7 @@ describe("{{entityNamePascal}}Repository", () => {
     });
   });
 
+{{#if deleteEnabled}}
   describe("delete", () => {
 {{#if softDelete}}
     it("should soft delete the entity", async () => {
@@ -173,6 +176,7 @@ describe("{{entityNamePascal}}Repository", () => {
 
 {{/if}}
 
+{{/if}}
   describe("exists", () => {
     it("should return true when entity exists", async () => {
       typeOrmRepo.count.mockResolvedValue(1);

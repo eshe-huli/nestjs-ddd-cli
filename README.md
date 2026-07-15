@@ -28,8 +28,8 @@ npm install -g nestjs-ddd-cli
 # Initialize a new project
 ddd init my-project
 
-# Generate complete CRUD with typed fields
-ddd scaffold User -m users --fields "name:string email:string:unique age:number:optional"
+# Generate a financial-safe aggregate without a generic DELETE operation
+ddd scaffold Invoice -m billing --fields "amount:money tenantId:uuid:serverOwned" --no-delete
 
 # Apply authentication recipe
 ddd recipe auth-jwt --install-deps
@@ -48,7 +48,7 @@ ddd observability
 | Command | Description |
 |---------|-------------|
 | `ddd init <name>` | Initialize new NestJS project with DDD structure |
-| `ddd scaffold <entity> -m <module>` | Generate complete CRUD with all layers |
+| `ddd scaffold <entity> -m <module>` | Generate a complete aggregate stack |
 | `ddd generate <type> <name> -m <module>` | Generate individual components |
 | `ddd recipe [name]` | Apply common patterns (auth, caching, etc.) |
 | `ddd shared` | Generate shared utilities and base classes |
@@ -84,7 +84,7 @@ ddd generate dto Product -m inventory --kind create
 Generate complete typed entities, DTOs, and migrations:
 
 ```bash
-ddd scaffold Product -m inventory --fields "name:string price:number:optional sku:string:unique"
+ddd scaffold Product -m inventory --fields "name:string price:money:optional sku:string:unique"
 ```
 
 **Field Format:** `name:type:modifier1:modifier2`
@@ -93,9 +93,36 @@ ddd scaffold Product -m inventory --fields "name:string price:number:optional sk
 |-------|-----------|
 | `string`, `text` | `optional` |
 | `number`, `int`, `float`, `decimal` | `unique` |
+| `money` (exact decimal-backed TypeScript string) | `serverOwned` (`internal` alias) |
 | `boolean` | `relation` |
 | `date`, `datetime`, `timestamp` | `OneToOne`, `OneToMany`, `ManyToOne`, `ManyToMany` |
 | `uuid`, `json`, `enum` | |
+
+Use `money` for financial values that must not pass through JavaScript floating-point
+numbers. It generates `string` in domain, TypeORM, request, and response types,
+decimal-string validation and OpenAPI metadata, plus `decimal`/Prisma `Decimal`
+storage. Existing `decimal` fields remain TypeScript `number` for compatibility.
+
+Use `serverOwned` for fields populated from trusted application context rather than
+the request body:
+
+```bash
+ddd scaffold Invoice -m billing \
+  --fields "amount:money tenantId:uuid:serverOwned bookId:uuid:serverOwned"
+```
+
+Server-owned fields remain in domain, persistence, mapper, and response generation,
+but are omitted from create/update request DTOs and request mass-assignment. The
+generated create command accepts a second typed `serverOwnedFields` argument and
+fails closed until the controller/application layer supplies it from authenticated
+context.
+
+For an aggregate with no generic deletion capability:
+
+```bash
+ddd scaffold LedgerEntry -m ledger --fields "amount:money" --no-delete
+# Equivalent project-wide default: features.delete = false in .dddrc.json
+```
 
 **Relations:**
 ```bash
@@ -211,6 +238,7 @@ Create `.dddrc.json` in your project root:
   "features": {
     "swagger": true,
     "pagination": true,
+    "delete": true,
     "softDelete": true,
     "hardDelete": false,
     "timestamps": true,
@@ -224,6 +252,13 @@ Create `.dddrc.json` in your project root:
   }
 }
 ```
+
+`features.delete` controls whether aggregate scaffolds emit the generic DELETE
+controller route, delete command/use case, and repository `delete`/`hardDelete`
+surface. It defaults to `true` for compatibility. Set it to `false`, or pass
+`--no-delete` to `ddd scaffold`/`ddd generate all`, for a non-destructive aggregate
+scaffold. This does not remove existing generated files and does not disable
+soft-delete columns or active-row filtering.
 
 `features.softDelete` controls the generated domain field, ORM column or Prisma
 field, active-row filters, and repository delete behavior. When it is `false`,
@@ -248,8 +283,8 @@ ddd security-patterns
 ddd recipe auth-jwt --install-deps
 
 # Domain modules
-ddd scaffold Product -m inventory --fields "name:string price:decimal sku:string:unique stock:int"
-ddd scaffold Order -m orders --fields "total:decimal status:enum:pending,paid,shipped customerId:uuid"
+ddd scaffold Product -m inventory --fields "name:string price:money sku:string:unique stock:int"
+ddd scaffold Order -m orders --fields "total:money status:enum:pending,paid,shipped customerId:uuid"
 ddd scaffold Customer -m customers --fields "email:string:unique name:string"
 
 # Enterprise features
@@ -271,7 +306,7 @@ ddd metrics-prometheus
 ddd health-probes
 
 # Domain
-ddd scaffold Transaction -m payments --fields "amount:decimal currency:string status:enum:pending,completed,failed"
+ddd scaffold Transaction -m payments --fields "amount:money currency:string status:enum:pending,completed,failed"
 ddd circuit-breaker
 ```
 
@@ -306,7 +341,7 @@ All generated APIs follow RESTful conventions with security:
 | GET | `/entities/:id` | Get single entity |
 | POST | `/entities` | Create new entity |
 | PUT | `/entities/:id` | Update entity |
-| DELETE | `/entities/:id` | Soft delete entity |
+| DELETE | `/entities/:id` | Soft delete entity (omitted with `--no-delete`) |
 
 ### Pagination
 

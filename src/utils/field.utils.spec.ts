@@ -17,4 +17,25 @@ describe('parseFields', () => {
       'effectiveFrom',
     ]);
   });
+
+  it('models money exactly and marks server-owned fields as internal inputs', () => {
+    const result = parseFields(
+      'amount:money tenantId:uuid:serverOwned organizationId:uuid:internal',
+    );
+
+    expect(result.hasMoney).toBe(true);
+    expect(result.hasServerOwned).toBe(true);
+    expect(result.fields[0]).toMatchObject({
+      name: 'amount',
+      tsType: 'string',
+      dbType: 'decimal',
+      prismaType: 'Decimal',
+      isMoney: true,
+      isServerOwned: false,
+    });
+    expect(result.fields.slice(1).map((field) => field.isServerOwned)).toEqual([true, true]);
+    expect(result.fields[0]?.validators).toContain(
+      "@IsDecimal({ decimal_digits: '0,18', force_decimal: false })",
+    );
+  });
 });

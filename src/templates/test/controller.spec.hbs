@@ -3,7 +3,9 @@ import { CommandBus, QueryBus } from "@nestjs/cqrs";
 import { {{entityNamePascal}}Controller } from "./{{entityNameKebab}}.controller";
 import { Create{{entityNamePascal}}Command } from "@modules/{{moduleNameKebab}}/application/commands/create-{{entityNameKebab}}.command";
 import { Update{{entityNamePascal}}Command } from "@modules/{{moduleNameKebab}}/application/commands/update-{{entityNameKebab}}.command";
+{{#if deleteEnabled}}
 import { Delete{{entityNamePascal}}Command } from "@modules/{{moduleNameKebab}}/application/commands/delete-{{entityNameKebab}}.command";
+{{/if}}
 import { Get{{entityNamePascal}}ByIdQuery } from "@modules/{{moduleNameKebab}}/application/queries/get-{{entityNameKebab}}-by-id.query";
 import { GetAll{{entityNamePluralPascal}}Query } from "@modules/{{moduleNameKebab}}/application/queries/get-all-{{entityNamePluralKebab}}.query";
 
@@ -110,6 +112,7 @@ describe("{{entityNamePascal}}Controller", () => {
     });
   });
 
+{{#if deleteEnabled}}
   describe("delete", () => {
     it("should delete the {{entityNameCamel}}", async () => {
       commandBus.execute.mockResolvedValue(undefined);
@@ -121,4 +124,5 @@ describe("{{entityNamePascal}}Controller", () => {
       );
     });
   });
+{{/if}}
 });

@@ -1,10 +1,15 @@
 import { CommandHandler, ICommandHandler } from "@nestjs/cqrs";
-import { Create{{entityNamePascal}}UseCase } from "@modules/{{moduleNameKebab}}/application/domain/usecases/create-{{entityNameKebab}}.use-case";
+import { Create{{entityNamePascal}}UseCase{{#if hasServerOwnedFields}}, Create{{entityNamePascal}}ServerOwnedFields{{/if}} } from "@modules/{{moduleNameKebab}}/application/domain/usecases/create-{{entityNameKebab}}.use-case";
 import { Create{{entityNamePascal}}Dto } from "@modules/{{moduleNameKebab}}/application/dto/requests/create-{{entityNameKebab}}.dto";
 import { {{entityNamePascal}}ResponseDto } from "@modules/{{moduleNameKebab}}/application/dto/responses/{{entityNameKebab}}.response.dto";
 
 export class Create{{entityNamePascal}}Command {
-  constructor(public readonly data: Create{{entityNamePascal}}Dto) {}
+  constructor(
+    public readonly data: Create{{entityNamePascal}}Dto,
+{{#if hasServerOwnedFields}}
+    public readonly serverOwnedFields?: Create{{entityNamePascal}}ServerOwnedFields,
+{{/if}}
+  ) {}
 }
 
 @CommandHandler(Create{{entityNamePascal}}Command)
@@ -14,6 +19,6 @@ export class Create{{entityNamePascal}}Handler
   constructor(private readonly useCase: Create{{entityNamePascal}}UseCase) {}
 
   async execute(command: Create{{entityNamePascal}}Command): Promise<{{entityNamePascal}}ResponseDto> {
-    return this.useCase.execute(command.data);
+    return this.useCase.execute(command.data{{#if hasServerOwnedFields}}, command.serverOwnedFields{{/if}});
   }
 }

@@ -13,6 +13,7 @@ export interface DddConfig {
   features: {
     swagger: boolean;
     pagination: boolean;
+    delete: boolean;
     softDelete: boolean;
     hardDelete: boolean;
     timestamps: boolean;
@@ -40,6 +41,7 @@ const DEFAULT_CONFIG: DddConfig = {
   features: {
     swagger: true,
     pagination: true,
+    delete: true,
     softDelete: true,
     hardDelete: false,
     timestamps: true,
@@ -186,6 +188,11 @@ export function getConfigSchema(): object {
         properties: {
           swagger: { type: 'boolean', default: true },
           pagination: { type: 'boolean', default: true },
+          delete: {
+            type: 'boolean',
+            default: true,
+            description: 'Generate the generic aggregate deletion surface',
+          },
           softDelete: { type: 'boolean', default: true },
           hardDelete: {
             type: 'boolean',

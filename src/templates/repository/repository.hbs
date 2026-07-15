@@ -101,6 +101,7 @@ export class {{entityNamePascal}}Repository {
     return entity;
   }
 
+{{#if deleteEnabled}}
   async delete(id: string): Promise<void> {
 {{#if softDelete}}
     await this.repository.update(id, {
@@ -119,6 +120,7 @@ export class {{entityNamePascal}}Repository {
 
 {{/if}}
 
+{{/if}}
   async exists(id: string): Promise<boolean> {
     const count = await this.repository.count({
 {{#if softDelete}}

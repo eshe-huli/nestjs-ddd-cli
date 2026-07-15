@@ -53,7 +53,11 @@ export interface TemplateData {
   moduleNamePascal: string;
   // Field-aware properties
   fields?: FieldDefinition[];
+  requestFields?: FieldDefinition[];
+  serverOwnedFields?: FieldDefinition[];
   hasFields: boolean;
+  hasRequestFields: boolean;
+  hasServerOwnedFields: boolean;
   entityProperties?: string;
   entityPropsInterface?: string;
   dtoProperties?: string;
@@ -68,11 +72,13 @@ export interface TemplateData {
   isPrisma: boolean;
   softDelete: boolean;
   hardDelete: boolean;
+  deleteEnabled: boolean;
 }
 
 export interface TemplateGenerationConfig {
   orm?: 'typeorm' | 'prisma' | 'mikro-orm';
   features?: {
+    delete?: boolean;
     softDelete?: boolean;
     hardDelete?: boolean;
   };
@@ -93,6 +99,7 @@ export async function prepareConfiguredTemplateData(
   return prepareTemplateData(entityName, moduleName, options.fieldsString, {
     orm: options.orm ?? config.orm,
     features: {
+      delete: options.features?.delete ?? config.features.delete,
       softDelete: options.features?.softDelete ?? config.features.softDelete,
       hardDelete: options.features?.hardDelete ?? config.features.hardDelete,
     },
@@ -112,6 +119,8 @@ export function prepareTemplateData(
 
   // Check for relations and generate imports
   const relationFields = parsedFields?.fields.filter((f) => f.isRelation) || [];
+  const requestFields = parsedFields?.fields.filter((field) => !field.isServerOwned) || [];
+  const serverOwnedFields = parsedFields?.fields.filter((field) => field.isServerOwned) || [];
   const hasRelations = relationFields.length > 0;
 
   // Generate unique relation imports
@@ -126,6 +135,7 @@ export function prepareTemplateData(
           .join('\n')
       : '';
   const softDelete = generationConfig.features?.softDelete ?? true;
+  const deleteEnabled = generationConfig.features?.delete ?? true;
 
   return {
     entityName,
@@ -143,7 +153,11 @@ export function prepareTemplateData(
     moduleNamePascal: toPascalCase(moduleName),
     // Field-aware properties
     fields: parsedFields?.fields || [],
+    requestFields,
+    serverOwnedFields,
     hasFields: (parsedFields?.fields.length || 0) > 0,
+    hasRequestFields: requestFields.length > 0,
+    hasServerOwnedFields: serverOwnedFields.length > 0,
     entityProperties: fieldsTemplateData?.entityProperties || '',
     entityPropsInterface: fieldsTemplateData?.entityPropsInterface || '',
     dtoProperties: fieldsTemplateData?.dtoProperties || '',
@@ -157,7 +171,9 @@ export function prepareTemplateData(
     orm: generationConfig.orm ?? 'typeorm',
     isPrisma: generationConfig.orm === 'prisma',
     softDelete,
-    hardDelete: softDelete && (generationConfig.features?.hardDelete ?? false),
+    hardDelete:
+      deleteEnabled && softDelete && (generationConfig.features?.hardDelete ?? false),
+    deleteEnabled,
   };
 }
 

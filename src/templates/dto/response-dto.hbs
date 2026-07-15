@@ -8,7 +8,7 @@ export class {{entityNamePascal}}ResponseDto {
 
 {{#if hasFields}}
 {{#each fields}}
-  @ApiProperty({ description: "{{this.description}}"{{#if this.example}}, example: "{{this.example}}"{{/if}} })
+  @ApiProperty({ description: "{{this.description}}"{{#if this.isMoney}}, type: String, format: "decimal"{{/if}}{{#if this.example}}, example: "{{this.example}}"{{/if}} })
   @Expose()
   {{this.camelCase}}: {{this.tsType}};
 
