@@ -40,6 +40,9 @@ ddd recipe service-foundation --install-deps
 # Generate complete CRUD scaffolding with fields
 ddd scaffold User -m users --fields "name:string email:string:unique age:number:optional"
 
+# Exact financial values, authenticated scope, and no generic deletion
+ddd scaffold Invoice -m billing --fields "amount:money tenantId:uuid:serverOwned" --no-delete
+
 # Generate individual components
 ddd generate module [name]
 ddd generate entity [name] -m [module]
@@ -48,6 +51,21 @@ ddd generate service [name] -m [module]
 ddd generate event [name] -m [module]
 ddd generate query [name] -m [module]
 ```
+
+### Financial-safe scaffold fields
+
+- Use `money` for exact financial decimals. It persists as decimal/Prisma Decimal
+  while domain, TypeORM, request, and response properties are TypeScript `string`
+  with decimal-string validation.
+- Add `serverOwned` (or its `internal` alias) to tenant, organization, book, store,
+  or other fields supplied by trusted application context. These fields are not
+  emitted in create/update request DTOs or request mass-assignment paths.
+- A create command with server-owned fields accepts them as its second argument.
+  Resolve them from authenticated guards/decorators/services; never copy them from
+  the request body. The generated use case fails closed until they are supplied.
+- Pass `--no-delete`, or set `.dddrc.json` `features.delete` to `false`, when an
+  aggregate must not expose a generic deletion route, command/use case, or
+  repository deletion method.
 
 ## Naming Conventions
 
@@ -148,7 +166,7 @@ All APIs follow RESTful conventions:
 | GET | `/entities/:id` | Get single entity |
 | POST | `/entities` | Create new entity |
 | PUT | `/entities/:id` | Update entity |
-| DELETE | `/entities/:id` | Soft delete entity |
+| DELETE | `/entities/:id` | Soft delete entity (omitted when deletion is disabled) |
 
 ### Pagination
 
@@ -183,6 +201,7 @@ Project configuration is in `.dddrc.json`:
   "features": {
     "swagger": true,
     "pagination": true,
+    "delete": true,
     "softDelete": true,
     "hardDelete": false
   }

@@ -111,7 +111,14 @@ program
     'create',
   )
   .option('-p, --path <path>', 'Base path for generation', process.cwd())
-  .option('-f, --fields <fields>', 'Entity fields (format: "name:type:modifier name2:type2")')
+  .option(
+    '-f, --fields <fields>',
+    'Entity fields (for example: "amount:money tenantId:uuid:serverOwned")',
+  )
+  .option(
+    '--no-delete',
+    'Omit the generic DELETE route, command/use case, and repository deletion method',
+  )
   .option('--skip-orm', 'Skip ORM entity generation')
   .option('--skip-mapper', 'Skip mapper generation')
   .option('--skip-repo', 'Skip repository generation')
@@ -181,12 +188,16 @@ program
 program
   .command('scaffold <entityName>')
   .alias('s')
-  .description('Generate complete CRUD scaffolding for an entity')
+  .description('Generate complete aggregate scaffolding for an entity')
   .option('-m, --module <module>', 'Module name (will be created if not exists)')
   .option('-p, --path <path>', 'Base path for generation', process.cwd())
   .option(
     '-f, --fields <fields>',
-    'Entity fields (format: "name:string email:string:unique age:number:optional")',
+    'Entity fields (for example: "amount:money tenantId:uuid:serverOwned")',
+  )
+  .option(
+    '--no-delete',
+    'Omit the generic DELETE route, command/use case, and repository deletion method',
   )
   .option('-o, --orm <orm>', 'ORM to use (typeorm or prisma)', 'typeorm')
   .option('--with-tests', 'Generate test files alongside the code', false)

@@ -2,7 +2,9 @@ import { Test, TestingModule } from "@nestjs/testing";
 import { NotFoundException } from "@nestjs/common";
 import { Create{{entityNamePascal}}UseCase } from "./create-{{entityNameKebab}}.use-case";
 import { Update{{entityNamePascal}}UseCase } from "./update-{{entityNameKebab}}.use-case";
+{{#if deleteEnabled}}
 import { Delete{{entityNamePascal}}UseCase } from "./delete-{{entityNameKebab}}.use-case";
+{{/if}}
 import { {{entityNamePascal}}Repository } from "@modules/{{moduleNameKebab}}/infrastructure/repositories/{{entityNameKebab}}.repository";
 import { {{entityNamePascal}}Mapper } from "@modules/{{moduleNameKebab}}/infrastructure/mappers/{{entityNameKebab}}.mapper";
 import { {{entityNamePascal}}Entity } from "@modules/{{moduleNameKebab}}/application/domain/entities/{{entityNameKebab}}.entity";
@@ -10,7 +12,9 @@ import { {{entityNamePascal}}Entity } from "@modules/{{moduleNameKebab}}/applica
 describe("{{entityNamePascal}} Use Cases", () => {
   let createUseCase: Create{{entityNamePascal}}UseCase;
   let updateUseCase: Update{{entityNamePascal}}UseCase;
+{{#if deleteEnabled}}
   let deleteUseCase: Delete{{entityNamePascal}}UseCase;
+{{/if}}
   let repository: jest.Mocked<{{entityNamePascal}}Repository>;
   let mapper: jest.Mocked<{{entityNamePascal}}Mapper>;
 
@@ -33,14 +37,18 @@ describe("{{entityNamePascal}} Use Cases", () => {
       providers: [
         Create{{entityNamePascal}}UseCase,
         Update{{entityNamePascal}}UseCase,
+{{#if deleteEnabled}}
         Delete{{entityNamePascal}}UseCase,
+{{/if}}
         {
           provide: {{entityNamePascal}}Repository,
           useValue: {
             create: jest.fn(),
             findById: jest.fn(),
             update: jest.fn(),
+{{#if deleteEnabled}}
             delete: jest.fn(),
+{{/if}}
           },
         },
         {
@@ -54,7 +62,9 @@ describe("{{entityNamePascal}} Use Cases", () => {
 
     createUseCase = module.get<Create{{entityNamePascal}}UseCase>(Create{{entityNamePascal}}UseCase);
     updateUseCase = module.get<Update{{entityNamePascal}}UseCase>(Update{{entityNamePascal}}UseCase);
+{{#if deleteEnabled}}
     deleteUseCase = module.get<Delete{{entityNamePascal}}UseCase>(Delete{{entityNamePascal}}UseCase);
+{{/if}}
     repository = module.get({{entityNamePascal}}Repository);
     mapper = module.get({{entityNamePascal}}Mapper);
   });
@@ -103,6 +113,7 @@ describe("{{entityNamePascal}} Use Cases", () => {
     });
   });
 
+{{#if deleteEnabled}}
   describe("Delete{{entityNamePascal}}UseCase", () => {
     it("should delete an existing {{entityNameCamel}}", async () => {
       repository.findById.mockResolvedValue(mockEntity);
@@ -120,4 +131,5 @@ describe("{{entityNamePascal}} Use Cases", () => {
       await expect(deleteUseCase.execute("non-existent")).rejects.toThrow(NotFoundException);
     });
   });
+{{/if}}
 });

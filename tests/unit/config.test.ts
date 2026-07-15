@@ -36,7 +36,7 @@ describe('DDD configuration safety defaults', () => {
     await fs.remove(testDir);
   });
 
-  it('creates projects with soft deletion enabled and hard-delete helpers disabled', async () => {
+  it('creates projects with deletion enabled and hard-delete helpers disabled', async () => {
     await createDefaultConfig(testDir);
 
     const config = (await fs.readJson(path.join(testDir, '.dddrc.json'))) as {
@@ -44,6 +44,7 @@ describe('DDD configuration safety defaults', () => {
     };
 
     expect(config.features).toMatchObject({
+      delete: true,
       softDelete: true,
       hardDelete: false,
     });
@@ -72,13 +73,17 @@ describe('DDD configuration safety defaults', () => {
     expect(features.hardDelete).toBe(true);
   });
 
-  it('publishes hardDelete as a default-false boolean in both configuration schemas', async () => {
+  it('publishes deletion defaults in both configuration schemas', async () => {
     const generatedSchema = getConfigSchema() as ConfigSchema;
     const publishedSchema = (await fs.readJson(
       path.resolve(__dirname, '../../ddd.schema.json'),
     )) as ConfigSchema;
 
     for (const schema of [generatedSchema, publishedSchema]) {
+      expect(schema.properties.features.properties['delete']).toMatchObject({
+        type: 'boolean',
+        default: true,
+      });
       expect(schema.properties.features.properties['hardDelete']).toMatchObject({
         type: 'boolean',
         default: false,

@@ -59,7 +59,10 @@ export async function generateAll(entityName: string, options: any) {
     basePath,
     fieldsString,
     orm,
-    features: config.features,
+    features: {
+      ...config.features,
+      delete: options.delete === false ? false : config.features.delete,
+    },
   });
 
   // Generate entity with all related files
@@ -81,13 +84,17 @@ export async function generateAll(entityName: string, options: any) {
   console.log(chalk.cyan('  Generating commands...'));
   await generateCommand('create', entityName, modulePath, templateData, dryRun);
   await generateCommand('update', entityName, modulePath, templateData, dryRun);
-  await generateCommand('delete', entityName, modulePath, templateData, dryRun);
+  if (templateData.deleteEnabled) {
+    await generateCommand('delete', entityName, modulePath, templateData, dryRun);
+  }
 
   // Generate use cases
   console.log(chalk.cyan('  Generating use cases...'));
   await generateUseCase('create', entityName, modulePath, templateData, dryRun);
   await generateUseCase('update', entityName, modulePath, templateData, dryRun);
-  await generateUseCase('delete', entityName, modulePath, templateData, dryRun);
+  if (templateData.deleteEnabled) {
+    await generateUseCase('delete', entityName, modulePath, templateData, dryRun);
+  }
 
   // Generate queries
   console.log(chalk.cyan('  Generating queries...'));
@@ -122,7 +129,7 @@ export async function generateAll(entityName: string, options: any) {
 
   // Generate barrel exports
   console.log(chalk.cyan('  Generating barrel exports...'));
-  await generateBarrelExports(entityName, modulePath, orm, dryRun);
+  await generateBarrelExports(entityName, modulePath, orm, dryRun, templateData.deleteEnabled);
 
   // Generate tests if requested
   if (options.withTests) {
@@ -146,11 +153,17 @@ export async function generateAll(entityName: string, options: any) {
   console.log(`   ${chalk.white('Module:')} ${modulePath}`);
   console.log(`   ${chalk.white('Entity:')} ${entityName}`);
   console.log(`   ${chalk.white('ORM:')} ${orm === 'prisma' ? 'Prisma' : 'TypeORM'}`);
-  console.log(`   ${chalk.white('Commands:')} Create, Update, Delete`);
+  console.log(
+    `   ${chalk.white('Commands:')} Create, Update${templateData.deleteEnabled ? ', Delete' : ''}`,
+  );
   console.log(`   ${chalk.white('Queries:')} GetById, GetAll (paginated)`);
-  console.log(`   ${chalk.white('Use Cases:')} Create, Update, Delete`);
+  console.log(
+    `   ${chalk.white('Use Cases:')} Create, Update${templateData.deleteEnabled ? ', Delete' : ''}`,
+  );
   console.log(`   ${chalk.white('DTOs:')} Create, Update, Response, Pagination`);
-  console.log(`   ${chalk.white('Controller:')} Full CRUD REST endpoints`);
+  console.log(
+    `   ${chalk.white('Controller:')} ${templateData.deleteEnabled ? 'Full CRUD' : 'Create, read, and update'} REST endpoints`,
+  );
   console.log(`   ${chalk.white('Repository:')} With pagination support`);
   console.log(
     `   ${chalk.white('Mapper:')} Domain ↔ ${orm === 'prisma' ? 'Prisma' : 'ORM'} ↔ Response`,
@@ -414,6 +427,7 @@ async function generateBarrelExports(
   modulePath: string,
   orm: string = 'typeorm',
   dryRun = false,
+  deleteEnabled = true,
 ) {
   const entityNameKebab = toKebabCase(entityName);
   const entityNamePascal = toPascalCase(entityName);
@@ -427,18 +441,20 @@ async function generateBarrelExports(
     exports: [
       `export * from './create-${entityNameKebab}.command';`,
       `export * from './update-${entityNameKebab}.command';`,
-      `export * from './delete-${entityNameKebab}.command';`,
+      ...(deleteEnabled ? [`export * from './delete-${entityNameKebab}.command';`] : []),
     ],
     imports: [
       `import { Create${entityNamePascal}Handler } from './create-${entityNameKebab}.command';`,
       `import { Update${entityNamePascal}Handler } from './update-${entityNameKebab}.command';`,
-      `import { Delete${entityNamePascal}Handler } from './delete-${entityNameKebab}.command';`,
+      ...(deleteEnabled
+        ? [`import { Delete${entityNamePascal}Handler } from './delete-${entityNameKebab}.command';`]
+        : []),
     ],
     arrayName: 'CommandHandlers',
     arrayItems: [
       `Create${entityNamePascal}Handler`,
       `Update${entityNamePascal}Handler`,
-      `Delete${entityNamePascal}Handler`,
+      ...(deleteEnabled ? [`Delete${entityNamePascal}Handler`] : []),
     ],
     dryRun,
   });
@@ -465,18 +481,20 @@ async function generateBarrelExports(
     exports: [
       `export * from './create-${entityNameKebab}.use-case';`,
       `export * from './update-${entityNameKebab}.use-case';`,
-      `export * from './delete-${entityNameKebab}.use-case';`,
+      ...(deleteEnabled ? [`export * from './delete-${entityNameKebab}.use-case';`] : []),
     ],
     imports: [
       `import { Create${entityNamePascal}UseCase } from './create-${entityNameKebab}.use-case';`,
       `import { Update${entityNamePascal}UseCase } from './update-${entityNameKebab}.use-case';`,
-      `import { Delete${entityNamePascal}UseCase } from './delete-${entityNameKebab}.use-case';`,
+      ...(deleteEnabled
+        ? [`import { Delete${entityNamePascal}UseCase } from './delete-${entityNameKebab}.use-case';`]
+        : []),
     ],
     arrayName: 'UseCases',
     arrayItems: [
       `Create${entityNamePascal}UseCase`,
       `Update${entityNamePascal}UseCase`,
-      `Delete${entityNamePascal}UseCase`,
+      ...(deleteEnabled ? [`Delete${entityNamePascal}UseCase`] : []),
     ],
     dryRun,
   });

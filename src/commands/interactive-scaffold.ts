@@ -19,6 +19,7 @@ const FIELD_TYPES = [
   { name: 'string - Text field', value: 'string' },
   { name: 'number - Integer number', value: 'number' },
   { name: 'float - Decimal number', value: 'float' },
+  { name: 'money - Exact decimal stored as a string', value: 'money' },
   { name: 'boolean - True/False', value: 'boolean' },
   { name: 'date - Date only', value: 'date' },
   { name: 'datetime - Date and time', value: 'datetime' },
@@ -33,6 +34,11 @@ const FIELD_MODIFIERS = [
   { name: 'optional - Field can be null', value: 'optional', checked: false },
   { name: 'unique - Must be unique in database', value: 'unique', checked: false },
   { name: 'relation - Foreign key reference', value: 'relation', checked: false },
+  {
+    name: 'serverOwned - Persisted field excluded from client requests',
+    value: 'serverOwned',
+    checked: false,
+  },
 ];
 
 export async function interactiveScaffold(options: InteractiveOptions) {
@@ -178,6 +184,7 @@ export async function interactiveScaffold(options: InteractiveOptions) {
     if (fieldModifiers.includes('optional')) modifiers.push('optional');
     if (fieldModifiers.includes('unique')) modifiers.push('unique');
     if (fieldModifiers.includes('relation')) modifiers.push('relation');
+    if (fieldModifiers.includes('serverOwned')) modifiers.push('serverOwned');
     if (enumValues.length > 0) modifiers.push(enumValues.join(','));
 
     fields.push({
@@ -199,6 +206,7 @@ export async function interactiveScaffold(options: InteractiveOptions) {
         { name: 'Generate unit tests', value: 'withTests', checked: false },
         { name: 'Include domain events', value: 'withEvents', checked: false },
         { name: 'Include query handlers', value: 'withQueries', checked: true },
+        { name: 'Omit generic delete operation', value: 'noDelete', checked: false },
         { name: 'Install dependencies', value: 'installDeps', checked: false },
       ],
     },
@@ -247,6 +255,7 @@ export async function interactiveScaffold(options: InteractiveOptions) {
     withEvents: additionalOptions.includes('withEvents'),
     withQueries: additionalOptions.includes('withQueries'),
     installDeps: additionalOptions.includes('installDeps'),
+    delete: additionalOptions.includes('noDelete') ? false : undefined,
     complete: true,
   });
 }

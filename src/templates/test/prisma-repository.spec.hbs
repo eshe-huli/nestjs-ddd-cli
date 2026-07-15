@@ -15,7 +15,9 @@ describe("{{entityNamePascal}}Repository", () => {
     findMany: jest.fn(),
     count: jest.fn(),
     update: jest.fn(),
+{{#if deleteEnabled}}
     delete: jest.fn(),
+{{/if}}
   };
 
   const mockPrismaEntity = {
@@ -139,6 +141,7 @@ describe("{{entityNamePascal}}Repository", () => {
     });
   });
 
+{{#if deleteEnabled}}
   describe("delete", () => {
 {{#if softDelete}}
     it("should soft delete the entity", async () => {
@@ -177,6 +180,7 @@ describe("{{entityNamePascal}}Repository", () => {
     });
   });
 
+{{/if}}
 {{/if}}
   describe("exists", () => {
     it("should return whether the entity exists", async () => {

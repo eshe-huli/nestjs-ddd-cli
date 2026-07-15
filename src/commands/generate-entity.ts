@@ -23,6 +23,7 @@ export async function generateEntity(entityName: string, options: any) {
     basePath,
     fieldsString,
     orm: options.orm,
+    features: options.delete === false ? { delete: false } : undefined,
   });
   const orm = templateData.orm;
   const dryRun = !!options.dryRun;
