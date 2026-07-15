@@ -59,6 +59,11 @@
           "default": true,
           "description": "Use soft delete pattern"
         },
+        "hardDelete": {
+          "type": "boolean",
+          "default": false,
+          "description": "Generate an explicit hardDelete compatibility helper when softDelete is enabled"
+        },
         "timestamps": {
           "type": "boolean",
           "default": true,

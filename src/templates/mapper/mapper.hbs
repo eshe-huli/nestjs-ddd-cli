@@ -15,7 +15,9 @@ export class {{entityNamePascal}}Mapper {
       isActive: ormEntity.isActive,
       createdAt: ormEntity.createdAt,
       updatedAt: ormEntity.updatedAt,
-      deletedAt: ormEntity.deletedAt,
+{{#if softDelete}}
+      deletedAt: ormEntity.deletedAt ?? undefined,
+{{/if}}
       // Map additional fields from ORM entity (snake_case) to domain entity (camelCase)
       {{#each fields}}
       {{this.camelCase}}: ormEntity.{{this.snakeCase}},
@@ -33,7 +35,9 @@ export class {{entityNamePascal}}Mapper {
       isActive: domainEntity.isActive,
       createdAt: domainEntity.createdAt,
       updatedAt: domainEntity.updatedAt,
+{{#if softDelete}}
       deletedAt: domainEntity.deletedAt,
+{{/if}}
       // Map additional fields from domain entity (camelCase) to ORM entity (snake_case)
       {{#each fields}}
       {{this.snakeCase}}: domainEntity.{{this.camelCase}},

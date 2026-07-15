@@ -1,7 +1,9 @@
 import {
   Column,
   CreateDateColumn,
+{{#if softDelete}}
   DeleteDateColumn,
+{{/if}}
   Entity,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
@@ -70,6 +72,8 @@ export class {{entityNamePascal}}OrmEntity {
   @UpdateDateColumn({ name: "updated_at" })
   updatedAt: Date;
 
+{{#if softDelete}}
   @DeleteDateColumn({ name: "deleted_at" })
-  deletedAt?: Date;
+  deletedAt?: Date | null;
+{{/if}}
 }

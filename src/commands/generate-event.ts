@@ -1,6 +1,10 @@
 import * as path from 'path';
 import chalk from 'chalk';
-import { getModulePath, prepareTemplateData, generateFromTemplate } from '../utils/file.utils';
+import {
+  getModulePath,
+  prepareConfiguredTemplateData,
+  generateFromTemplate,
+} from '../utils/file.utils';
 import { toKebabCase } from '../utils/naming.utils';
 
 export async function generateEvent(eventName: string, options: any) {
@@ -15,7 +19,10 @@ export async function generateEvent(eventName: string, options: any) {
   const modulePath = getModulePath(basePath, options.module);
 
   // Generate domain event
-  const templateData = prepareTemplateData(eventName, options.module);
+  const templateData = await prepareConfiguredTemplateData(eventName, options.module, {
+    basePath,
+    orm: options.orm,
+  });
   const templatePath = path.join(__dirname, '../templates/event/domain-event.hbs');
   const outputPath = path.join(
     modulePath,

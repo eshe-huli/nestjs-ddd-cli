@@ -14,7 +14,9 @@ model {{entityNamePascal}} {
   is_active  Boolean  @default(true)
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
+{{#if softDelete}}
   deleted_at DateTime?
+{{/if}}
 
   @@map("{{tableName}}")
 }

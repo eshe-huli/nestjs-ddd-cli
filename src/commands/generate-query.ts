@@ -3,7 +3,7 @@ import chalk from 'chalk';
 import {
   generateFromTemplate,
   getModulePath,
-  prepareTemplateData,
+  prepareConfiguredTemplateData,
   updateBarrelFile,
 } from '../utils/file.utils';
 import { toKebabCase, toPascalCase } from '../utils/naming.utils';
@@ -24,7 +24,10 @@ export async function generateQuery(queryName: string, options: any) {
   const modulePath = getModulePath(basePath, options.module);
 
   // Generate query handler
-  const templateData = prepareTemplateData(normalizedQueryName, options.module);
+  const templateData = await prepareConfiguredTemplateData(normalizedQueryName, options.module, {
+    basePath,
+    orm: options.orm,
+  });
   const templatePath = path.join(__dirname, '../templates/query/query-handler.hbs');
   const outputPath = path.join(
     modulePath,

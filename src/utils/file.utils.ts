@@ -10,6 +10,7 @@ import {
   toTableName,
 } from './naming.utils';
 import { FieldDefinition, parseFields, generateFieldsTemplateData } from './field.utils';
+import { loadConfig } from './config.utils';
 
 // Register Handlebars helpers
 Handlebars.registerHelper('eq', function (a, b) {
@@ -62,12 +63,47 @@ export interface TemplateData {
   // Relation properties
   hasRelations: boolean;
   relationImports?: string;
+  // Configuration-aware generation properties
+  orm: 'typeorm' | 'prisma' | 'mikro-orm';
+  isPrisma: boolean;
+  softDelete: boolean;
+  hardDelete: boolean;
+}
+
+export interface TemplateGenerationConfig {
+  orm?: 'typeorm' | 'prisma' | 'mikro-orm';
+  features?: {
+    softDelete?: boolean;
+    hardDelete?: boolean;
+  };
+}
+
+export interface ConfiguredTemplateDataOptions extends TemplateGenerationConfig {
+  basePath: string;
+  fieldsString?: string;
+}
+
+export async function prepareConfiguredTemplateData(
+  entityName: string,
+  moduleName: string,
+  options: ConfiguredTemplateDataOptions,
+): Promise<TemplateData> {
+  const config = await loadConfig(options.basePath);
+
+  return prepareTemplateData(entityName, moduleName, options.fieldsString, {
+    orm: options.orm ?? config.orm,
+    features: {
+      softDelete: options.features?.softDelete ?? config.features.softDelete,
+      hardDelete: options.features?.hardDelete ?? config.features.hardDelete,
+    },
+  });
 }
 
 export function prepareTemplateData(
   entityName: string,
   moduleName: string,
   fieldsString?: string,
+  generationConfig: TemplateGenerationConfig = {},
 ): TemplateData {
   const parsedFields = fieldsString ? parseFields(fieldsString) : null;
   const fieldsTemplateData = parsedFields?.fields.length
@@ -89,6 +125,7 @@ export function prepareTemplateData(
           )
           .join('\n')
       : '';
+  const softDelete = generationConfig.features?.softDelete ?? true;
 
   return {
     entityName,
@@ -116,6 +153,11 @@ export function prepareTemplateData(
     // Relation properties
     hasRelations,
     relationImports,
+    // Configuration-aware generation properties
+    orm: generationConfig.orm ?? 'typeorm',
+    isPrisma: generationConfig.orm === 'prisma',
+    softDelete,
+    hardDelete: softDelete && (generationConfig.features?.hardDelete ?? false),
   };
 }
 

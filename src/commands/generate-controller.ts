@@ -3,7 +3,7 @@ import chalk from 'chalk';
 import {
   generateFromTemplate,
   getModulePath,
-  prepareTemplateData,
+  prepareConfiguredTemplateData,
   updateBarrelFile,
 } from '../utils/file.utils';
 import { toKebabCase, toPascalCase } from '../utils/naming.utils';
@@ -18,7 +18,10 @@ export async function generateController(controllerName: string, options: any) {
 
   const basePath = options.path || process.cwd();
   const modulePath = getModulePath(basePath, options.module);
-  const templateData = prepareTemplateData(controllerName, options.module);
+  const templateData = await prepareConfiguredTemplateData(controllerName, options.module, {
+    basePath,
+    orm: options.orm,
+  });
   const outputPath = path.join(
     modulePath,
     'application/controllers',

@@ -3,7 +3,9 @@ export interface {{entityNamePascal}}EntityProps {
   isActive?: boolean;
   createdAt?: Date;
   updatedAt?: Date;
+{{#if softDelete}}
   deletedAt?: Date;
+{{/if}}
 {{#if hasFields}}
 {{#each fields}}
   {{this.camelCase}}{{#if this.isOptional}}?{{/if}}: {{this.tsType}};
@@ -19,7 +21,9 @@ export class {{entityNamePascal}}Entity {
   public readonly isActive?: boolean;
   public readonly createdAt?: Date;
   public readonly updatedAt?: Date;
+{{#if softDelete}}
   public readonly deletedAt?: Date;
+{{/if}}
 {{#if hasFields}}
 {{#each fields}}
   public readonly {{this.camelCase}}{{#if this.isOptional}}?{{/if}}: {{this.tsType}};

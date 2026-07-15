@@ -1,6 +1,10 @@
 import * as path from 'path';
 import chalk from 'chalk';
-import { getModulePath, prepareTemplateData, generateFromTemplate } from '../utils/file.utils';
+import {
+  getModulePath,
+  prepareConfiguredTemplateData,
+  generateFromTemplate,
+} from '../utils/file.utils';
 import { toKebabCase } from '../utils/naming.utils';
 
 export async function generateUseCase(useCaseName: string, options: any) {
@@ -14,7 +18,10 @@ export async function generateUseCase(useCaseName: string, options: any) {
   const basePath = options.path || process.cwd();
   const modulePath = getModulePath(basePath, options.module);
 
-  const templateData = prepareTemplateData(useCaseName, options.module);
+  const templateData = await prepareConfiguredTemplateData(useCaseName, options.module, {
+    basePath,
+    orm: options.orm,
+  });
 
   // Generate use case
   const useCaseTemplatePath = path.join(__dirname, '../templates/usecase/application-usecase.hbs');

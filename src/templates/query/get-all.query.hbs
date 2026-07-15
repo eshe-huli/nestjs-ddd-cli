@@ -22,14 +22,22 @@ export class GetAll{{entityNamePluralPascal}}Handler
     query: GetAll{{entityNamePluralPascal}}Query,
   ): Promise<PaginatedResponseDto<{{entityNamePascal}}ResponseDto>> {
     const { pagination } = query;
-    const { page = 1, limit = 10, sortBy = "createdAt", sortOrder = "DESC" } = pagination;
+    const {
+      page = 1,
+      limit = 10,
+      sortBy = {{#if isPrisma}}"created_at"{{else}}"createdAt"{{/if}},
+      sortOrder = "DESC",
+    } = pagination;
 
     const skip = (page - 1) * limit;
+    const orderBy = {{entityNamePascal}}Repository.isOrderByField(sortBy)
+      ? sortBy
+      : {{#if isPrisma}}"created_at"{{else}}"createdAt"{{/if}};
 
     const [entities, total] = await this.repository.findAllPaginated({
       skip,
       take: limit,
-      orderBy: sortBy,
+      orderBy,
       orderDirection: sortOrder,
     });
 
