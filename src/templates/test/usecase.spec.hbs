@@ -65,7 +65,14 @@ describe("{{entityNamePascal}} Use Cases", () => {
       repository.create.mockResolvedValue(mockEntity);
       mapper.toResponseDto.mockReturnValue(mockResponseDto as any);
 
-      const result = await createUseCase.execute(createDto as any);
+      const result = await createUseCase.execute(
+        createDto as any{{#if hasServerOwnedFields}},
+        {
+{{#each serverOwnedFields}}
+          {{this.camelCase}}: undefined as never,
+{{/each}}
+        }{{/if}},
+      );
 
       expect(repository.create).toHaveBeenCalled();
       expect(mapper.toResponseDto).toHaveBeenCalledWith(mockEntity);

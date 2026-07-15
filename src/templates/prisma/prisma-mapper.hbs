@@ -16,7 +16,11 @@ export class {{entityNamePascal}}Mapper {
 {{/if}}
 {{#if hasFields}}
 {{#each fields}}
+{{#if this.isMoney}}
+      {{this.camelCase}}: prismaEntity.{{this.snakeCase}}{{#if this.isOptional}}?{{/if}}.toString(),
+{{else}}
       {{this.camelCase}}: prismaEntity.{{this.snakeCase}},
+{{/if}}
 {{/each}}
 {{else}}
       // Map your Prisma fields to domain entity

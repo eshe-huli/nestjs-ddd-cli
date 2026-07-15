@@ -53,7 +53,11 @@ export interface TemplateData {
   moduleNamePascal: string;
   // Field-aware properties
   fields?: FieldDefinition[];
+  requestFields?: FieldDefinition[];
+  serverOwnedFields?: FieldDefinition[];
   hasFields: boolean;
+  hasRequestFields: boolean;
+  hasServerOwnedFields: boolean;
   entityProperties?: string;
   entityPropsInterface?: string;
   dtoProperties?: string;
@@ -112,6 +116,8 @@ export function prepareTemplateData(
 
   // Check for relations and generate imports
   const relationFields = parsedFields?.fields.filter((f) => f.isRelation) || [];
+  const requestFields = parsedFields?.fields.filter((field) => !field.isServerOwned) || [];
+  const serverOwnedFields = parsedFields?.fields.filter((field) => field.isServerOwned) || [];
   const hasRelations = relationFields.length > 0;
 
   // Generate unique relation imports
@@ -143,7 +149,11 @@ export function prepareTemplateData(
     moduleNamePascal: toPascalCase(moduleName),
     // Field-aware properties
     fields: parsedFields?.fields || [],
+    requestFields,
+    serverOwnedFields,
     hasFields: (parsedFields?.fields.length || 0) > 0,
+    hasRequestFields: requestFields.length > 0,
+    hasServerOwnedFields: serverOwnedFields.length > 0,
     entityProperties: fieldsTemplateData?.entityProperties || '',
     entityPropsInterface: fieldsTemplateData?.entityPropsInterface || '',
     dtoProperties: fieldsTemplateData?.dtoProperties || '',

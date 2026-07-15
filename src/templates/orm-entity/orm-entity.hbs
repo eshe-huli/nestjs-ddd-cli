@@ -52,7 +52,11 @@ export class {{entityNamePascal}}OrmEntity {
 
 {{/if}}
 {{else}}
+{{#if this.isMoney}}
+  @Column({ type: "decimal"{{#if this.isUnique}}, unique: true{{/if}}{{#if this.isOptional}}, nullable: true{{/if}} })
+{{else}}
   @Column({{#if this.isUnique}}{ unique: true{{#if this.isOptional}}, nullable: true{{/if}} }{{else}}{{#if this.isOptional}}{ nullable: true }{{/if}}{{/if}})
+{{/if}}
   {{this.snakeCase}}{{#if this.isOptional}}?{{/if}}: {{this.tsType}};
 
 {{/if}}
