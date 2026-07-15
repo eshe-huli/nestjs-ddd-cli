@@ -11,7 +11,9 @@ export class {{entityNamePascal}}Mapper {
       isActive: prismaEntity.is_active,
       createdAt: prismaEntity.created_at,
       updatedAt: prismaEntity.updated_at,
+{{#if softDelete}}
       deletedAt: prismaEntity.deleted_at ?? undefined,
+{{/if}}
 {{#if hasFields}}
 {{#each fields}}
       {{this.camelCase}}: prismaEntity.{{this.snakeCase}},

@@ -2,7 +2,7 @@ import * as path from 'path';
 import chalk from 'chalk';
 import {
   getModulePath,
-  prepareTemplateData,
+  prepareConfiguredTemplateData,
   generateFromTemplate,
   ensureDir,
   writeGeneratedFile,
@@ -42,7 +42,7 @@ export async function generateModule(moduleName: string, options: any) {
   }
 
   // Generate module file
-  const templateData = prepareTemplateData(moduleName, moduleName);
+  const templateData = await prepareConfiguredTemplateData(moduleName, moduleName, { basePath });
   const templatePath = path.join(__dirname, '../templates/module/module.hbs');
   const outputPath = path.join(modulePath, `${toKebabCase(moduleName)}.module.ts`);
 

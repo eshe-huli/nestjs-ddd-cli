@@ -1,28 +1,35 @@
 import { Test, TestingModule } from "@nestjs/testing";
-import { getRepositoryToken } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { {{entityNamePascal}} as Prisma{{entityNamePascal}} } from "@prisma/client";
+import { PrismaService } from "@prisma/prisma.service";
 import { {{entityNamePascal}}Repository } from "./{{entityNameKebab}}.repository";
-import { {{entityNamePascal}}OrmEntity } from "../orm-entities/{{entityNameKebab}}.orm-entity";
 import { {{entityNamePascal}}Mapper } from "../mappers/{{entityNameKebab}}.mapper";
 import { {{entityNamePascal}}Entity } from "@modules/{{moduleNameKebab}}/application/domain/entities/{{entityNameKebab}}.entity";
 
 describe("{{entityNamePascal}}Repository", () => {
   let repository: {{entityNamePascal}}Repository;
-  let typeOrmRepo: jest.Mocked<Repository<{{entityNamePascal}}OrmEntity>>;
   let mapper: jest.Mocked<{{entityNamePascal}}Mapper>;
 
-  const mockOrmEntity: {{entityNamePascal}}OrmEntity = {
+  const prismaDelegate = {
+    create: jest.fn(),
+    findFirst: jest.fn(),
+    findMany: jest.fn(),
+    count: jest.fn(),
+    update: jest.fn(),
+    delete: jest.fn(),
+  };
+
+  const mockPrismaEntity = {
     id: "test-uuid",
 {{#each fields}}
-    {{#if this.isRelation}}{{this.camelCase}}{{else}}{{this.snakeCase}}{{/if}}: undefined as never,
+    {{this.snakeCase}}: undefined as never,
 {{/each}}
-    isActive: true,
-    createdAt: new Date(),
-    updatedAt: new Date(),
+    is_active: true,
+    created_at: new Date(),
+    updated_at: new Date(),
 {{#if softDelete}}
-    deletedAt: null,
+    deleted_at: null,
 {{/if}}
-  };
+  } as Prisma{{entityNamePascal}};
 
   const mockDomainEntity = new {{entityNamePascal}}Entity({
     id: "test-uuid",
@@ -39,21 +46,16 @@ describe("{{entityNamePascal}}Repository", () => {
       providers: [
         {{entityNamePascal}}Repository,
         {
-          provide: getRepositoryToken({{entityNamePascal}}OrmEntity),
+          provide: PrismaService,
           useValue: {
-            save: jest.fn(),
-            findOne: jest.fn(),
-            find: jest.fn(),
-            findAndCount: jest.fn(),
-            update: jest.fn(),
-            delete: jest.fn(),
-            count: jest.fn(),
+            {{entityNameCamel}}: prismaDelegate,
           },
         },
         {
           provide: {{entityNamePascal}}Mapper,
           useValue: {
-            toOrmEntity: jest.fn(),
+            toPrismaCreate: jest.fn(),
+            toPrismaUpdate: jest.fn(),
             toDomainEntity: jest.fn(),
             toResponseDto: jest.fn(),
           },
@@ -62,35 +64,33 @@ describe("{{entityNamePascal}}Repository", () => {
     }).compile();
 
     repository = module.get<{{entityNamePascal}}Repository>({{entityNamePascal}}Repository);
-    typeOrmRepo = module.get(getRepositoryToken({{entityNamePascal}}OrmEntity));
     mapper = module.get({{entityNamePascal}}Mapper);
+    jest.clearAllMocks();
   });
 
   describe("create", () => {
     it("should create and return a domain entity", async () => {
-      mapper.toOrmEntity.mockReturnValue(mockOrmEntity as any);
-      typeOrmRepo.save.mockResolvedValue(mockOrmEntity);
+      mapper.toPrismaCreate.mockReturnValue({});
+      prismaDelegate.create.mockResolvedValue(mockPrismaEntity);
       mapper.toDomainEntity.mockReturnValue(mockDomainEntity);
 
       const result = await repository.create(mockDomainEntity);
 
-      expect(mapper.toOrmEntity).toHaveBeenCalledWith(mockDomainEntity);
-      expect(typeOrmRepo.save).toHaveBeenCalled();
-      expect(mapper.toDomainEntity).toHaveBeenCalledWith(mockOrmEntity);
+      expect(prismaDelegate.create).toHaveBeenCalledWith({ data: {} });
       expect(result).toEqual(mockDomainEntity);
     });
   });
 
   describe("findById", () => {
     it("should return a domain entity when found", async () => {
-      typeOrmRepo.findOne.mockResolvedValue(mockOrmEntity);
+      prismaDelegate.findFirst.mockResolvedValue(mockPrismaEntity);
       mapper.toDomainEntity.mockReturnValue(mockDomainEntity);
 
       const result = await repository.findById("test-uuid");
 
-      expect(typeOrmRepo.findOne).toHaveBeenCalledWith({
+      expect(prismaDelegate.findFirst).toHaveBeenCalledWith({
 {{#if softDelete}}
-        where: { id: "test-uuid", deletedAt: null },
+        where: { id: "test-uuid", deleted_at: null },
 {{else}}
         where: { id: "test-uuid" },
 {{/if}}
@@ -98,25 +98,23 @@ describe("{{entityNamePascal}}Repository", () => {
       expect(result).toEqual(mockDomainEntity);
     });
 
-    it("should return null when entity is not found", async () => {
-      typeOrmRepo.findOne.mockResolvedValue(null);
+    it("should return null when the entity is not found", async () => {
+      prismaDelegate.findFirst.mockResolvedValue(null);
 
-      const result = await repository.findById("non-existent-uuid");
-
-      expect(result).toBeNull();
+      await expect(repository.findById("missing-uuid")).resolves.toBeNull();
     });
   });
 
   describe("findAllPaginated", () => {
-    it("should return paginated entities with total count", async () => {
-      const mockEntities = [mockOrmEntity];
-      typeOrmRepo.findAndCount.mockResolvedValue([mockEntities, 1]);
+    it("should return paginated entities with a total count", async () => {
+      prismaDelegate.findMany.mockResolvedValue([mockPrismaEntity]);
+      prismaDelegate.count.mockResolvedValue(1);
       mapper.toDomainEntity.mockReturnValue(mockDomainEntity);
 
       const result = await repository.findAllPaginated({
         skip: 0,
         take: 10,
-        orderBy: "createdAt",
+        orderBy: "created_at",
         orderDirection: "DESC",
       });
 
@@ -126,13 +124,17 @@ describe("{{entityNamePascal}}Repository", () => {
   });
 
   describe("update", () => {
-    it("should update and return the entity", async () => {
-      mapper.toOrmEntity.mockReturnValue(mockOrmEntity as any);
-      typeOrmRepo.update.mockResolvedValue({ affected: 1 } as any);
+    it("should update and return a domain entity", async () => {
+      mapper.toPrismaUpdate.mockReturnValue({});
+      prismaDelegate.update.mockResolvedValue(mockPrismaEntity);
+      mapper.toDomainEntity.mockReturnValue(mockDomainEntity);
 
       const result = await repository.update("test-uuid", mockDomainEntity);
 
-      expect(typeOrmRepo.update).toHaveBeenCalled();
+      expect(prismaDelegate.update).toHaveBeenCalledWith({
+        where: { id: "test-uuid" },
+        data: {},
+      });
       expect(result).toEqual(mockDomainEntity);
     });
   });
@@ -140,22 +142,24 @@ describe("{{entityNamePascal}}Repository", () => {
   describe("delete", () => {
 {{#if softDelete}}
     it("should soft delete the entity", async () => {
-      typeOrmRepo.update.mockResolvedValue({ affected: 1 } as any);
+      prismaDelegate.update.mockResolvedValue(mockPrismaEntity);
 
       await repository.delete("test-uuid");
 
-      expect(typeOrmRepo.update).toHaveBeenCalledWith(
-        "test-uuid",
-        expect.objectContaining({ deletedAt: expect.any(Date) })
-      );
+      expect(prismaDelegate.update).toHaveBeenCalledWith({
+        where: { id: "test-uuid" },
+        data: expect.objectContaining({ deleted_at: expect.any(Date) }),
+      });
     });
 {{else}}
     it("should delete the entity", async () => {
-      typeOrmRepo.delete.mockResolvedValue({ affected: 1 } as any);
+      prismaDelegate.delete.mockResolvedValue(mockPrismaEntity);
 
       await repository.delete("test-uuid");
 
-      expect(typeOrmRepo.delete).toHaveBeenCalledWith("test-uuid");
+      expect(prismaDelegate.delete).toHaveBeenCalledWith({
+        where: { id: "test-uuid" },
+      });
     });
 {{/if}}
   });
@@ -163,31 +167,22 @@ describe("{{entityNamePascal}}Repository", () => {
 {{#if hardDelete}}
   describe("hardDelete", () => {
     it("should permanently delete the entity after explicit opt-in", async () => {
-      typeOrmRepo.delete.mockResolvedValue({ affected: 1 } as any);
+      prismaDelegate.delete.mockResolvedValue(mockPrismaEntity);
 
       await repository.hardDelete("test-uuid");
 
-      expect(typeOrmRepo.delete).toHaveBeenCalledWith("test-uuid");
+      expect(prismaDelegate.delete).toHaveBeenCalledWith({
+        where: { id: "test-uuid" },
+      });
     });
   });
 
 {{/if}}
-
   describe("exists", () => {
-    it("should return true when entity exists", async () => {
-      typeOrmRepo.count.mockResolvedValue(1);
+    it("should return whether the entity exists", async () => {
+      prismaDelegate.count.mockResolvedValue(1);
 
-      const result = await repository.exists("test-uuid");
-
-      expect(result).toBe(true);
-    });
-
-    it("should return false when entity does not exist", async () => {
-      typeOrmRepo.count.mockResolvedValue(0);
-
-      const result = await repository.exists("non-existent-uuid");
-
-      expect(result).toBe(false);
+      await expect(repository.exists("test-uuid")).resolves.toBe(true);
     });
   });
 });

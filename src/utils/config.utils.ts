@@ -14,6 +14,7 @@ export interface DddConfig {
     swagger: boolean;
     pagination: boolean;
     softDelete: boolean;
+    hardDelete: boolean;
     timestamps: boolean;
     tests: boolean;
     events: boolean;
@@ -40,6 +41,7 @@ const DEFAULT_CONFIG: DddConfig = {
     swagger: true,
     pagination: true,
     softDelete: true,
+    hardDelete: false,
     timestamps: true,
     tests: false,
     events: false,
@@ -185,6 +187,12 @@ export function getConfigSchema(): object {
           swagger: { type: 'boolean', default: true },
           pagination: { type: 'boolean', default: true },
           softDelete: { type: 'boolean', default: true },
+          hardDelete: {
+            type: 'boolean',
+            default: false,
+            description:
+              'Generate an explicit hardDelete compatibility helper when softDelete is enabled',
+          },
           timestamps: { type: 'boolean', default: true },
           tests: { type: 'boolean', default: false },
           events: { type: 'boolean', default: false },

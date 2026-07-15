@@ -212,6 +212,7 @@ Create `.dddrc.json` in your project root:
     "swagger": true,
     "pagination": true,
     "softDelete": true,
+    "hardDelete": false,
     "timestamps": true,
     "tests": false,
     "events": false
@@ -223,6 +224,16 @@ Create `.dddrc.json` in your project root:
   }
 }
 ```
+
+`features.softDelete` controls the generated domain field, ORM column or Prisma
+field, active-row filters, and repository delete behavior. When it is `false`,
+none of the generated code references `deletedAt`/`deleted_at` and the ordinary
+`delete` method performs the ORM's normal delete operation.
+
+`features.hardDelete` is disabled by default. Set it to `true` only when a
+soft-delete repository must expose a separately named `hardDelete` compatibility
+helper. It never changes the ordinary `delete` method, and it is omitted when
+`softDelete` is disabled because ordinary deletion is already physical.
 
 ## Real-World Examples
 

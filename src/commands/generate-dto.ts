@@ -3,7 +3,7 @@ import chalk from 'chalk';
 import {
   generateFromTemplate,
   getModulePath,
-  prepareTemplateData,
+  prepareConfiguredTemplateData,
   updateBarrelFile,
 } from '../utils/file.utils';
 import { toKebabCase } from '../utils/naming.utils';
@@ -110,7 +110,11 @@ export async function generateDto(dtoName: string, options: any) {
 
   const basePath = options.path || process.cwd();
   const modulePath = getModulePath(basePath, options.module);
-  const templateData = prepareTemplateData(entityName, options.module, options.fields);
+  const templateData = await prepareConfiguredTemplateData(entityName, options.module, {
+    basePath,
+    fieldsString: options.fields,
+    orm: options.orm,
+  });
 
   const outputPath = path.join(
     modulePath,

@@ -4,7 +4,7 @@ import { generateModule } from './generate-module';
 import { generateEntity } from './generate-entity';
 import {
   getModulePath,
-  prepareTemplateData,
+  prepareConfiguredTemplateData,
   generateFromTemplate,
   fileExists,
   writeGeneratedFile,
@@ -20,7 +20,9 @@ import { resolveMigrationOutputPath } from './migration';
 export async function generateAll(entityName: string, options: any) {
   console.log(chalk.blue(`\n🚀 Generating complete scaffolding for: ${entityName}`));
 
-  const orm = options.orm || 'typeorm';
+  const basePath = options.path || process.cwd();
+  const config = await loadConfig(basePath);
+  const orm = options.orm || config.orm || 'typeorm';
   const dryRun = !!options.dryRun;
 
   if (dryRun) {
@@ -42,7 +44,6 @@ export async function generateAll(entityName: string, options: any) {
   }
 
   const moduleName = options.module || entityName;
-  const basePath = options.path || process.cwd();
   const modulePath = getModulePath(basePath, moduleName);
   const fieldsString = options.fields || '';
 
@@ -54,7 +55,12 @@ export async function generateAll(entityName: string, options: any) {
   }
 
   // Prepare template data with fields
-  const templateData = prepareTemplateData(entityName, moduleName, fieldsString);
+  const templateData = await prepareConfiguredTemplateData(entityName, moduleName, {
+    basePath,
+    fieldsString,
+    orm,
+    features: config.features,
+  });
 
   // Generate entity with all related files
   await generateEntity(entityName, {
@@ -93,7 +99,7 @@ export async function generateAll(entityName: string, options: any) {
   await generateDto('create', entityName, modulePath, templateData, dryRun);
   await generateDto('update', entityName, modulePath, templateData, dryRun);
   await generateDto('response', entityName, modulePath, templateData, dryRun);
-  await generatePaginationDtos(modulePath, dryRun);
+  await generatePaginationDtos(modulePath, templateData, dryRun);
 
   // Generate controller
   console.log(chalk.cyan('  Generating controller...'));
@@ -278,7 +284,7 @@ async function generateDto(
   await generateFromTemplate(templatePath, outputPath, templateData, dryRun);
 }
 
-async function generatePaginationDtos(modulePath: string, dryRun = false) {
+async function generatePaginationDtos(modulePath: string, templateData: any, dryRun = false) {
   // Generate pagination query DTO
   const paginationQueryTemplatePath = path.join(
     __dirname,
@@ -294,7 +300,7 @@ async function generatePaginationDtos(modulePath: string, dryRun = false) {
     await generateFromTemplate(
       paginationQueryTemplatePath,
       paginationQueryOutputPath,
-      prepareTemplateData('Pagination', 'shared'),
+      templateData,
       dryRun,
     );
   }
@@ -314,7 +320,7 @@ async function generatePaginationDtos(modulePath: string, dryRun = false) {
     await generateFromTemplate(
       paginatedResponseTemplatePath,
       paginatedResponseOutputPath,
-      prepareTemplateData('Paginated', 'shared'),
+      templateData,
       dryRun,
     );
   }
@@ -340,6 +346,13 @@ async function generateMigration(
           //   type: "varchar",
           //   isNullable: false,
           // },`;
+  const softDeleteColumn = templateData.softDelete
+    ? `          {
+            name: "deleted_at",
+            type: "timestamp",
+            isNullable: true,
+          },`
+    : '';
 
   const content = `import { MigrationInterface, QueryRunner, Table } from "typeorm";
 
@@ -372,11 +385,7 @@ ${fieldsColumns}
             type: "timestamp",
             default: "CURRENT_TIMESTAMP",
           },
-          {
-            name: "deleted_at",
-            type: "timestamp",
-            isNullable: true,
-          },
+${softDeleteColumn}
         ],
       }),
       true,
@@ -559,7 +568,9 @@ async function generateTests(
   const entityNameKebab = toKebabCase(entityName);
 
   // Repository test
-  const repoTestTemplatePath = path.join(__dirname, '../templates/test/repository.spec.hbs');
+  const repoTestTemplatePath = templateData.isPrisma
+    ? path.join(__dirname, '../templates/test/prisma-repository.spec.hbs')
+    : path.join(__dirname, '../templates/test/repository.spec.hbs');
   const repoTestOutputPath = path.join(
     modulePath,
     'infrastructure/repositories',
@@ -796,7 +807,7 @@ ${fieldsContent}
   is_active            Boolean   @default(true)
   created_at           DateTime  @default(now())
   updated_at           DateTime  @updatedAt
-  deleted_at           DateTime?
+${templateData.softDelete ? '  deleted_at           DateTime?' : ''}
 
   @@map("${tableName}")
 }

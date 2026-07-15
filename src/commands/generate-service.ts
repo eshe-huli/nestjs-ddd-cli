@@ -2,7 +2,7 @@ import * as path from 'path';
 import chalk from 'chalk';
 import {
   getModulePath,
-  prepareTemplateData,
+  prepareConfiguredTemplateData,
   generateFromTemplate,
   updateBarrelFile,
 } from '../utils/file.utils';
@@ -20,7 +20,10 @@ export async function generateService(serviceName: string, options: any) {
   const modulePath = getModulePath(basePath, options.module);
 
   // Generate domain service
-  const templateData = prepareTemplateData(serviceName, options.module);
+  const templateData = await prepareConfiguredTemplateData(serviceName, options.module, {
+    basePath,
+    orm: options.orm,
+  });
   const templatePath = path.join(__dirname, '../templates/service/domain-service.hbs');
   const outputPath = path.join(
     modulePath,

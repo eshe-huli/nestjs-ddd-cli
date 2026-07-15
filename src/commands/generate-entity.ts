@@ -2,7 +2,7 @@ import * as path from 'path';
 import chalk from 'chalk';
 import {
   getModulePath,
-  prepareTemplateData,
+  prepareConfiguredTemplateData,
   generateFromTemplate,
   fileExists,
   updateBarrelFile,
@@ -19,7 +19,12 @@ export async function generateEntity(entityName: string, options: any) {
   const basePath = options.path || process.cwd();
   const modulePath = getModulePath(basePath, options.module);
   const fieldsString = options.fields || '';
-  const templateData = prepareTemplateData(entityName, options.module, fieldsString);
+  const templateData = await prepareConfiguredTemplateData(entityName, options.module, {
+    basePath,
+    fieldsString,
+    orm: options.orm,
+  });
+  const orm = templateData.orm;
   const dryRun = !!options.dryRun;
 
   // Generate domain entity
@@ -37,7 +42,6 @@ export async function generateEntity(entityName: string, options: any) {
     console.log(chalk.green(`    ✓ Domain entity`));
   }
 
-  const orm = options.orm || 'typeorm';
   const isPrisma = orm === 'prisma';
 
   // Generate ORM entity if not skipped (TypeORM only - Prisma uses schema.prisma)

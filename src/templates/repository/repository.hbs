@@ -5,10 +5,22 @@ import { {{entityNamePascal}}Mapper } from "@modules/{{moduleNameKebab}}/infrast
 import { {{entityNamePascal}}OrmEntity } from "@modules/{{moduleNameKebab}}/infrastructure/orm-entities/{{entityNameKebab}}.orm-entity";
 import { {{entityNamePascal}}Entity } from "@modules/{{moduleNameKebab}}/application/domain/entities/{{entityNameKebab}}.entity";
 
+const {{entityNameCamel}}OrderFields = [
+  "id",
+{{#each fields}}
+  "{{#if this.isRelation}}{{this.camelCase}}{{else}}{{this.snakeCase}}{{/if}}",
+{{/each}}
+  "isActive",
+  "createdAt",
+  "updatedAt",
+] as const satisfies readonly (keyof {{entityNamePascal}}OrmEntity)[];
+
+export type {{entityNamePascal}}OrderField = (typeof {{entityNameCamel}}OrderFields)[number];
+
 export interface PaginationOptions {
   skip: number;
   take: number;
-  orderBy: string;
+  orderBy: {{entityNamePascal}}OrderField;
   orderDirection: "ASC" | "DESC";
 }
 
@@ -20,6 +32,10 @@ export class {{entityNamePascal}}Repository {
     private readonly mapper: {{entityNamePascal}}Mapper,
   ) {}
 
+  static isOrderByField(value: string): value is {{entityNamePascal}}OrderField {
+    return {{entityNameCamel}}OrderFields.some((field) => field === value);
+  }
+
   async create(entity: {{entityNamePascal}}Entity): Promise<{{entityNamePascal}}Entity> {
     const ormEntity = this.mapper.toOrmEntity(entity);
     const savedOrmEntity = await this.repository.save(ormEntity);
@@ -28,7 +44,11 @@ export class {{entityNamePascal}}Repository {
 
   async findById(id: string): Promise<{{entityNamePascal}}Entity | null> {
     const ormEntity = await this.repository.findOne({
+{{#if softDelete}}
       where: { id, deletedAt: null } as any,
+{{else}}
+      where: { id },
+{{/if}}
     });
 
     if (!ormEntity) {
@@ -39,9 +59,13 @@ export class {{entityNamePascal}}Repository {
   }
 
   async findAll(): Promise<{{entityNamePascal}}Entity[]> {
+{{#if softDelete}}
     const ormEntities = await this.repository.find({
       where: { deletedAt: null } as any,
     });
+{{else}}
+    const ormEntities = await this.repository.find();
+{{/if}}
 
     return ormEntities.map((ormEntity) => this.mapper.toDomainEntity(ormEntity));
   }
@@ -56,7 +80,9 @@ export class {{entityNamePascal}}Repository {
     } as FindOptionsOrder<{{entityNamePascal}}OrmEntity>;
 
     const [ormEntities, total] = await this.repository.findAndCount({
+{{#if softDelete}}
       where: { deletedAt: null } as any,
+{{/if}}
       skip,
       take,
       order,
@@ -76,20 +102,30 @@ export class {{entityNamePascal}}Repository {
   }
 
   async delete(id: string): Promise<void> {
-    // Soft delete
+{{#if softDelete}}
     await this.repository.update(id, {
       deletedAt: new Date(),
       isActive: false,
     } as any);
+{{else}}
+    await this.repository.delete(id);
+{{/if}}
   }
 
+{{#if hardDelete}}
   async hardDelete(id: string): Promise<void> {
     await this.repository.delete(id);
   }
 
+{{/if}}
+
   async exists(id: string): Promise<boolean> {
     const count = await this.repository.count({
+{{#if softDelete}}
       where: { id, deletedAt: null } as any,
+{{else}}
+      where: { id },
+{{/if}}
     });
     return count > 0;
   }

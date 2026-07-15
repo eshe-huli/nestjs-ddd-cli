@@ -4,11 +4,23 @@ import { {{entityNamePascal}}Entity } from "@modules/{{moduleNameKebab}}/applica
 import { {{entityNamePascal}}Mapper } from "@modules/{{moduleNameKebab}}/infrastructure/mappers/{{entityNameKebab}}.mapper";
 import { Prisma } from "@prisma/client";
 
+const {{entityNameCamel}}OrderFields = [
+  "id",
+{{#each fields}}
+  "{{this.snakeCase}}",
+{{/each}}
+  "is_active",
+  "created_at",
+  "updated_at",
+] as const satisfies readonly (keyof Prisma.{{entityNamePascal}}OrderByWithRelationInput)[];
+
+export type {{entityNamePascal}}OrderField = (typeof {{entityNameCamel}}OrderFields)[number];
+
 export interface PaginationOptions {
   skip: number;
   take: number;
-  orderBy: string;
-  orderDirection: "asc" | "desc";
+  orderBy: {{entityNamePascal}}OrderField;
+  orderDirection: "ASC" | "DESC";
 }
 
 @Injectable()
@@ -18,6 +30,10 @@ export class {{entityNamePascal}}Repository {
     private readonly mapper: {{entityNamePascal}}Mapper,
   ) {}
 
+  static isOrderByField(value: string): value is {{entityNamePascal}}OrderField {
+    return {{entityNameCamel}}OrderFields.some((field) => field === value);
+  }
+
   async create(entity: {{entityNamePascal}}Entity): Promise<{{entityNamePascal}}Entity> {
     const data = this.mapper.toPrismaCreate(entity);
     const created = await this.prisma.{{entityNameCamel}}.create({ data });
@@ -26,7 +42,11 @@ export class {{entityNamePascal}}Repository {
 
   async findById(id: string): Promise<{{entityNamePascal}}Entity | null> {
     const record = await this.prisma.{{entityNameCamel}}.findFirst({
+{{#if softDelete}}
       where: { id, deleted_at: null },
+{{else}}
+      where: { id },
+{{/if}}
     });
 
     if (!record) {
@@ -37,9 +57,13 @@ export class {{entityNamePascal}}Repository {
   }
 
   async findAll(): Promise<{{entityNamePascal}}Entity[]> {
+{{#if softDelete}}
     const records = await this.prisma.{{entityNameCamel}}.findMany({
       where: { deleted_at: null },
     });
+{{else}}
+    const records = await this.prisma.{{entityNameCamel}}.findMany();
+{{/if}}
 
     return records.map((record) => this.mapper.toDomainEntity(record));
   }
@@ -48,17 +72,26 @@ export class {{entityNamePascal}}Repository {
     options: PaginationOptions,
   ): Promise<[{{entityNamePascal}}Entity[], number]> {
     const { skip, take, orderBy, orderDirection } = options;
+    const order: Prisma.{{entityNamePascal}}OrderByWithRelationInput = {
+      [orderBy]: orderDirection.toLowerCase() as Prisma.SortOrder,
+    };
 
     const [records, total] = await Promise.all([
       this.prisma.{{entityNameCamel}}.findMany({
+{{#if softDelete}}
         where: { deleted_at: null },
+{{/if}}
         skip,
         take,
-        orderBy: { [orderBy]: orderDirection },
+        orderBy: order,
       }),
+{{#if softDelete}}
       this.prisma.{{entityNameCamel}}.count({
         where: { deleted_at: null },
       }),
+{{else}}
+      this.prisma.{{entityNameCamel}}.count(),
+{{/if}}
     ]);
 
     const entities = records.map((record) => this.mapper.toDomainEntity(record));
@@ -75,6 +108,7 @@ export class {{entityNamePascal}}Repository {
   }
 
   async delete(id: string): Promise<void> {
+{{#if softDelete}}
     await this.prisma.{{entityNameCamel}}.update({
       where: { id },
       data: {
@@ -82,17 +116,29 @@ export class {{entityNamePascal}}Repository {
         is_active: false,
       },
     });
+{{else}}
+    await this.prisma.{{entityNameCamel}}.delete({
+      where: { id },
+    });
+{{/if}}
   }
 
+{{#if hardDelete}}
   async hardDelete(id: string): Promise<void> {
     await this.prisma.{{entityNameCamel}}.delete({
       where: { id },
     });
   }
 
+{{/if}}
+
   async exists(id: string): Promise<boolean> {
     const count = await this.prisma.{{entityNameCamel}}.count({
+{{#if softDelete}}
       where: { id, deleted_at: null },
+{{else}}
+      where: { id },
+{{/if}}
     });
     return count > 0;
   }
@@ -102,7 +148,11 @@ export class {{entityNamePascal}}Repository {
     value: Prisma.{{entityNamePascal}}WhereInput[K],
   ): Promise<{{entityNamePascal}}Entity | null> {
     const record = await this.prisma.{{entityNameCamel}}.findFirst({
+{{#if softDelete}}
       where: { [field]: value, deleted_at: null },
+{{else}}
+      where: { [field]: value },
+{{/if}}
     });
 
     if (!record) {
