@@ -171,6 +171,47 @@ describe('Safe repository scaffold generation', () => {
     }
   });
 
+  it('names pagination contracts per aggregate in a shared module', async () => {
+    const fixturePath = path.join(testDir, 'shared-module-pagination');
+    await fs.ensureDir(fixturePath);
+    await fs.writeJson(path.join(fixturePath, '.dddrc.json'), {
+      orm: 'typeorm',
+      features: { softDelete: false },
+    });
+
+    resetConfigCache();
+    await generateAll('Invoice', {
+      module: 'billing',
+      path: fixturePath,
+      fields: 'amount:decimal reference:string',
+      orm: 'typeorm',
+    });
+    await generateAll('CreditMemo', {
+      module: 'billing',
+      path: fixturePath,
+      fields: 'amount:decimal reference:string',
+      orm: 'typeorm',
+    });
+
+    const repositoryPath = path.join(
+      fixturePath,
+      'src/modules/billing/infrastructure/repositories',
+    );
+    const invoiceRepository = await fs.readFile(
+      path.join(repositoryPath, 'invoice.repository.ts'),
+      'utf-8',
+    );
+    const creditMemoRepository = await fs.readFile(
+      path.join(repositoryPath, 'credit-memo.repository.ts'),
+      'utf-8',
+    );
+
+    expect(invoiceRepository).toContain('export interface InvoicePaginationOptions');
+    expect(invoiceRepository).toContain('options: InvoicePaginationOptions');
+    expect(creditMemoRepository).toContain('export interface CreditMemoPaginationOptions');
+    expect(creditMemoRepository).toContain('options: CreditMemoPaginationOptions');
+  });
+
   async function generateFixture(
     fixtureName: string,
     orm: FixtureOrm,
