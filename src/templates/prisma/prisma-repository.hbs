@@ -16,7 +16,7 @@ const {{entityNameCamel}}OrderFields = [
 
 export type {{entityNamePascal}}OrderField = (typeof {{entityNameCamel}}OrderFields)[number];
 
-export interface PaginationOptions {
+export interface {{entityNamePascal}}PaginationOptions {
   skip: number;
   take: number;
   orderBy: {{entityNamePascal}}OrderField;
@@ -69,7 +69,7 @@ export class {{entityNamePascal}}Repository {
   }
 
   async findAllPaginated(
-    options: PaginationOptions,
+    options: {{entityNamePascal}}PaginationOptions,
   ): Promise<[{{entityNamePascal}}Entity[], number]> {
     const { skip, take, orderBy, orderDirection } = options;
     const order: Prisma.{{entityNamePascal}}OrderByWithRelationInput = {
