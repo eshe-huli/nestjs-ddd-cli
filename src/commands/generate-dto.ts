@@ -29,6 +29,20 @@ interface DtoKindConfig {
   exportPath: (entityKebab: string) => string;
 }
 
+const FILTER_QUERY_RESERVED_FIELDS = new Set([
+  'isActive',
+  'search',
+  'searchFields',
+  'createdAtFrom',
+  'createdAtTo',
+  'page',
+  'limit',
+  'sortBy',
+  'sortOrder',
+  'skip',
+  'take',
+]);
+
 const DTO_KIND_CONFIG: Record<DtoKind, DtoKindConfig> = {
   create: {
     template: 'create-dto.hbs',
@@ -115,6 +129,13 @@ export async function generateDto(dtoName: string, options: any) {
     fieldsString: options.fields,
     orm: options.orm,
   });
+
+  if (kind === 'filter-query') {
+    templateData.fields = (templateData.fields ?? []).filter(
+      (field) => !FILTER_QUERY_RESERVED_FIELDS.has(field.camelCase),
+    );
+    templateData.hasFields = templateData.fields.length > 0;
+  }
 
   const outputPath = path.join(
     modulePath,

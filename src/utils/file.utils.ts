@@ -17,6 +17,18 @@ Handlebars.registerHelper('eq', function (a, b) {
   return a === b;
 });
 
+Handlebars.registerHelper('or', function (...args) {
+  return args.slice(0, -1).some(Boolean);
+});
+
+Handlebars.registerHelper('and', function (...args) {
+  return args.slice(0, -1).every(Boolean);
+});
+
+Handlebars.registerHelper('not', function (value) {
+  return !value;
+});
+
 Handlebars.registerHelper('lowercase', function (str) {
   return typeof str === 'string' ? str.toLowerCase() : str;
 });
@@ -171,8 +183,7 @@ export function prepareTemplateData(
     orm: generationConfig.orm ?? 'typeorm',
     isPrisma: generationConfig.orm === 'prisma',
     softDelete,
-    hardDelete:
-      deleteEnabled && softDelete && (generationConfig.features?.hardDelete ?? false),
+    hardDelete: deleteEnabled && softDelete && (generationConfig.features?.hardDelete ?? false),
     deleteEnabled,
   };
 }
