@@ -520,11 +520,11 @@ export function generateFieldsTemplateData(fields: FieldDefinition[]): {
 
   const migrationColumns = fields
     .map((f) => {
+      const uniqueLine = f.isUnique ? '\n            isUnique: true,' : '';
       return `          {
             name: "${f.snakeCase}",
             type: "${f.dbType}",
-            isNullable: ${f.isOptional},
-            ${f.isUnique ? 'isUnique: true,' : ''}
+            isNullable: ${f.isOptional},${uniqueLine}
           },`;
     })
     .join('\n');

@@ -1,4 +1,4 @@
-import { parseFields } from './field.utils';
+import { generateFieldsTemplateData, parseFields } from './field.utils';
 
 describe('parseFields', () => {
   it('does not regenerate fields already owned by the base entity', () => {
@@ -37,5 +37,13 @@ describe('parseFields', () => {
     expect(result.fields[0]?.validators).toContain(
       "@IsDecimal({ decimal_digits: '0,18', force_decimal: false })",
     );
+  });
+
+  it('does not emit whitespace-only lines for non-unique migration columns', () => {
+    const { fields } = parseFields('name:string code:string:unique');
+    const migrationColumns = generateFieldsTemplateData(fields).migrationColumns;
+
+    expect(migrationColumns).not.toMatch(/^\s+$/m);
+    expect(migrationColumns).toContain('isUnique: true');
   });
 });
