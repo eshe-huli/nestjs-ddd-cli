@@ -209,6 +209,30 @@ describe('Command Generators', () => {
       expect(content).not.toContain('QueryQuery');
     });
 
+    it('renders typed optional fields in a filter-query DTO', async () => {
+      await generateModule('inventory', { path: testDir });
+      await generateDto('ProductPreview', {
+        module: 'inventory',
+        path: testDir,
+        kind: 'filter-query',
+        fields: 'limit:int:optional asOfDate:date:optional search:string:optional',
+      });
+
+      const queryPath = path.join(
+        testDir,
+        'src/modules/inventory/application/dto/requests/product-preview-query.dto.ts',
+      );
+      const content = await fs.readFile(queryPath, 'utf-8');
+
+      expect(content).toContain('export class ProductPreviewQueryDto');
+      expect(content).toContain('limit?: number = 10;');
+      expect(content).toContain('asOfDate?: Date;');
+      expect(content).toContain('asOfDate__gte?: Date;');
+      expect(content).toContain('search?: string;');
+      expect(content.match(/limit\?: number/g)).toHaveLength(1);
+      expect(content.match(/search\?: string/g)).toHaveLength(1);
+    });
+
     it('previews DTO generation without writing files on dry-run', async () => {
       await generateModule('inventory', { path: testDir, dryRun: true });
       await generateDto('Product', {
