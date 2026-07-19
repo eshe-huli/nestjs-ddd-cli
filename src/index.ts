@@ -371,6 +371,7 @@ program
     try {
       if (options.enhanced) {
         await runEnhancedDoctor(options.path || process.cwd(), {
+          app: options.app,
           fix: options.fix,
           verbose: options.verbose,
         });

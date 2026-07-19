@@ -1,8 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import chalk from 'chalk';
+import { loadConfig } from '../utils/config.utils';
+import { resolveNestProjectPath } from './doctor';
 
 export interface DoctorOptions {
+  app?: string;
   fix?: boolean;
   verbose?: boolean;
 }
@@ -25,7 +28,17 @@ interface DoctorReport {
   results: DiagnosticResult[];
 }
 
-export async function runEnhancedDoctor(basePath: string, options: DoctorOptions = {}): Promise<DoctorReport> {
+interface DoctorPaths {
+  projectRoot: string;
+  modulesPath: string;
+  sharedPath: string;
+}
+
+export async function runEnhancedDoctor(
+  basePath: string,
+  options: DoctorOptions = {},
+): Promise<DoctorReport> {
+  const doctorPaths = await resolveDoctorPaths(basePath, options.app);
   const report: DoctorReport = {
     passed: 0,
     warnings: 0,
@@ -36,14 +49,14 @@ export async function runEnhancedDoctor(basePath: string, options: DoctorOptions
   console.log(chalk.bold.blue('\n🩺 Running Enhanced DDD Doctor...\n'));
 
   // Run all diagnostic checks
-  await checkProjectStructure(basePath, report);
-  await checkDddPatterns(basePath, report);
-  await checkTypeScriptStrictness(basePath, report);
-  await checkNamingConventions(basePath, report);
-  await checkTestCoverage(basePath, report);
-  await checkImportPatterns(basePath, report);
-  await checkEntityIntegrity(basePath, report);
-  await checkModuleBoundaries(basePath, report);
+  await checkProjectStructure(doctorPaths, report);
+  await checkDddPatterns(doctorPaths.modulesPath, report);
+  await checkTypeScriptStrictness(doctorPaths.projectRoot, report);
+  await checkNamingConventions(doctorPaths.modulesPath, report);
+  await checkTestCoverage(doctorPaths.modulesPath, report);
+  await checkImportPatterns(doctorPaths.modulesPath, report);
+  await checkEntityIntegrity(doctorPaths.modulesPath, report);
+  await checkModuleBoundaries(doctorPaths.modulesPath, report);
 
   // Print results
   printReport(report, options.verbose);
@@ -56,28 +69,36 @@ export async function runEnhancedDoctor(basePath: string, options: DoctorOptions
   return report;
 }
 
-async function checkProjectStructure(basePath: string, report: DoctorReport): Promise<void> {
-  const requiredDirs = [
-    'src/modules',
-    'src/shared',
-  ];
+async function resolveDoctorPaths(basePath: string, app?: string): Promise<DoctorPaths> {
+  const projectRoot = await resolveNestProjectPath(basePath, app);
+  const config = await loadConfig(projectRoot);
+
+  return {
+    projectRoot,
+    modulesPath: path.resolve(projectRoot, config.paths.modules),
+    sharedPath: path.resolve(projectRoot, config.paths.shared),
+  };
+}
+
+async function checkProjectStructure(paths: DoctorPaths, report: DoctorReport): Promise<void> {
+  const requiredDirs = [paths.modulesPath, paths.sharedPath];
 
   const recommendedDirs = [
-    'src/shared/domain',
-    'src/shared/infrastructure',
-    'src/shared/application',
+    path.join(paths.sharedPath, 'domain'),
+    path.join(paths.sharedPath, 'infrastructure'),
+    path.join(paths.sharedPath, 'application'),
   ];
 
-  for (const dir of requiredDirs) {
-    const fullPath = path.join(basePath, dir);
+  for (const fullPath of requiredDirs) {
+    const displayPath = displayProjectPath(paths.projectRoot, fullPath);
     if (!fs.existsSync(fullPath)) {
       report.errors++;
       report.results.push({
         category: 'Structure',
         rule: 'required-directory',
         severity: 'error',
-        message: `Missing required directory: ${dir}`,
-        suggestion: `Run: mkdir -p ${dir}`,
+        message: `Missing required directory: ${displayPath}`,
+        suggestion: `Run: mkdir -p ${fullPath}`,
         autoFixable: true,
       });
     } else {
@@ -85,35 +106,38 @@ async function checkProjectStructure(basePath: string, report: DoctorReport): Pr
     }
   }
 
-  for (const dir of recommendedDirs) {
-    const fullPath = path.join(basePath, dir);
+  for (const fullPath of recommendedDirs) {
+    const displayPath = displayProjectPath(paths.projectRoot, fullPath);
     if (!fs.existsSync(fullPath)) {
       report.warnings++;
       report.results.push({
         category: 'Structure',
         rule: 'recommended-directory',
         severity: 'warning',
-        message: `Missing recommended directory: ${dir}`,
-        suggestion: `Consider adding ${dir} for better DDD organization`,
+        message: `Missing recommended directory: ${displayPath}`,
+        suggestion: `Consider adding ${displayPath} for better DDD organization`,
       });
     }
   }
 }
 
-async function checkDddPatterns(basePath: string, report: DoctorReport): Promise<void> {
-  const modulesPath = path.join(basePath, 'src/modules');
+function displayProjectPath(projectRoot: string, targetPath: string): string {
+  const relativePath = path.relative(projectRoot, targetPath);
+  return relativePath && !relativePath.startsWith('..') ? relativePath : targetPath;
+}
+
+async function checkDddPatterns(modulesPath: string, report: DoctorReport): Promise<void> {
   if (!fs.existsSync(modulesPath)) return;
 
-  const modules = fs.readdirSync(modulesPath).filter(f =>
-    fs.statSync(path.join(modulesPath, f)).isDirectory()
-  );
+  const modules = fs
+    .readdirSync(modulesPath)
+    .filter((f) => fs.statSync(path.join(modulesPath, f)).isDirectory());
 
   for (const moduleName of modules) {
     const modulePath = path.join(modulesPath, moduleName);
 
-    // Check for domain layer
-    const domainPath = path.join(modulePath, 'domain');
-    if (!fs.existsSync(domainPath)) {
+    const domainPaths = getDomainLayerPaths(modulePath);
+    if (domainPaths.length === 0) {
       report.warnings++;
       report.results.push({
         category: 'DDD Pattern',
@@ -121,26 +145,35 @@ async function checkDddPatterns(basePath: string, report: DoctorReport): Promise
         severity: 'warning',
         message: `Module "${moduleName}" missing domain layer`,
         file: modulePath,
-        suggestion: 'Add domain/ directory with entities, value-objects, and domain services',
+        suggestion:
+          'Add application/domain/ (CLI layout) or domain/ (classic layout) with domain types',
       });
     }
 
-    // Check for entity immutability patterns
-    const entitiesPath = path.join(domainPath, 'entities');
-    if (fs.existsSync(entitiesPath)) {
-      await checkEntityImmutability(entitiesPath, moduleName, report);
+    for (const domainPath of domainPaths) {
+      // Check for entity immutability patterns
+      const entitiesPath = path.join(domainPath, 'entities');
+      if (fs.existsSync(entitiesPath)) {
+        await checkEntityImmutability(entitiesPath, report);
+      }
+
+      // Check for proper aggregate roots
+      await checkAggregateRoots(domainPath, report);
     }
 
-    // Check for proper aggregate roots
-    await checkAggregateRoots(domainPath, moduleName, report);
-
     // Check repository interface in domain layer
-    await checkRepositoryPattern(modulePath, moduleName, report);
+    await checkRepositoryPattern(modulePath, moduleName, domainPaths, report);
   }
 }
 
-async function checkEntityImmutability(entitiesPath: string, moduleName: string, report: DoctorReport): Promise<void> {
-  const files = fs.readdirSync(entitiesPath).filter(f => f.endsWith('.ts'));
+function getDomainLayerPaths(modulePath: string): string[] {
+  return ['application/domain', 'domain']
+    .map((relativePath) => path.join(modulePath, relativePath))
+    .filter((domainPath) => fs.existsSync(domainPath));
+}
+
+async function checkEntityImmutability(entitiesPath: string, report: DoctorReport): Promise<void> {
+  const files = fs.readdirSync(entitiesPath).filter((f) => f.endsWith('.ts'));
 
   for (const file of files) {
     const filePath = path.join(entitiesPath, file);
@@ -178,7 +211,7 @@ async function checkEntityImmutability(entitiesPath: string, moduleName: string,
   }
 }
 
-async function checkAggregateRoots(domainPath: string, moduleName: string, report: DoctorReport): Promise<void> {
+async function checkAggregateRoots(domainPath: string, report: DoctorReport): Promise<void> {
   if (!fs.existsSync(domainPath)) return;
 
   const files = getAllTypeScriptFiles(domainPath);
@@ -188,10 +221,10 @@ async function checkAggregateRoots(domainPath: string, moduleName: string, repor
 
     // Check if entity extends AggregateRoot when it should
     if (content.includes('class ') && content.includes('Entity')) {
-      const hasAggregateRoot = content.includes('extends AggregateRoot') ||
-                               content.includes('extends BaseEntity');
-      const hasDomainEvents = content.includes('domainEvents') ||
-                              content.includes('addDomainEvent');
+      const hasAggregateRoot =
+        content.includes('extends AggregateRoot') || content.includes('extends BaseEntity');
+      const hasDomainEvents =
+        content.includes('domainEvents') || content.includes('addDomainEvent');
 
       if (hasDomainEvents && !hasAggregateRoot) {
         report.warnings++;
@@ -208,17 +241,21 @@ async function checkAggregateRoots(domainPath: string, moduleName: string, repor
   }
 }
 
-async function checkRepositoryPattern(modulePath: string, moduleName: string, report: DoctorReport): Promise<void> {
-  const domainPath = path.join(modulePath, 'domain');
+async function checkRepositoryPattern(
+  modulePath: string,
+  moduleName: string,
+  domainPaths: string[],
+  report: DoctorReport,
+): Promise<void> {
   const infraPath = path.join(modulePath, 'infrastructure');
 
   // Check for repository interface in domain layer
-  const domainRepoFiles = fs.existsSync(domainPath)
-    ? getAllTypeScriptFiles(domainPath).filter(f => f.includes('repository'))
-    : [];
+  const domainRepoFiles = domainPaths.flatMap((domainPath) =>
+    getAllTypeScriptFiles(domainPath).filter((file) => file.includes('repository')),
+  );
 
   const infraRepoFiles = fs.existsSync(infraPath)
-    ? getAllTypeScriptFiles(infraPath).filter(f => f.includes('repository'))
+    ? getAllTypeScriptFiles(infraPath).filter((f) => f.includes('repository'))
     : [];
 
   if (infraRepoFiles.length > 0 && domainRepoFiles.length === 0) {
@@ -287,8 +324,7 @@ async function checkTypeScriptStrictness(basePath: string, report: DoctorReport)
   }
 }
 
-async function checkNamingConventions(basePath: string, report: DoctorReport): Promise<void> {
-  const modulesPath = path.join(basePath, 'src/modules');
+async function checkNamingConventions(modulesPath: string, report: DoctorReport): Promise<void> {
   if (!fs.existsSync(modulesPath)) return;
 
   const files = getAllTypeScriptFiles(modulesPath);
@@ -315,9 +351,10 @@ async function checkNamingConventions(basePath: string, report: DoctorReport): P
     if (classMatch) {
       for (const match of classMatch) {
         const className = match.replace('export class ', '');
+        const firstCharacter = className[0];
 
         // Check PascalCase
-        if (className[0] !== className[0].toUpperCase()) {
+        if (firstCharacter && firstCharacter !== firstCharacter.toUpperCase()) {
           report.errors++;
           report.results.push({
             category: 'Naming',
@@ -332,25 +369,20 @@ async function checkNamingConventions(basePath: string, report: DoctorReport): P
   }
 }
 
-async function checkTestCoverage(basePath: string, report: DoctorReport): Promise<void> {
-  const modulesPath = path.join(basePath, 'src/modules');
+async function checkTestCoverage(modulesPath: string, report: DoctorReport): Promise<void> {
   if (!fs.existsSync(modulesPath)) return;
 
-  const modules = fs.readdirSync(modulesPath).filter(f =>
-    fs.statSync(path.join(modulesPath, f)).isDirectory()
-  );
+  const modules = fs
+    .readdirSync(modulesPath)
+    .filter((f) => fs.statSync(path.join(modulesPath, f)).isDirectory());
 
   for (const moduleName of modules) {
     const modulePath = path.join(modulesPath, moduleName);
-    const sourceFiles = getAllTypeScriptFiles(modulePath).filter(f =>
-      !f.includes('.spec.ts') && !f.includes('.test.ts')
+    const sourceFiles = getAllTypeScriptFiles(modulePath).filter(
+      (f) => !f.includes('.spec.ts') && !f.includes('.test.ts'),
     );
-    const testFiles = getAllTypeScriptFiles(modulePath).filter(f =>
-      f.includes('.spec.ts') || f.includes('.test.ts')
-    );
-
     // Check for service tests
-    const services = sourceFiles.filter(f => f.includes('.service.ts'));
+    const services = sourceFiles.filter((f) => f.includes('.service.ts'));
     for (const service of services) {
       const testFile = service.replace('.service.ts', '.service.spec.ts');
       if (!fs.existsSync(testFile)) {
@@ -367,7 +399,7 @@ async function checkTestCoverage(basePath: string, report: DoctorReport): Promis
     }
 
     // Check for domain entity tests
-    const entities = sourceFiles.filter(f => f.includes('.entity.ts'));
+    const entities = sourceFiles.filter((f) => f.includes('.entity.ts'));
     for (const entity of entities) {
       const testFile = entity.replace('.entity.ts', '.entity.spec.ts');
       if (!fs.existsSync(testFile)) {
@@ -383,30 +415,29 @@ async function checkTestCoverage(basePath: string, report: DoctorReport): Promis
   }
 }
 
-async function checkImportPatterns(basePath: string, report: DoctorReport): Promise<void> {
-  const modulesPath = path.join(basePath, 'src/modules');
+async function checkImportPatterns(modulesPath: string, report: DoctorReport): Promise<void> {
   if (!fs.existsSync(modulesPath)) return;
 
-  const modules = fs.readdirSync(modulesPath).filter(f =>
-    fs.statSync(path.join(modulesPath, f)).isDirectory()
-  );
+  const modules = fs
+    .readdirSync(modulesPath)
+    .filter((f) => fs.statSync(path.join(modulesPath, f)).isDirectory());
 
   for (const moduleName of modules) {
     const modulePath = path.join(modulesPath, moduleName);
-    const domainPath = path.join(modulePath, 'domain');
-
-    if (!fs.existsSync(domainPath)) continue;
-
-    const domainFiles = getAllTypeScriptFiles(domainPath);
+    const domainFiles = getDomainLayerPaths(modulePath).flatMap((domainPath) =>
+      getAllTypeScriptFiles(domainPath),
+    );
 
     for (const file of domainFiles) {
       const content = fs.readFileSync(file, 'utf-8');
 
       // Check for infrastructure imports in domain layer (violation)
-      if (content.includes("from '../infrastructure") ||
-          content.includes("from './infrastructure") ||
-          content.includes('from "@nestjs/typeorm"') ||
-          content.includes('from "typeorm"')) {
+      if (
+        content.includes("from '../infrastructure") ||
+        content.includes("from './infrastructure") ||
+        content.includes('from "@nestjs/typeorm"') ||
+        content.includes('from "typeorm"')
+      ) {
         report.errors++;
         report.results.push({
           category: 'Architecture',
@@ -419,8 +450,10 @@ async function checkImportPatterns(basePath: string, report: DoctorReport): Prom
       }
 
       // Check for direct HTTP/controller imports in domain
-      if (content.includes('@nestjs/common') &&
-          (content.includes('Controller') || content.includes('Get') || content.includes('Post'))) {
+      if (
+        content.includes('@nestjs/common') &&
+        (content.includes('Controller') || content.includes('Get') || content.includes('Post'))
+      ) {
         report.errors++;
         report.results.push({
           category: 'Architecture',
@@ -435,20 +468,21 @@ async function checkImportPatterns(basePath: string, report: DoctorReport): Prom
   }
 }
 
-async function checkEntityIntegrity(basePath: string, report: DoctorReport): Promise<void> {
-  const modulesPath = path.join(basePath, 'src/modules');
+async function checkEntityIntegrity(modulesPath: string, report: DoctorReport): Promise<void> {
   if (!fs.existsSync(modulesPath)) return;
 
-  const files = getAllTypeScriptFiles(modulesPath).filter(f => f.includes('.entity.ts'));
+  const files = getAllTypeScriptFiles(modulesPath).filter((f) => f.includes('.entity.ts'));
 
   for (const file of files) {
     const content = fs.readFileSync(file, 'utf-8');
 
     // Check for ID field
-    if (!content.includes('@PrimaryGeneratedColumn') &&
-        !content.includes('@PrimaryColumn') &&
-        !content.includes('id:') &&
-        !content.includes('_id:')) {
+    if (
+      !content.includes('@PrimaryGeneratedColumn') &&
+      !content.includes('@PrimaryColumn') &&
+      !content.includes('id:') &&
+      !content.includes('_id:')
+    ) {
       report.warnings++;
       report.results.push({
         category: 'Entity',
@@ -474,13 +508,12 @@ async function checkEntityIntegrity(basePath: string, report: DoctorReport): Pro
   }
 }
 
-async function checkModuleBoundaries(basePath: string, report: DoctorReport): Promise<void> {
-  const modulesPath = path.join(basePath, 'src/modules');
+async function checkModuleBoundaries(modulesPath: string, report: DoctorReport): Promise<void> {
   if (!fs.existsSync(modulesPath)) return;
 
-  const modules = fs.readdirSync(modulesPath).filter(f =>
-    fs.statSync(path.join(modulesPath, f)).isDirectory()
-  );
+  const modules = fs
+    .readdirSync(modulesPath)
+    .filter((f) => fs.statSync(path.join(modulesPath, f)).isDirectory());
 
   for (const moduleName of modules) {
     const modulePath = path.join(modulesPath, moduleName);
@@ -496,8 +529,9 @@ async function checkModuleBoundaries(basePath: string, report: DoctorReport): Pr
         const importPattern = new RegExp(`from ['"].*/${otherModule}/(?!.*\\.module)`, 'g');
         if (importPattern.test(content)) {
           // Check if it's importing from domain (allowed) or internal (violation)
-          const internalImport = content.includes(`/${otherModule}/application/`) ||
-                                 content.includes(`/${otherModule}/infrastructure/`);
+          const internalImport =
+            content.includes(`/${otherModule}/application/`) ||
+            content.includes(`/${otherModule}/infrastructure/`);
 
           if (internalImport) {
             report.warnings++;
@@ -536,7 +570,7 @@ function getAllTypeScriptFiles(dir: string): string[] {
 }
 
 async function applyFixes(report: DoctorReport): Promise<void> {
-  const fixableResults = report.results.filter(r => r.autoFixable);
+  const fixableResults = report.results.filter((r) => r.autoFixable);
 
   if (fixableResults.length === 0) {
     console.log(chalk.gray('\nNo auto-fixable issues found.'));
@@ -568,10 +602,13 @@ function printReport(report: DoctorReport, verbose?: boolean): void {
     console.log(chalk.bold(`\n📁 ${category}`));
 
     for (const result of results) {
-      const icon = result.severity === 'error' ? '❌' :
-                   result.severity === 'warning' ? '⚠️' : 'ℹ️';
-      const color = result.severity === 'error' ? chalk.red :
-                    result.severity === 'warning' ? chalk.yellow : chalk.gray;
+      const icon = result.severity === 'error' ? '❌' : result.severity === 'warning' ? '⚠️' : 'ℹ️';
+      const color =
+        result.severity === 'error'
+          ? chalk.red
+          : result.severity === 'warning'
+            ? chalk.yellow
+            : chalk.gray;
 
       console.log(color(`  ${icon} ${result.message}`));
 
