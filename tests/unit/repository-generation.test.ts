@@ -3,6 +3,7 @@ import * as fs from 'fs-extra';
 import * as path from 'path';
 import { generateAll } from '../../src/commands/generate-all';
 import { generateEntity } from '../../src/commands/generate-entity';
+import { generateRepository as generateRepositoryPattern } from '../../src/commands/generate-repository';
 import { resetConfigCache } from '../../src/utils/config.utils';
 import {
   compileGeneratedRepositoryFixture,
@@ -210,6 +211,30 @@ describe('Safe repository scaffold generation', () => {
     expect(invoiceRepository).toContain('options: InvoicePaginationOptions');
     expect(creditMemoRepository).toContain('export interface CreditMemoPaginationOptions');
     expect(creditMemoRepository).toContain('options: CreditMemoPaginationOptions');
+  });
+
+  it('keeps s characters and resolves the configured module root for repository generation', async () => {
+    const fixturePath = path.join(testDir, 'repository-command-naming');
+    await fs.ensureDir(fixturePath);
+
+    await generateRepositoryPattern('CloseChecklistDefinition', fixturePath, {
+      module: 'close-orchestration',
+      orm: 'typeorm',
+    });
+
+    const repositoryPath = path.join(
+      fixturePath,
+      'src/modules/close-orchestration/infrastructure/repositories',
+    );
+    expect(
+      await fs.pathExists(
+        path.join(repositoryPath, 'close-checklist-definition.repository.interface.ts'),
+      ),
+    ).toBe(true);
+    expect(
+      await fs.pathExists(path.join(repositoryPath, 'close-checklist-definition.repository.ts')),
+    ).toBe(true);
+    expect(await fs.pathExists(path.join(fixturePath, 'src/close-orchestration'))).toBe(false);
   });
 
   async function generateFixture(

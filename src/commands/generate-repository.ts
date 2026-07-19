@@ -6,6 +6,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import chalk from 'chalk';
+import { getModulePath } from '../utils/file.utils';
+import { toCamelCase, toKebabCase, toPascalCase } from '../utils/naming.utils';
 
 export interface RepositoryOptions {
   path?: string;
@@ -16,13 +18,13 @@ export interface RepositoryOptions {
 export async function generateRepository(
   entityName: string,
   basePath: string,
-  options: RepositoryOptions = {}
+  options: RepositoryOptions = {},
 ): Promise<void> {
   console.log(chalk.bold.blue('\n📦 Generating Repository Pattern\n'));
 
   const moduleName = options.module || 'shared';
   const orm = options.orm || 'typeorm';
-  const repoPath = path.join(basePath, 'src', moduleName, 'infrastructure', 'repositories');
+  const repoPath = path.join(getModulePath(basePath, moduleName), 'infrastructure', 'repositories');
 
   if (!fs.existsSync(repoPath)) {
     fs.mkdirSync(repoPath, { recursive: true });
@@ -35,9 +37,8 @@ export async function generateRepository(
   console.log(chalk.green(`  ✓ Created ${interfaceFile}`));
 
   // Generate implementation
-  const implContent = orm === 'prisma'
-    ? generatePrismaRepository(entityName)
-    : generateTypeORMRepository(entityName);
+  const implContent =
+    orm === 'prisma' ? generatePrismaRepository(entityName) : generateTypeORMRepository(entityName);
   const implFile = path.join(repoPath, `${toKebabCase(entityName)}.repository.ts`);
   fs.writeFileSync(implFile, implContent);
   console.log(chalk.green(`  ✓ Created ${implFile}`));
@@ -140,7 +141,6 @@ export interface PaginatedResult<T> {
 
 function generateTypeORMRepository(entityName: string): string {
   const className = toPascalCase(entityName);
-  const varName = toCamelCase(entityName);
 
   return `import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -601,7 +601,7 @@ class Transactional${className}Repository implements I${className}Repository {
  */
 export async function setupRepositoryInfrastructure(
   basePath: string,
-  options: RepositoryOptions = {}
+  _options: RepositoryOptions = {},
 ): Promise<void> {
   console.log(chalk.bold.blue('\n📦 Setting up Repository Infrastructure\n'));
 
@@ -610,7 +610,7 @@ export async function setupRepositoryInfrastructure(
   const repoPath = path.join(sharedPath, 'repositories');
 
   // Create directories
-  [specPath, repoPath].forEach(p => {
+  [specPath, repoPath].forEach((p) => {
     if (!fs.existsSync(p)) {
       fs.mkdirSync(p, { recursive: true });
     }
@@ -995,23 +995,4 @@ export function Transactional(): MethodDecorator {
   };
 }
 `;
-}
-
-// Helper functions
-function toKebabCase(str: string): string {
-  return str
-    .replace(/([a-z])([A-Z])/g, '$1-$2')
-    .replace(/[\\s_]+/g, '-')
-    .toLowerCase();
-}
-
-function toPascalCase(str: string): string {
-  return str
-    .replace(/[-_\\s]+(.)?/g, (_, c) => c ? c.toUpperCase() : '')
-    .replace(/^(.)/, c => c.toUpperCase());
-}
-
-function toCamelCase(str: string): string {
-  const pascal = toPascalCase(str);
-  return pascal.charAt(0).toLowerCase() + pascal.slice(1);
 }
