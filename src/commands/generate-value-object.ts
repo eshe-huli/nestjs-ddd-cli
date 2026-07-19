@@ -6,6 +6,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import chalk from 'chalk';
+import { toKebabCase, toPascalCase } from '../utils/naming.utils';
 
 export interface ValueObjectOptions {
   path?: string;
@@ -37,7 +38,7 @@ export interface ValidationRule {
 export async function generateValueObject(
   name: string,
   basePath: string,
-  options: ValueObjectOptions = {}
+  options: ValueObjectOptions = {},
 ): Promise<void> {
   console.log(chalk.bold.blue('\n💎 Generating Value Object\n'));
 
@@ -664,24 +665,13 @@ export class Slug extends ValueObject<SlugProps> {
 `;
 }
 
-// Helper functions
-function toKebabCase(str: string): string {
-  return str
-    .replace(/([a-z])([A-Z])/g, '$1-$2')
-    .replace(/[\\s_]+/g, '-')
-    .toLowerCase();
-}
-
-function toPascalCase(str: string): string {
-  return str
-    .replace(/[-_\\s]+(.)?/g, (_, c) => c ? c.toUpperCase() : '')
-    .replace(/^(.)/, c => c.toUpperCase());
-}
-
 /**
  * Generate common value objects for a module
  */
-export async function setupValueObjects(basePath: string, options: ValueObjectOptions = {}): Promise<void> {
+export async function setupValueObjects(
+  basePath: string,
+  options: ValueObjectOptions = {},
+): Promise<void> {
   console.log(chalk.bold.blue('\n💎 Setting up Value Objects Infrastructure\n'));
 
   const sharedPath = path.join(basePath, 'src/shared/domain');
