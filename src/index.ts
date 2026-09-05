@@ -312,6 +312,11 @@ program
     'Apply a selectable common pattern recipe; run without a recipe name to list available recipes',
   )
   .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .option(
+    '--dry-run',
+    'Preview supported recipe output without writes or dependency installation',
+    false,
+  )
   .option('--install-deps', 'Install required dependencies', false)
   .action(async (recipeName, options) => {
     try {
