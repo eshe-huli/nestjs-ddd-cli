@@ -1,4 +1,4 @@
-import * as path from 'path';
+import * as path from 'node:path';
 import chalk from 'chalk';
 import { ensureDir, writeFile } from '../utils/file.utils';
 import { installDependencies } from '../utils/dependency.utils';
@@ -14,6 +14,7 @@ import { applyEventSourcingRecipe } from './recipes/event-sourcing.recipe';
 import { applyJoiEnvRecipe } from './recipes/joi-env.recipe';
 import { applyBusinessReferenceIdentifiersRecipe } from './recipes/business-reference-identifiers.recipe';
 import { applyEventBackboneRecipe } from './recipes/event-backbone.recipe';
+import { applyKafkaConsumerRecipe } from './recipes/kafka-consumer.recipe';
 import { applyPlatformServiceRuntimeRecipe } from './recipes/platform-service-runtime.recipe';
 import { applyPlatformContextRecipe } from './recipes/platform-context.recipe';
 import { applyPlatformServiceAccessRequestContextRecipe } from './recipes/platform-service-access-request-context.recipe';
@@ -24,6 +25,7 @@ import { applyOidcDashboardRecipe } from './recipes/oidc-dashboard.recipe';
 export interface RecipeOptions {
   path?: string;
   installDeps?: boolean;
+  dryRun?: boolean;
 }
 
 const AVAILABLE_RECIPES = {
@@ -174,6 +176,13 @@ const AVAILABLE_RECIPES = {
     dependencies: ['@nestjs/cqrs'],
     devDependencies: [],
   },
+  'kafka-consumer': {
+    name: 'Kafka Transactional Consumer',
+    description:
+      'Debezium-compatible Kafka consumer with atomic PostgreSQL receipts and handler hooks',
+    dependencies: ['kafkajs', 'typeorm', '@nestjs/common'],
+    devDependencies: [],
+  },
   'event-backbone': {
     name: 'Event Backbone',
     description:
@@ -246,7 +255,7 @@ const AVAILABLE_RECIPES = {
 export async function applyRecipe(recipeName: string, options: RecipeOptions) {
   const recipe = AVAILABLE_RECIPES[recipeName as keyof typeof AVAILABLE_RECIPES];
 
-  if (!recipe) {
+  if (!Object.keys(AVAILABLE_RECIPES).includes(recipeName)) {
     console.log(chalk.red(`Unknown recipe: ${recipeName}`));
     console.log(chalk.yellow('\nAvailable recipes:'));
     Object.entries(AVAILABLE_RECIPES).forEach(([key, value]) => {
@@ -259,6 +268,13 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
 
   const basePath = options.path || process.cwd();
 
+  if (options.dryRun) {
+    if (recipeName !== 'kafka-consumer')
+      throw new Error('Dry-run is currently supported only by kafka-consumer');
+    await applyKafkaConsumerRecipe(basePath, true);
+    return;
+  }
+
   // Install dependencies if requested
   if (options.installDeps && recipe.dependencies.length > 0) {
     console.log(chalk.cyan('  Installing dependencies...'));
@@ -268,99 +284,40 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
     }
   }
 
-  // Apply the specific recipe
-  switch (recipeName) {
-    case 'auth-jwt':
-      await applyAuthJwtRecipe(basePath);
-      break;
-    case 'pagination':
-      await applyPaginationRecipe(basePath);
-      break;
-    case 'soft-delete':
-      await applySoftDeleteRecipe(basePath);
-      break;
-    case 'audit-log':
-      await applyAuditLogRecipe(basePath);
-      break;
-    case 'caching':
-      await applyCachingRecipe(basePath);
-      break;
-    case 'file-upload':
-      await applyFileUploadRecipe(basePath);
-      break;
-    case 'notifications':
-      await applyNotificationsRecipe(basePath);
-      break;
-    case 'webhooks':
-      await applyWebhooksRecipe(basePath);
-      break;
-    case 'filtering':
-      await applyFilteringRecipe(basePath);
-      break;
-    case 'service-foundation':
-      await applyServiceFoundationRecipe(basePath);
-      break;
-    case 'rate-limiting':
-      await applyRateLimitingRecipe(basePath);
-      break;
-    case 'health':
-      await applyHealthRecipe(basePath);
-      break;
-    case 'api-versioning':
-      await applyApiVersioningRecipe(basePath);
-      break;
-    case 'test-factories':
-      await applyTestFactoriesRecipe(basePath);
-      break;
-    case 'middleware':
-      await applyMiddlewareRecipe(basePath);
-      break;
-    case 'websocket':
-      await applyWebSocketRecipe(basePath);
-      break;
-    case 'multi-tenancy':
-      await applyMultiTenancyRecipe(basePath);
-      break;
-    case 'oauth2':
-      await applyOAuth2Recipe(basePath);
-      break;
-    case 'message-queue':
-      await applyMessageQueueRecipe(basePath);
-      break;
-    case 'elasticsearch':
-      await applyElasticsearchRecipe(basePath);
-      break;
-    case 'event-sourcing':
-      await applyEventSourcingRecipe(basePath);
-      break;
-    case 'event-backbone':
-      await applyEventBackboneRecipe(basePath);
-      break;
-    case 'business-reference-identifiers':
-      await applyBusinessReferenceIdentifiersRecipe(basePath);
-      break;
-    case 'joi-env':
-      await applyJoiEnvRecipe(basePath);
-      break;
-    case 'platform-service-runtime':
-      await applyPlatformServiceRuntimeRecipe(basePath);
-      break;
-    case 'platform-context':
-      await applyPlatformContextRecipe(basePath);
-      break;
-    case 'platform-service-access-request-context':
-      await applyPlatformServiceAccessRequestContextRecipe(basePath);
-      break;
-    case 'platform-parc-authorization':
-      await applyPlatformParcAuthorizationRecipe(basePath);
-      break;
-    case 'banklink-connector-contract':
-      await applyBanklinkConnectorContractRecipe(basePath);
-      break;
-    case 'oidc-dashboard':
-      await applyOidcDashboardRecipe(basePath);
-      break;
-  }
+  const handlers = {
+    'auth-jwt': applyAuthJwtRecipe,
+    pagination: applyPaginationRecipe,
+    'soft-delete': applySoftDeleteRecipe,
+    'audit-log': applyAuditLogRecipe,
+    caching: applyCachingRecipe,
+    'file-upload': applyFileUploadRecipe,
+    notifications: applyNotificationsRecipe,
+    webhooks: applyWebhooksRecipe,
+    filtering: applyFilteringRecipe,
+    'service-foundation': applyServiceFoundationRecipe,
+    'rate-limiting': applyRateLimitingRecipe,
+    health: applyHealthRecipe,
+    'api-versioning': applyApiVersioningRecipe,
+    'test-factories': applyTestFactoriesRecipe,
+    middleware: applyMiddlewareRecipe,
+    websocket: applyWebSocketRecipe,
+    'multi-tenancy': applyMultiTenancyRecipe,
+    oauth2: applyOAuth2Recipe,
+    'message-queue': applyMessageQueueRecipe,
+    elasticsearch: applyElasticsearchRecipe,
+    'event-sourcing': applyEventSourcingRecipe,
+    'event-backbone': applyEventBackboneRecipe,
+    'kafka-consumer': applyKafkaConsumerRecipe,
+    'business-reference-identifiers': applyBusinessReferenceIdentifiersRecipe,
+    'joi-env': applyJoiEnvRecipe,
+    'platform-service-runtime': applyPlatformServiceRuntimeRecipe,
+    'platform-context': applyPlatformContextRecipe,
+    'platform-service-access-request-context': applyPlatformServiceAccessRequestContextRecipe,
+    'platform-parc-authorization': applyPlatformParcAuthorizationRecipe,
+    'banklink-connector-contract': applyBanklinkConnectorContractRecipe,
+    'oidc-dashboard': applyOidcDashboardRecipe,
+  } satisfies Record<keyof typeof AVAILABLE_RECIPES, (target: string) => Promise<void>>;
+  await handlers[recipeName as keyof typeof handlers](basePath);
 
   console.log(chalk.green(`\n✅ Recipe '${recipe.name}' applied successfully!`));
 

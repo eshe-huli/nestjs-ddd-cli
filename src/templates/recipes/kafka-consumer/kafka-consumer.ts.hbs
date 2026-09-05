@@ -1,0 +1,135 @@
+import { createHash } from 'node:crypto';
+import {
+  DynamicModule, Inject, Injectable, Module, ModuleMetadata,
+  OnApplicationBootstrap, OnApplicationShutdown, Type,
+} from '@nestjs/common';
+import { Consumer, EachMessagePayload, Kafka, KafkaConfig } from 'kafkajs';
+import { DataSource, EntityManager } from 'typeorm';
+
+export const KAFKA_CONSUMER_OPTIONS = Symbol('KAFKA_CONSUMER_OPTIONS');
+export const KAFKA_TRANSACTIONAL_HANDLER = Symbol('KAFKA_TRANSACTIONAL_HANDLER');
+
+export interface KafkaConsumerOptions {
+  kafka: KafkaConfig;
+  groupId: string;
+  topics: string[];
+  fromBeginning: boolean;
+}
+
+export interface KafkaTransactionalHandler {
+  /** Validate contracts/revisions; use only this transaction. External effects belong in an outbox. */
+  handle(message: EachMessagePayload, manager: EntityManager): Promise<void>;
+}
+
+@Injectable()
+export class KafkaMessageProcessor {
+  constructor(
+    private readonly dataSource: DataSource,
+    @Inject(KAFKA_CONSUMER_OPTIONS) private readonly options: KafkaConsumerOptions,
+    @Inject(KAFKA_TRANSACTIONAL_HANDLER) private readonly handler: KafkaTransactionalHandler,
+  ) {}
+
+  async process(input: EachMessagePayload): Promise<void> {
+    const { message, topic } = input;
+    const rawId = message.headers?.id;
+    const id = Array.isArray(rawId) ? undefined : rawId?.toString();
+    if (!id || !/^[A-Za-z0-9._:-]{1,200}$/.test(id)) {
+      throw new Error('Kafka event requires a single stable outbox id header');
+    }
+    if (!message.key?.length || !message.value?.length || message.value.length > 1048576) {
+      throw new Error('Kafka event requires an aggregate key and bounded non-empty payload');
+    }
+    if (!this.options.topics.includes(topic)) throw new Error('Unexpected Kafka topic');
+    const hash = createHash('sha256')
+      .update(JSON.stringify([topic, message.key.toString('base64'), message.value.toString('base64')]))
+      .digest('hex');
+    await this.dataSource.transaction(async (manager) => {
+      const inserted = await manager.query(
+        'INSERT INTO kafka_consumer_receipts (consumer_id, event_id, payload_hash) ' +
+        'VALUES ($1, $2, $3) ON CONFLICT (consumer_id, event_id) DO NOTHING RETURNING event_id',
+        [this.options.groupId, id, hash],
+      ) as Array<{ event_id: string }>;
+      if (inserted.length === 0) {
+        const existing = await manager.query(
+          'SELECT payload_hash FROM kafka_consumer_receipts WHERE consumer_id = $1 AND event_id = $2',
+          [this.options.groupId, id],
+        ) as Array<{ payload_hash: string }>;
+        if (existing.length !== 1 || existing[0]?.payload_hash !== hash) {
+          throw new Error('Kafka event identity conflict');
+        }
+        return;
+      }
+      await this.handler.handle(input, manager);
+    });
+  }
+}
+
+@Injectable()
+export class KafkaConsumerLifecycle implements OnApplicationBootstrap, OnApplicationShutdown {
+  private consumer?: Consumer;
+
+  constructor(
+    @Inject(KAFKA_CONSUMER_OPTIONS) private readonly options: KafkaConsumerOptions,
+    private readonly processor: KafkaMessageProcessor,
+  ) {}
+
+  async onApplicationBootstrap(): Promise<void> {
+    if (!/^[A-Za-z0-9._-]{1,200}$/.test(this.options.groupId) ||
+        this.options.topics.length === 0 ||
+        this.options.topics.some(topic => !/^[A-Za-z0-9._-]{1,249}$/.test(topic)) ||
+        typeof this.options.fromBeginning !== 'boolean') {
+      throw new Error('Kafka consumer requires explicit group, topics and replay policy');
+    }
+    const consumer = new Kafka(this.options.kafka).consumer({
+      groupId: this.options.groupId,
+      allowAutoTopicCreation: false,
+      retry: { retries: 5 },
+    });
+    this.consumer = consumer;
+    try {
+      await consumer.connect();
+      await consumer.subscribe({ topics: this.options.topics, fromBeginning: this.options.fromBeginning });
+      await consumer.run({
+        autoCommit: false,
+        partitionsConsumedConcurrently: 1,
+        eachMessage: async (input) => {
+          await this.processor.process(input);
+          await input.heartbeat();
+          await consumer.commitOffsets([{
+            topic: input.topic,
+            partition: input.partition,
+            offset: (BigInt(input.message.offset) + 1n).toString(),
+          }]);
+        },
+      });
+    } catch (error) {
+      await consumer.disconnect();
+      throw error;
+    }
+  }
+
+  async onApplicationShutdown(): Promise<void> {
+    await this.consumer?.stop();
+    await this.consumer?.disconnect();
+  }
+}
+
+@Module({})
+export class KafkaConsumerModule {
+  static register(
+    options: KafkaConsumerOptions,
+    handler: Type<KafkaTransactionalHandler>,
+    imports: ModuleMetadata['imports'],
+  ): DynamicModule {
+    return {
+      module: KafkaConsumerModule,
+      imports,
+      providers: [
+        { provide: KAFKA_CONSUMER_OPTIONS, useValue: options },
+        { provide: KAFKA_TRANSACTIONAL_HANDLER, useExisting: handler },
+        KafkaMessageProcessor,
+        KafkaConsumerLifecycle,
+      ],
+    };
+  }
+}
