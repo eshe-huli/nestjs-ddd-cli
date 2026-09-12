@@ -1,0 +1,78 @@
+import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
+
+export interface OidcResourceServerOptions {
+  issuer: string;
+  jwksUri: string;
+  audiences: readonly string[];
+  authorizedClients: readonly string[];
+  algorithms: readonly string[];
+  clockToleranceSeconds?: number;
+}
+export const OIDC_RESOURCE_SERVER_OPTIONS = Symbol('OIDC_RESOURCE_SERVER_OPTIONS');
+const ASYMMETRIC_ALGORITHMS = new Set([
+  'RS256', 'RS384', 'RS512', 'PS256', 'PS384', 'PS512',
+  'ES256', 'ES384', 'ES512', 'EdDSA', 'Ed25519',
+]);
+
+function httpsUrl(value: string): void {
+  const parsed = new URL(value);
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.hash) {
+    throw new Error('Explicit trusted HTTPS issuer/JWKS required');
+  }
+}
+function nonemptyList(values: readonly string[]): boolean {
+  return Array.isArray(values) && values.length > 0 && values.every(value =>
+    typeof value === 'string' && value.length > 0 && value === value.trim());
+}
+
+@Injectable()
+export class OidcAccessTokenVerifier {
+  private readonly options: OidcResourceServerOptions;
+  private readonly keys: ReturnType<typeof createRemoteJWKSet>;
+
+  constructor(@Inject(OIDC_RESOURCE_SERVER_OPTIONS) options: OidcResourceServerOptions) {
+    httpsUrl(options.issuer);
+    httpsUrl(options.jwksUri);
+    if (!nonemptyList(options.audiences) || !nonemptyList(options.authorizedClients) ||
+        !nonemptyList(options.algorithms) || options.algorithms.some(a => !ASYMMETRIC_ALGORITHMS.has(a))) {
+      throw new Error('Explicit resource audiences, authorized clients and asymmetric algorithms required');
+    }
+    const skew = options.clockToleranceSeconds ?? 0;
+    if (!Number.isFinite(skew) || skew < 0 || skew > 60) throw new Error('Clock tolerance must be 0..60 seconds');
+    // Snapshot caller-owned arrays; later mutation must not change verifier policy.
+    this.options = {
+      ...options, audiences: [...options.audiences], authorizedClients: [...options.authorizedClients],
+      algorithms: [...options.algorithms], clockToleranceSeconds: skew,
+    };
+    this.keys = createRemoteJWKSet(new URL(options.jwksUri), {
+      timeoutDuration: 5000, cooldownDuration: 30000, cacheMaxAge: 600000,
+    });
+  }
+
+  async verify(token: string): Promise<JWTPayload> {
+    try {
+      if (typeof token !== 'string' || !token.trim() || token.length > 32768) throw new Error('Malformed token');
+      const { payload } = await jwtVerify(token, this.keys, {
+        issuer: this.options.issuer, audience: [...this.options.audiences],
+        algorithms: [...this.options.algorithms],
+        requiredClaims: ['sub', 'exp', 'iat', 'azp'],
+        clockTolerance: this.options.clockToleranceSeconds,
+      });
+      const skew = this.options.clockToleranceSeconds ?? 0;
+      const now = Date.now() / 1000;
+      if (typeof payload.sub !== 'string' || !payload.sub.trim() ||
+          typeof payload.exp !== 'number' || !Number.isFinite(payload.exp) ||
+          typeof payload.iat !== 'number' || !Number.isFinite(payload.iat) ||
+          payload.iat > now + skew || payload.iat < 0 || payload.exp <= payload.iat ||
+          (payload.nbf !== undefined && (typeof payload.nbf !== 'number' || !Number.isFinite(payload.nbf))) ||
+          typeof payload.azp !== 'string' || !this.options.authorizedClients.includes(payload.azp)) {
+        throw new Error('Rejected claims');
+      }
+      return payload;
+    } catch {
+      // Never include bearer tokens, claims or upstream response bodies in errors.
+      throw new UnauthorizedException('Invalid resource access token');
+    }
+  }
+}

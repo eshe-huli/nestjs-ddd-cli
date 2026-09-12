@@ -1,0 +1,16 @@
+import { DynamicModule, Module } from '@nestjs/common';
+import { OIDC_RESOURCE_SERVER_OPTIONS, OidcAccessTokenVerifier, OidcResourceServerOptions } from './oidc-access-token-verifier';
+
+@Module({})
+export class OidcResourceServerModule {
+  static register(options: OidcResourceServerOptions): DynamicModule {
+    return {
+      module: OidcResourceServerModule,
+      providers: [
+        { provide: OIDC_RESOURCE_SERVER_OPTIONS, useValue: options },
+        OidcAccessTokenVerifier,
+      ],
+      exports: [OidcAccessTokenVerifier],
+    };
+  }
+}
