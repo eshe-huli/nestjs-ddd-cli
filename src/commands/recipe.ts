@@ -21,6 +21,7 @@ import { applyPlatformServiceAccessRequestContextRecipe } from './recipes/platfo
 import { applyPlatformParcAuthorizationRecipe } from './recipes/platform-parc-authorization.recipe';
 import { applyBanklinkConnectorContractRecipe } from './recipes/banklink-connector-contract.recipe';
 import { applyOidcDashboardRecipe } from './recipes/oidc-dashboard.recipe';
+import { applyOidcResourceServerRecipe } from './recipes/oidc-resource-server.recipe';
 
 export interface RecipeOptions {
   path?: string;
@@ -29,6 +30,13 @@ export interface RecipeOptions {
 }
 
 const AVAILABLE_RECIPES = {
+  'oidc-resource-server': {
+    name: 'Dependency-free OIDC resource-server JWT verification',
+    description:
+      'Node crypto RS256 verification with explicit JWKS, audience and authorized-client policy',
+    dependencies: [],
+    devDependencies: [],
+  },
   'auth-jwt': {
     name: 'JWT Authentication',
     description: 'JWT-based authentication with guards and decorators',
@@ -269,6 +277,10 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
   const basePath = options.path || process.cwd();
 
   if (options.dryRun) {
+    if (recipeName === 'oidc-resource-server') {
+      await applyOidcResourceServerRecipe(basePath, true);
+      return;
+    }
     if (recipeName !== 'kafka-consumer')
       throw new Error('Dry-run is currently supported only by kafka-consumer');
     await applyKafkaConsumerRecipe(basePath, true);
@@ -316,6 +328,7 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
     'platform-parc-authorization': applyPlatformParcAuthorizationRecipe,
     'banklink-connector-contract': applyBanklinkConnectorContractRecipe,
     'oidc-dashboard': applyOidcDashboardRecipe,
+    'oidc-resource-server': applyOidcResourceServerRecipe,
   } satisfies Record<keyof typeof AVAILABLE_RECIPES, (target: string) => Promise<void>>;
   await handlers[recipeName as keyof typeof handlers](basePath);
 

@@ -1,0 +1,184 @@
+import {
+  constants,
+  generateKeyPairSync,
+  KeyObject,
+  sign as signPayload,
+} from 'node:crypto';
+import {
+  OidcAccessTokenVerifier,
+  OidcResourceServerOptions,
+} from './oidc-access-token-verifier';
+
+function encode(value: unknown): string {
+  return Buffer.from(JSON.stringify(value)).toString('base64url');
+}
+
+function signedToken(
+  claims: Record<string, unknown>,
+  privateKey: KeyObject,
+  header: Record<string, unknown> = { alg: 'RS256', kid: 'trusted' },
+): string {
+  const encodedHeader = encode(header);
+  const encodedPayload = encode(claims);
+  const signingInput = `${encodedHeader}.${encodedPayload}`;
+  const signature = signPayload('RSA-SHA256', Buffer.from(signingInput, 'ascii'), {
+    key: privateKey,
+    padding: constants.RSA_PKCS1_PADDING,
+  });
+  return `${signingInput}.${signature.toString('base64url')}`;
+}
+
+describe('OidcAccessTokenVerifier', () => {
+  const trusted = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const wrong = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const rotated = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const trustedJwk = {
+    ...trusted.publicKey.export({ format: 'jwk' }),
+    kid: 'trusted',
+    alg: 'RS256',
+    use: 'sig',
+  };
+  const rotatedJwk = {
+    ...rotated.publicKey.export({ format: 'jwk' }),
+    kid: 'rotated',
+    alg: 'RS256',
+    use: 'sig',
+  };
+  const options: OidcResourceServerOptions = {
+    issuer: 'https://issuer.example',
+    jwksUri: 'https://issuer.example/keys',
+    audiences: ['resource-project'],
+    authorizedClients: ['ops-client'],
+    clockToleranceSeconds: 0,
+    jwksRefreshCooldownSeconds: 1,
+  };
+  const originalFetch = globalThis.fetch;
+  let publishedKeys: unknown[];
+  let requests: number;
+
+  beforeEach(() => {
+    publishedKeys = [trustedJwk];
+    requests = 0;
+    globalThis.fetch = async (input) => {
+      expect(String(input)).toBe(options.jwksUri);
+      requests += 1;
+      return new Response(JSON.stringify({ keys: publishedKeys }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+  });
+
+  afterAll(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function claims(patch: Record<string, unknown> = {}): Record<string, unknown> {
+    const now = Math.floor(Date.now() / 1000);
+    return {
+      sub: 'synthetic-human',
+      iss: options.issuer,
+      aud: ['resource-project'],
+      azp: 'ops-client',
+      iat: now,
+      exp: now + 300,
+      nbf: now - 1,
+      ...patch,
+    };
+  }
+
+  it('verifies RS256 and reuses the cached kid', async () => {
+    const verifier = new OidcAccessTokenVerifier(options);
+    await expect(verifier.verify(signedToken(claims(), trusted.privateKey))).resolves.toMatchObject({
+      sub: 'synthetic-human',
+    });
+    await expect(verifier.verify(signedToken(claims(), trusted.privateKey))).resolves.toBeDefined();
+    expect(requests).toBe(1);
+  });
+
+  it.each([
+    ['algorithm', claims(), { alg: 'HS256', kid: 'trusted' }],
+    ['issuer', claims({ iss: 'https://wrong.example' }), undefined],
+    ['audience', claims({ aud: 'browser-client' }), undefined],
+    ['authorized client', claims({ azp: 'sibling-client' }), undefined],
+    ['subject', claims({ sub: '   ' }), undefined],
+    ['expired timestamp', claims({ exp: 1 }), undefined],
+    ['future issued-at timestamp', claims({ iat: Date.now() / 1000 + 90 }), undefined],
+    ['future not-before timestamp', claims({ nbf: Date.now() / 1000 + 90 }), undefined],
+    // A typical ID token is audience-bound to the browser client, not this API resource.
+    ['ID-token substitute', claims({ aud: 'ops-client', nonce: 'browser-session' }), undefined],
+  ])('rejects the wrong %s', async (_case, tokenClaims, header) => {
+    const verifier = new OidcAccessTokenVerifier(options);
+    await expect(
+      verifier.verify(signedToken(tokenClaims, trusted.privateKey, header)),
+    ).rejects.toThrow('Invalid resource access token');
+  });
+
+  it('rejects a wrong signature without leaking token material', async () => {
+    const token = signedToken(claims(), wrong.privateKey);
+    const verifier = new OidcAccessTokenVerifier(options);
+    let message = '';
+    try {
+      await verifier.verify(token);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toBe('Invalid resource access token');
+    expect(message).not.toContain(token);
+    expect(message).not.toContain('synthetic-human');
+  });
+
+  it.each(['sub', 'exp', 'iat', 'azp', 'iss', 'aud'])('rejects a missing %s claim', async (claim) => {
+    const payload = claims();
+    delete payload[claim];
+    const verifier = new OidcAccessTokenVerifier(options);
+    await expect(verifier.verify(signedToken(payload, trusted.privateKey))).rejects.toThrow(
+      'Invalid resource access token',
+    );
+  });
+
+  it('refreshes by kid when the issuer rotates keys', async () => {
+    const verifier = new OidcAccessTokenVerifier(options);
+    await verifier.verify(signedToken(claims(), trusted.privateKey));
+    publishedKeys = [rotatedJwk];
+    const currentTime = Date.now();
+    const now = jest.spyOn(Date, 'now').mockReturnValue(currentTime + 1100);
+    try {
+      await expect(
+        verifier.verify(
+          signedToken(claims(), rotated.privateKey, { alg: 'RS256', kid: 'rotated' }),
+        ),
+      ).resolves.toBeDefined();
+    } finally {
+      now.mockRestore();
+    }
+    expect(requests).toBe(2);
+  });
+
+  it('rejects unsafe configuration before any network request', () => {
+    expect(() =>
+      new OidcAccessTokenVerifier({ ...options, issuer: 'http://issuer.example' }),
+    ).toThrow();
+    expect(() => new OidcAccessTokenVerifier({ ...options, audiences: [] })).toThrow();
+    expect(() => new OidcAccessTokenVerifier({ ...options, authorizedClients: [] })).toThrow();
+    expect(() =>
+      new OidcAccessTokenVerifier({ ...options, clockToleranceSeconds: 61 }),
+    ).toThrow();
+    expect(() =>
+      new OidcAccessTokenVerifier({ ...options, jwksRefreshCooldownSeconds: 0 }),
+    ).toThrow();
+    expect(requests).toBe(0);
+  });
+
+  it('fails closed and rate-limits repeated JWKS outage retries', async () => {
+    globalThis.fetch = async () => {
+      requests += 1;
+      throw new Error('offline with upstream details');
+    };
+    const verifier = new OidcAccessTokenVerifier(options);
+    const token = signedToken(claims(), trusted.privateKey);
+    await expect(verifier.verify(token)).rejects.toThrow('Invalid resource access token');
+    await expect(verifier.verify(token)).rejects.toThrow('Invalid resource access token');
+    expect(requests).toBe(1);
+  });
+});

@@ -1,0 +1,74 @@
+# OIDC resource-server JWT verification
+
+Generate with:
+
+```bash
+ddd recipe oidc-resource-server --path <service> --dry-run
+ddd recipe oidc-resource-server --path <service>
+```
+
+Dry-run writes nothing. Conflicting files abort before writes; identical reruns
+leave files alone. No module is auto-wired and no dependency is added: the
+verifier uses NestJS plus the Node/Bun `node:crypto` and Fetch APIs already
+available to the service.
+
+## Runtime registration
+
+Prefer `registerAsync` so deployment configuration passes through the owning
+service's validated configuration boundary:
+
+```ts
+OidcResourceServerModule.registerAsync({
+  imports: [ConfigModule],
+  inject: [ConfigService],
+  useFactory: (config: ConfigService): OidcResourceServerOptions => ({
+    issuer: config.getOrThrow<string>('OIDC_ISSUER'),
+    jwksUri: config.getOrThrow<string>('OIDC_JWKS_URI'),
+    audiences: [config.getOrThrow<string>('OIDC_RESOURCE_AUDIENCE')],
+    authorizedClients: [config.getOrThrow<string>('OIDC_AUTHORIZED_CLIENT_ID')],
+    clockToleranceSeconds: 5,
+  }),
+})
+```
+
+Static `register(options)` remains available for already-validated in-memory
+configuration and focused tests. The barrel exports:
+
+- `OidcResourceServerModule`
+- `OidcResourceServerModuleAsyncOptions`
+- `OIDC_RESOURCE_SERVER_OPTIONS`
+- `OidcResourceServerOptions`
+- `OidcAccessTokenVerifier`
+- `VerifiedOidcAccessToken`
+
+Inject `OidcAccessTokenVerifier` and call `verify(originalAccessToken)`.
+
+All URLs must be explicitly trusted HTTPS URLs from deployment configuration,
+never request data. Audiences are resource/API audiences, not automatically
+browser client IDs. Client allowlisting reads the issuer's `azp` claim.
+
+The verifier deliberately supports RS256 only. It validates the signature,
+exact issuer, resource audience, authorized client, nonempty subject, finite
+required `exp`/`iat`, and optional `nbf`. Clock skew is bounded to 0..60 seconds.
+Tokens, individual segments, JWKS bodies, JWKS key counts, RSA modulus sizes,
+timeouts, cache lifetime, and unknown-key refresh frequency are bounded. Key
+selection is by `kid`; rotation refreshes the JWKS after a controlled cooldown.
+Fetch, parse, timeout, redirect, key-import, key-selection, and signature errors
+all fail closed. Authentication errors never include bearer tokens, claims, keys,
+or upstream response bodies.
+
+The generated `oidc-access-token-verifier.spec.ts` uses real RSA keys and should
+remain in the consuming repository. It proves valid verification plus rejection
+of wrong signatures, algorithms, issuers, audiences, clients, subjects, times,
+missing required claims, a typical ID-token substitute, and rotated keys.
+
+This verifies a JWT, not universal proof that it is an access token. Issuers can
+issue ID and access tokens with overlapping signed claims. The consumer MUST
+enforce its selected provider access-token profile and current actor validation
+before granting access. A valid ID token is never an API credential. Do not map
+returned roles/groups to product permissions implicitly. HUMAN versus machine,
+current organization, canonical identity binding, staff membership, revocation,
+and transactional authorization belong to the consuming service.
+
+Runtime baseline: Node 18+ or Bun with standards-compatible `fetch`, Web Streams,
+and `node:crypto` JWK import. No package-manager or lockfile migration is required.
