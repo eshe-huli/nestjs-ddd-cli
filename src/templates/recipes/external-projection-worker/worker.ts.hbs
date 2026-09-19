@@ -174,7 +174,7 @@ export class ExternalProjectionWorker implements OnApplicationBootstrap, OnAppli
           retryAfterMs: error.retryAfterMs,
         };
       } else {
-        result = { disposition: 'retry_wait', errorCode: 'UNEXPECTED_EXECUTION_FAILURE' };
+        result = { disposition: 'uncertain', errorCode: 'UNEXPECTED_EXECUTION_FAILURE' };
       }
     }
 

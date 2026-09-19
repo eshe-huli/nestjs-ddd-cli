@@ -70,12 +70,16 @@ module.exports = { DataSource };
   const storeModule = await import(
     pathToFileURL(path.join(generated, 'external-projection-store.ts')).href
   );
+  const workerModule = await import(
+    pathToFileURL(path.join(generated, 'external-projection-worker.ts')).href
+  );
   const migration = new migrationModule.CreateExternalProjectionOperations1790000000000();
   const dataSource = new SqlDataSource(sql);
   await migration.up(dataSource);
 
   const enqueuer = new enqueuerModule.ExternalProjectionEnqueuer();
   const enqueue = (input) => dataSource.transaction((manager) => enqueuer.enqueue(manager, input));
+  const store = new storeModule.ExternalProjectionStore(dataSource);
   const intent = {
     projectionName: 'idempotency-v1',
     targetKey: 'subject-1',
@@ -93,6 +97,9 @@ module.exports = { DataSource };
   ]);
   assert.equal(first.operation.id, replay.operation.id);
   assert.equal(Number(first.created) + Number(replay.created), 1);
+  assert.equal(first.operation.payload.displayName, 'Ada');
+  assert.equal(first.operation.payload.details.active, true);
+  assert.equal(first.operation.payload.details.country, 'CI');
   await assert.rejects(
     enqueue({ ...intent, payload: { displayName: 'Grace' } }),
     /idempotency key was reused/,
@@ -115,7 +122,111 @@ module.exports = { DataSource };
   );
   assert.equal(Number(rolledBack[0]?.count), 0);
 
-  const store = new storeModule.ExternalProjectionStore(dataSource);
+  const firstRelease = deferred();
+  const firstEnqueued = deferred();
+  const firstTransaction = dataSource
+    .transaction(async (manager) => {
+      await manager.query(`SELECT set_config('application_name', $1, true)`, [
+        'external-projection-order-a',
+      ]);
+      const result = await enqueuer.enqueue(manager, {
+        ...intent,
+        projectionName: 'transaction-order-v1',
+        targetKey: 'serialized-target',
+        idempotencyKey: 'transaction-order-command-1',
+        payload: { sequence: 1 },
+      });
+      firstEnqueued.resolve(result);
+      await firstRelease.promise;
+      return result;
+    })
+    .catch((error) => {
+      firstEnqueued.reject(error);
+      throw error;
+    });
+  const firstUncommitted = await firstEnqueued.promise;
+  const secondStarted = deferred();
+  const secondTransaction = dataSource
+    .transaction(async (manager) => {
+      await manager.query(`SELECT set_config('application_name', $1, true)`, [
+        'external-projection-order-b',
+      ]);
+      secondStarted.resolve();
+      const result = await enqueuer.enqueue(manager, {
+        ...intent,
+        projectionName: 'transaction-order-v1',
+        targetKey: 'serialized-target',
+        idempotencyKey: 'transaction-order-command-2',
+        payload: { sequence: 2 },
+      });
+      return result;
+    })
+    .catch((error) => {
+      secondStarted.reject(error);
+      throw error;
+    });
+  try {
+    await secondStarted.promise;
+    await waitForDatabaseLock(sql, 'external-projection-order-b');
+    assert.equal(
+      await store.claimNext('transaction-order-v1', 'transaction-order-worker-early', 30, 5),
+      null,
+    );
+  } finally {
+    firstRelease.resolve();
+  }
+  const [firstCommitted, secondCommitted] = await withTimeout(
+    Promise.all([firstTransaction, secondTransaction]),
+    5_000,
+    'same-target enqueue transactions deadlocked',
+  );
+  assert.equal(firstCommitted.operation.id, firstUncommitted.operation.id);
+  assert.notEqual(firstCommitted.operation.id, secondCommitted.operation.id);
+  const transactionOrderedFirst = await store.claimNext(
+    'transaction-order-v1',
+    'transaction-order-worker-a',
+    30,
+    5,
+  );
+  assert.ok(transactionOrderedFirst);
+  assert.equal(transactionOrderedFirst.id, firstCommitted.operation.id);
+  assert.equal(
+    await store.markApplied(transactionOrderedFirst, 'transaction-order-result-1'),
+    true,
+  );
+  const transactionOrderedSecond = await store.claimNext(
+    'transaction-order-v1',
+    'transaction-order-worker-b',
+    30,
+    5,
+  );
+  assert.ok(transactionOrderedSecond);
+  assert.equal(transactionOrderedSecond.id, secondCommitted.operation.id);
+  assert.equal(
+    await store.markApplied(transactionOrderedSecond, 'transaction-order-result-2'),
+    true,
+  );
+
+  const exponentPayload = Array.from({ length: 2_000 }, () => 1e308);
+  const exponentOperation = await enqueue({
+    ...intent,
+    projectionName: 'numeric-expansion-v1',
+    targetKey: 'numeric-expansion-target',
+    idempotencyKey: 'numeric-expansion-command',
+    payload: exponentPayload,
+  });
+  const exponentStored = await sql.unsafe(
+    `SELECT octet_length(payload::text)::int AS rendered_bytes, status
+     FROM external_projection_operations
+     WHERE id = $1`,
+    [exponentOperation.operation.id],
+  );
+  assert.ok(
+    Number(exponentStored[0]?.rendered_bytes) > 524_288,
+    `expected PostgreSQL exponent expansion beyond 512 KiB, received ${exponentStored[0]?.rendered_bytes}`,
+  );
+  assert.equal(exponentStored[0]?.status, 'pending');
+
   const idempotencyClaim = await store.claimNext('idempotency-v1', 'worker-idempotency', 30, 5);
   assert.ok(idempotencyClaim);
   assert.equal(idempotencyClaim.claimReason, 'fresh');
@@ -220,6 +331,97 @@ module.exports = { DataSource };
   assert.equal(uncertainRecovery.reconciliationRequired, true);
   assert.equal(await store.markApplied(uncertainRecovery, 'uncertain-reconciled'), true);
 
+  let timeoutExecuteCalls = 0;
+  let timeoutReconcileCalls = 0;
+  let timeoutExternalEffects = 0;
+  await enqueue({
+    ...intent,
+    projectionName: 'effect-timeout-v1',
+    targetKey: 'effect-timeout-target',
+    idempotencyKey: 'effect-timeout-command',
+  });
+  const timeoutWorker = new workerModule.ExternalProjectionWorker(
+    store,
+    {
+      async execute() {
+        timeoutExecuteCalls += 1;
+        timeoutExternalEffects += 1;
+        throw new Error('timeout after external effect');
+      },
+      async reconcile(operation) {
+        timeoutReconcileCalls += 1;
+        assert.equal(operation.claimReason, 'uncertain_recovery');
+        assert.equal(timeoutExternalEffects, 1);
+        return { disposition: 'applied', resultReference: 'effect-timeout-readback' };
+      },
+    },
+    workerOptions('effect-timeout-v1'),
+  );
+  assert.equal(await timeoutWorker.runOnce(), 1);
+  const timeoutUncertain = await projectionState(sql, 'effect-timeout-v1');
+  assert.deepEqual(timeoutUncertain, {
+    attempt_count: 1,
+    last_error_code: 'UNEXPECTED_EXECUTION_FAILURE',
+    status: 'uncertain',
+  });
+  await makeProjectionReady(sql, 'effect-timeout-v1');
+  assert.equal(await timeoutWorker.runOnce(), 1);
+  assert.equal(timeoutExecuteCalls, 1);
+  assert.equal(timeoutReconcileCalls, 1);
+  assert.equal(timeoutExternalEffects, 1);
+  assert.equal((await projectionState(sql, 'effect-timeout-v1')).status, 'applied');
+  await timeoutWorker.onApplicationShutdown();
+
+  let finalRenewalExecuteCalls = 0;
+  let finalRenewalReconcileCalls = 0;
+  let throwFinalRenewal = true;
+  await enqueue({
+    ...intent,
+    projectionName: 'final-renewal-v1',
+    targetKey: 'final-renewal-target',
+    idempotencyKey: 'final-renewal-command',
+  });
+  const finalRenewalStore = {
+    claimNext: (...arguments_) => store.claimNext(...arguments_),
+    async renewLease(...arguments_) {
+      if (throwFinalRenewal) {
+        throwFinalRenewal = false;
+        throw new Error('final renewal transport failure');
+      }
+      return store.renewLease(...arguments_);
+    },
+    markApplied: (...arguments_) => store.markApplied(...arguments_),
+    markFailure: (...arguments_) => store.markFailure(...arguments_),
+  };
+  const finalRenewalWorker = new workerModule.ExternalProjectionWorker(
+    finalRenewalStore,
+    {
+      async execute() {
+        finalRenewalExecuteCalls += 1;
+        return { disposition: 'applied', resultReference: 'final-renewal-effect' };
+      },
+      async reconcile(operation) {
+        finalRenewalReconcileCalls += 1;
+        assert.equal(operation.claimReason, 'uncertain_recovery');
+        return { disposition: 'applied', resultReference: 'final-renewal-readback' };
+      },
+    },
+    workerOptions('final-renewal-v1'),
+  );
+  assert.equal(await finalRenewalWorker.runOnce(), 1);
+  const finalRenewalUncertain = await projectionState(sql, 'final-renewal-v1');
+  assert.deepEqual(finalRenewalUncertain, {
+    attempt_count: 1,
+    last_error_code: 'UNEXPECTED_EXECUTION_FAILURE',
+    status: 'uncertain',
+  });
+  await makeProjectionReady(sql, 'final-renewal-v1');
+  assert.equal(await finalRenewalWorker.runOnce(), 1);
+  assert.equal(finalRenewalExecuteCalls, 1);
+  assert.equal(finalRenewalReconcileCalls, 1);
+  assert.equal((await projectionState(sql, 'final-renewal-v1')).status, 'applied');
+  await finalRenewalWorker.onApplicationShutdown();
+
   const crashFirst = await enqueue({
     ...intent,
     projectionName: 'crash-limit-v1',
@@ -323,12 +525,85 @@ module.exports = { DataSource };
 
   await migration.down(dataSource);
   const relation = await sql.unsafe(
-    `SELECT to_regclass('public.external_projection_operations') AS relation`,
+    `SELECT to_regclass('public.external_projection_operations') AS operations,
+            to_regclass('public.external_projection_target_heads') AS target_heads`,
   );
-  assert.equal(relation[0]?.relation, null);
+  assert.deepEqual(relation[0], { operations: null, target_heads: null });
   console.log('external projection disposable PostgreSQL proof passed');
 } finally {
   await sql.close();
   resetConfigCache();
   await rm(fixture, { recursive: true, force: true });
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
+async function waitForDatabaseLock(client, applicationName) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const rows = await client.unsafe(
+      `SELECT wait_event_type
+       FROM pg_stat_activity
+       WHERE application_name = $1 AND state = 'active'`,
+      [applicationName],
+    );
+    if (rows.some(({ wait_event_type: waitEventType }) => waitEventType === 'Lock')) return;
+    await Bun.sleep(20);
+  }
+  throw new Error(`${applicationName} did not wait on the target serialization lock`);
+}
+
+async function withTimeout(promise, milliseconds, message) {
+  let timeout;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), milliseconds);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function workerOptions(projectionName) {
+  return {
+    projectionName,
+    enabled: false,
+    pollIntervalMs: 1_000,
+    batchSize: 1,
+    leaseSeconds: 30,
+    maxAttempts: 5,
+    retryBaseMs: 100,
+    retryMaxMs: 5_000,
+  };
+}
+
+async function makeProjectionReady(client, projectionName) {
+  await client.unsafe(
+    `UPDATE external_projection_operations
+     SET next_attempt_at = now() - interval '1 second'
+     WHERE projection_name = $1 AND status = 'uncertain'`,
+    [projectionName],
+  );
+}
+
+async function projectionState(client, projectionName) {
+  const rows = await client.unsafe(
+    `SELECT attempt_count::int, last_error_code, status
+     FROM external_projection_operations
+     WHERE projection_name = $1`,
+    [projectionName],
+  );
+  assert.equal(rows.length, 1);
+  return rows[0];
 }

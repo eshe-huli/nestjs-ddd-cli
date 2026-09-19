@@ -82,6 +82,20 @@ target, operation and payload returns the stored operation; reusing it for
 different content fails closed. Never place credentials, tokens, clinical
 documents, or other secrets in projection payloads or error codes.
 
+Enqueue takes an exact `(projection_name, target_key)` row lock through the
+durable target-head table before allocating `enqueue_sequence`. This prevents a
+later transaction from committing a visible same-target operation while an
+earlier enqueue is still uncommitted. If one owning transaction enqueues several
+targets, call `enqueue` in stable projection-name/target-key order so independent
+transactions cannot create a lock-order cycle. Direct inserts bypass this
+contract and are unsupported.
+
+Canonical application JSON remains limited to 256 KiB and 10,000 nodes. The
+database allows up to 4 MiB for `jsonb::text` because PostgreSQL expands valid
+JavaScript exponent notation (for example `1e+308`) when rendering `jsonb`.
+The larger database envelope is representation headroom, not a larger public
+payload limit.
+
 ## Lifecycle and external effects
 
 - `pending`: committed intent awaiting a worker.
@@ -96,10 +110,11 @@ LOCKED`; renewal and completion require the current owner, token and an
   reference.
 
 Each worker is bound to exactly one configured `projectionName`; it cannot
-claim another handler's rows. Claims are serialized by `(projection_name,
-target_key)` in database-assigned `enqueue_sequence` order: a later operation
-cannot overtake any earlier operation that has not reached `applied`. A `blocked` operation
-deliberately remains an ordering barrier until an owning operator resolves it.
+claim another handler's rows. Transactional target-head locking serializes
+sequence allocation, then claims enforce `(projection_name, target_key)`
+`enqueue_sequence` order: a later operation cannot overtake any earlier
+operation that has not reached `applied`. A `blocked` operation deliberately
+remains an ordering barrier until an owning operator resolves it.
 Attempts exhausted by repeated lease expiry are changed to `blocked` before
 another handler call.
 
@@ -110,6 +125,11 @@ when one exists. Reconciliation must read the external system with stable
 identifiers before deciding whether any write is still required. The worker
 never routes recovery claims through `execute`; a retryable reconciliation
 failure remains `uncertain` so the following attempt also enters `reconcile`.
+An unclassified handler exception is also `uncertain`, because it may have been
+raised after the external system accepted a write. The same rule applies when
+the handler returns but the final lease-renewal call throws: the operation must
+be read back through `reconcile` and must never be dispatched to `execute`
+again.
 
 This is at-least-once orchestration, not exactly-once external delivery. The
 handler must pass the durable operation id or another stable idempotency key to
@@ -126,10 +146,12 @@ string of at most 500 characters.
 ## Acceptance before enablement
 
 Prove against disposable PostgreSQL: migration up/down, same-key replay,
-changed-payload conflict, concurrent distinct claims, expired-lease reclaim,
-same-target ordering, cross-projection routing, recovery dispatch, stale-owner
-completion rejection, renewal, every disposition, crash-driven max-attempt
-blocking, and graceful shutdown. Also prove the concrete provider adapter's
+changed-payload conflict, an uncommitted-earlier/concurrent-later same-target
+enqueue schedule, expanded exponent-number payloads, concurrent distinct claims,
+expired-lease reclaim, same-target ordering, cross-projection routing, handler
+and final-renewal uncertainty recovery, stale-owner completion rejection,
+renewal, every disposition, crash-driven max-attempt blocking, and graceful
+shutdown. Also prove the concrete provider adapter's
 create/update/delete/readback behavior and its own target-ordering requirements.
 Alert on old `pending`, `retry_wait`, `uncertain`, `blocked`, expired
 `processing`, attempt count, and worker poll failures.

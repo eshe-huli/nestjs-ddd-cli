@@ -1,9 +1,18 @@
 import type { MigrationInterface, QueryRunner } from 'typeorm';
 
+// Covers exponent-free PostgreSQL rendering for the canonicalizer's 10,000-node limit.
+const EXTERNAL_PROJECTION_MAX_JSONB_RENDERED_BYTES = 4_194_304;
+
 export class CreateExternalProjectionOperationsMIGRATIONTIMESTAMPPLACEHOLDER
   implements MigrationInterface
 {
   async up(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`CREATE TABLE external_projection_target_heads (
+      projection_name varchar(120) NOT NULL,
+      target_key varchar(500) NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (projection_name, target_key)
+    )`);
     await queryRunner.query(`CREATE TABLE external_projection_operations (
       id uuid PRIMARY KEY,
       enqueue_sequence bigint GENERATED ALWAYS AS IDENTITY UNIQUE,
@@ -25,6 +34,9 @@ export class CreateExternalProjectionOperationsMIGRATIONTIMESTAMPPLACEHOLDER
       last_error_code varchar(160),
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT fk_external_projection_target_head
+        FOREIGN KEY (projection_name, target_key)
+        REFERENCES external_projection_target_heads (projection_name, target_key),
       CONSTRAINT uq_external_projection_idempotency
         UNIQUE (projection_name, idempotency_key),
       CONSTRAINT ck_external_projection_status
@@ -33,7 +45,7 @@ export class CreateExternalProjectionOperationsMIGRATIONTIMESTAMPPLACEHOLDER
       CONSTRAINT ck_external_projection_payload_hash
         CHECK (payload_hash ~ '^[0-9a-f]{64}$'),
       CONSTRAINT ck_external_projection_payload_size
-        CHECK (octet_length(payload::text) <= 524288),
+        CHECK (octet_length(payload::text) <= ${EXTERNAL_PROJECTION_MAX_JSONB_RENDERED_BYTES}),
       CONSTRAINT ck_external_projection_lease
         CHECK (
           (status = 'processing' AND lease_owner IS NOT NULL AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL)
@@ -71,5 +83,6 @@ export class CreateExternalProjectionOperationsMIGRATIONTIMESTAMPPLACEHOLDER
 
   async down(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query('DROP TABLE external_projection_operations');
+    await queryRunner.query('DROP TABLE external_projection_target_heads');
   }
 }

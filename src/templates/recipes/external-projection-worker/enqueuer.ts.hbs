@@ -112,11 +112,29 @@ export class ExternalProjectionEnqueuer {
       projectionName,
       targetKey,
     });
+    await manager.query(
+      `INSERT INTO external_projection_target_heads (projection_name, target_key)
+       VALUES ($1, $2)
+       ON CONFLICT (projection_name, target_key) DO NOTHING`,
+      [projectionName, targetKey],
+    );
+    const lockedTarget = rowsFromQuery<{ projection_name: string }>(
+      await manager.query(
+        `SELECT projection_name
+         FROM external_projection_target_heads
+         WHERE projection_name = $1 AND target_key = $2
+         FOR UPDATE`,
+        [projectionName, targetKey],
+      ),
+    );
+    if (lockedTarget.length !== 1) {
+      throw new Error('External projection target serialization lock was not acquired');
+    }
     const inserted = rowsFromQuery<OperationRow>(
       await manager.query(
         `INSERT INTO external_projection_operations (
           id, projection_name, target_key, operation_kind, idempotency_key, payload, payload_hash
-        ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+        ) VALUES ($1, $2, $3, $4, $5, $6::text::jsonb, $7)
         ON CONFLICT (projection_name, idempotency_key) DO NOTHING
         RETURNING *`,
         [
