@@ -4,6 +4,10 @@ import { readTemplate } from '../../utils/file.utils';
 
 const files = [
   ['verifier.ts.hbs', 'src/shared/auth/oidc-resource-server/oidc-access-token-verifier.ts'],
+  [
+    'verifier.spec.ts.hbs',
+    'src/shared/auth/oidc-resource-server/oidc-access-token-verifier.spec.ts',
+  ],
   ['module.ts.hbs', 'src/shared/auth/oidc-resource-server/oidc-resource-server.module.ts'],
   ['index.ts.hbs', 'src/shared/auth/oidc-resource-server/index.ts'],
   ['README.md.hbs', 'docs/auth/oidc-resource-server.md'],

@@ -1,78 +1,440 @@
-import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
-import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
+import { UnauthorizedException } from '@nestjs/common';
+import {
+  constants,
+  createPublicKey,
+  type JsonWebKey,
+  type KeyObject,
+  verify as verifySignature,
+} from 'node:crypto';
 
 export interface OidcResourceServerOptions {
   issuer: string;
   jwksUri: string;
   audiences: readonly string[];
   authorizedClients: readonly string[];
-  algorithms: readonly string[];
   clockToleranceSeconds?: number;
+  jwksCacheTtlSeconds?: number;
+  jwksRefreshCooldownSeconds?: number;
+  jwksFetchTimeoutMs?: number;
 }
-export const OIDC_RESOURCE_SERVER_OPTIONS = Symbol('OIDC_RESOURCE_SERVER_OPTIONS');
-const ASYMMETRIC_ALGORITHMS = new Set([
-  'RS256', 'RS384', 'RS512', 'PS256', 'PS384', 'PS512',
-  'ES256', 'ES384', 'ES512', 'EdDSA', 'Ed25519',
-]);
 
-function httpsUrl(value: string): void {
+export interface VerifiedOidcAccessToken {
+  readonly [claim: string]: unknown;
+  readonly sub: string;
+  readonly iss: string;
+  readonly aud: string | readonly string[];
+  readonly azp: string;
+  readonly iat: number;
+  readonly exp: number;
+  readonly nbf?: number;
+}
+
+export const OIDC_RESOURCE_SERVER_OPTIONS = Symbol('OIDC_RESOURCE_SERVER_OPTIONS');
+
+const MAX_TOKEN_BYTES = 32 * 1024;
+const MAX_HEADER_BYTES = 4 * 1024;
+const MAX_PAYLOAD_BYTES = 24 * 1024;
+const MAX_SIGNATURE_BYTES = 1024;
+const MAX_JWKS_BYTES = 256 * 1024;
+const MAX_JWKS_KEYS = 100;
+const MAX_KEY_ID_LENGTH = 256;
+const BASE64URL = /^[A-Za-z0-9_-]+$/;
+
+interface JwtHeader {
+  readonly alg: 'RS256';
+  readonly kid: string;
+}
+
+interface RsaJwk extends JsonWebKey {
+  readonly kty: 'RSA';
+  readonly kid: string;
+  readonly n: string;
+  readonly e: string;
+  readonly alg?: string;
+  readonly use?: string;
+  readonly key_ops?: readonly string[];
+}
+
+interface JwksDocument {
+  readonly keys: readonly unknown[];
+}
+
+interface NormalizedOptions {
+  readonly issuer: string;
+  readonly jwksUri: string;
+  readonly audiences: readonly string[];
+  readonly authorizedClients: readonly string[];
+  readonly clockToleranceSeconds: number;
+  readonly jwksCacheTtlSeconds: number;
+  readonly jwksRefreshCooldownSeconds: number;
+  readonly jwksFetchTimeoutMs: number;
+}
+
+function assertHttpsUrl(value: string): void {
   const parsed = new URL(value);
-  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.hash) {
+  if (
+    parsed.protocol !== 'https:' ||
+    parsed.username !== '' ||
+    parsed.password !== '' ||
+    parsed.hash !== ''
+  ) {
     throw new Error('Explicit trusted HTTPS issuer/JWKS required');
   }
 }
-function nonemptyList(values: readonly string[]): boolean {
-  return Array.isArray(values) && values.length > 0 && values.every(value =>
-    typeof value === 'string' && value.length > 0 && value === value.trim());
+
+function isNonemptyList(values: readonly string[]): boolean {
+  return (
+    Array.isArray(values) &&
+    values.length > 0 &&
+    values.every(
+      (value) => typeof value === 'string' && value.length > 0 && value === value.trim(),
+    )
+  );
 }
 
-@Injectable()
-export class OidcAccessTokenVerifier {
-  private readonly options: OidcResourceServerOptions;
-  private readonly keys: ReturnType<typeof createRemoteJWKSet>;
+function boundedNumber(
+  value: number | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+  name: string,
+): number {
+  const selected = value ?? fallback;
+  if (!Number.isFinite(selected) || selected < minimum || selected > maximum) {
+    throw new Error(`${name} must be between ${minimum} and ${maximum}`);
+  }
+  return selected;
+}
 
-  constructor(@Inject(OIDC_RESOURCE_SERVER_OPTIONS) options: OidcResourceServerOptions) {
-    httpsUrl(options.issuer);
-    httpsUrl(options.jwksUri);
-    if (!nonemptyList(options.audiences) || !nonemptyList(options.authorizedClients) ||
-        !nonemptyList(options.algorithms) || options.algorithms.some(a => !ASYMMETRIC_ALGORITHMS.has(a))) {
-      throw new Error('Explicit resource audiences, authorized clients and asymmetric algorithms required');
+function decodeBase64Url(segment: string, maximumBytes: number): Buffer {
+  if (
+    segment.length === 0 ||
+    segment.length % 4 === 1 ||
+    !BASE64URL.test(segment) ||
+    segment.length > Math.ceil((maximumBytes * 4) / 3)
+  ) {
+    throw new Error('Malformed token');
+  }
+  const decoded = Buffer.from(segment, 'base64url');
+  if (decoded.length > maximumBytes || decoded.toString('base64url') !== segment) {
+    throw new Error('Malformed token');
+  }
+  return decoded;
+}
+
+function parseJsonRecord(segment: string, maximumBytes: number): Record<string, unknown> {
+  const value: unknown = JSON.parse(decodeBase64Url(segment, maximumBytes).toString('utf8'));
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Malformed token');
+  }
+  return value as Record<string, unknown>;
+}
+
+function parseHeader(segment: string): JwtHeader {
+  const header = parseJsonRecord(segment, MAX_HEADER_BYTES);
+  if (
+    header['alg'] !== 'RS256' ||
+    typeof header['kid'] !== 'string' ||
+    header['kid'].length === 0 ||
+    header['kid'].length > MAX_KEY_ID_LENGTH ||
+    header['kid'] !== header['kid'].trim() ||
+    header['crit'] !== undefined ||
+    header['b64'] !== undefined
+  ) {
+    throw new Error('Unsupported token header');
+  }
+  return { alg: 'RS256', kid: header['kid'] };
+}
+
+function parseJwks(value: unknown): JwksDocument {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid JWKS');
+  }
+  const keys = (value as Record<string, unknown>)['keys'];
+  if (!Array.isArray(keys) || keys.length === 0 || keys.length > MAX_JWKS_KEYS) {
+    throw new Error('Invalid JWKS');
+  }
+  return { keys };
+}
+
+function isUsableRsaJwk(value: unknown): value is RsaJwk {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const key = value as Record<string, unknown>;
+  return (
+    key['kty'] === 'RSA' &&
+    typeof key['kid'] === 'string' &&
+    key['kid'].length > 0 &&
+    key['kid'].length <= MAX_KEY_ID_LENGTH &&
+    key['kid'] === key['kid'].trim() &&
+    typeof key['n'] === 'string' &&
+    key['n'].length > 0 &&
+    key['n'].length <= 2048 &&
+    BASE64URL.test(key['n']) &&
+    typeof key['e'] === 'string' &&
+    key['e'].length > 0 &&
+    key['e'].length <= 16 &&
+    BASE64URL.test(key['e']) &&
+    (key['alg'] === undefined || key['alg'] === 'RS256') &&
+    (key['use'] === undefined || key['use'] === 'sig') &&
+    (key['key_ops'] === undefined ||
+      (Array.isArray(key['key_ops']) &&
+        key['key_ops'].every((operation) => typeof operation === 'string') &&
+        key['key_ops'].includes('verify')))
+  );
+}
+
+function candidateKeyId(value: unknown): string | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const keyId = (value as Record<string, unknown>)['kid'];
+  return typeof keyId === 'string' ? keyId : undefined;
+}
+
+function importRsaVerificationKey(
+  value: unknown,
+): { keyId: string; key: KeyObject } | undefined {
+  if (!isUsableRsaJwk(value)) return undefined;
+  try {
+    const key = createPublicKey({ key: value, format: 'jwk' });
+    const modulusLength = key.asymmetricKeyDetails?.modulusLength;
+    if (
+      key.asymmetricKeyType !== 'rsa' ||
+      typeof modulusLength !== 'number' ||
+      modulusLength < 2048 ||
+      modulusLength > 8192
+    ) {
+      return undefined;
     }
-    const skew = options.clockToleranceSeconds ?? 0;
-    if (!Number.isFinite(skew) || skew < 0 || skew > 60) throw new Error('Clock tolerance must be 0..60 seconds');
-    // Snapshot caller-owned arrays; later mutation must not change verifier policy.
+    return { keyId: value.kid, key };
+  } catch {
+    // An unusable provider key is not trusted and cannot poison other valid keys.
+    return undefined;
+  }
+}
+
+function audienceClaim(value: unknown): readonly string[] {
+  if (typeof value === 'string' && value.length > 0) return [value];
+  if (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((audience) => typeof audience === 'string' && audience.length > 0)
+  ) {
+    return value;
+  }
+  return [];
+}
+
+async function readBoundedBody(
+  response: Awaited<ReturnType<typeof fetch>>,
+  maximumBytes: number,
+): Promise<string> {
+  const declaredLength = response.headers.get('content-length');
+  if (declaredLength !== null) {
+    const parsedLength = Number(declaredLength);
+    if (!Number.isFinite(parsedLength) || parsedLength < 0 || parsedLength > maximumBytes) {
+      throw new Error('JWKS response is too large');
+    }
+  }
+  if (response.body === null) throw new Error('JWKS response body is missing');
+
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      size += chunk.value.byteLength;
+      if (size > maximumBytes) {
+        await reader.cancel();
+        throw new Error('JWKS response is too large');
+      }
+      chunks.push(Buffer.from(chunk.value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, size).toString('utf8');
+}
+
+export class OidcAccessTokenVerifier {
+  private readonly options: NormalizedOptions;
+  private readonly audiences: ReadonlySet<string>;
+  private readonly authorizedClients: ReadonlySet<string>;
+  private keys = new Map<string, KeyObject>();
+  private keysExpireAt = 0;
+  private lastRefreshAttemptAt = 0;
+  private refreshInFlight: Promise<void> | undefined;
+
+  constructor(options: OidcResourceServerOptions) {
+    assertHttpsUrl(options.issuer);
+    assertHttpsUrl(options.jwksUri);
+    if (!isNonemptyList(options.audiences) || !isNonemptyList(options.authorizedClients)) {
+      throw new Error('Explicit resource audiences and authorized clients required');
+    }
     this.options = {
-      ...options, audiences: [...options.audiences], authorizedClients: [...options.authorizedClients],
-      algorithms: [...options.algorithms], clockToleranceSeconds: skew,
+      issuer: options.issuer,
+      jwksUri: options.jwksUri,
+      audiences: [...options.audiences],
+      authorizedClients: [...options.authorizedClients],
+      clockToleranceSeconds: boundedNumber(
+        options.clockToleranceSeconds,
+        0,
+        0,
+        60,
+        'Clock tolerance',
+      ),
+      jwksCacheTtlSeconds: boundedNumber(
+        options.jwksCacheTtlSeconds,
+        600,
+        30,
+        86400,
+        'JWKS cache TTL',
+      ),
+      jwksRefreshCooldownSeconds: boundedNumber(
+        options.jwksRefreshCooldownSeconds,
+        30,
+        1,
+        300,
+        'JWKS refresh cooldown',
+      ),
+      jwksFetchTimeoutMs: boundedNumber(
+        options.jwksFetchTimeoutMs,
+        5000,
+        250,
+        10000,
+        'JWKS fetch timeout',
+      ),
     };
-    this.keys = createRemoteJWKSet(new URL(options.jwksUri), {
-      timeoutDuration: 5000, cooldownDuration: 30000, cacheMaxAge: 600000,
-    });
+    this.audiences = new Set(this.options.audiences);
+    this.authorizedClients = new Set(this.options.authorizedClients);
   }
 
-  async verify(token: string): Promise<JWTPayload> {
+  async verify(token: string): Promise<VerifiedOidcAccessToken> {
     try {
-      if (typeof token !== 'string' || !token.trim() || token.length > 32768) throw new Error('Malformed token');
-      const { payload } = await jwtVerify(token, this.keys, {
-        issuer: this.options.issuer, audience: [...this.options.audiences],
-        algorithms: [...this.options.algorithms],
-        requiredClaims: ['sub', 'exp', 'iat', 'azp'],
-        clockTolerance: this.options.clockToleranceSeconds,
-      });
-      const skew = this.options.clockToleranceSeconds ?? 0;
-      const now = Date.now() / 1000;
-      if (typeof payload.sub !== 'string' || !payload.sub.trim() ||
-          typeof payload.exp !== 'number' || !Number.isFinite(payload.exp) ||
-          typeof payload.iat !== 'number' || !Number.isFinite(payload.iat) ||
-          payload.iat > now + skew || payload.iat < 0 || payload.exp <= payload.iat ||
-          (payload.nbf !== undefined && (typeof payload.nbf !== 'number' || !Number.isFinite(payload.nbf))) ||
-          typeof payload.azp !== 'string' || !this.options.authorizedClients.includes(payload.azp)) {
-        throw new Error('Rejected claims');
+      if (
+        typeof token !== 'string' ||
+        token.length === 0 ||
+        Buffer.byteLength(token, 'utf8') > MAX_TOKEN_BYTES
+      ) {
+        throw new Error('Malformed token');
       }
-      return payload;
+      const segments = token.split('.');
+      if (segments.length !== 3) throw new Error('Malformed token');
+      const [encodedHeader, encodedPayload, encodedSignature] = segments as [
+        string,
+        string,
+        string,
+      ];
+      const header = parseHeader(encodedHeader);
+      const payload = parseJsonRecord(encodedPayload, MAX_PAYLOAD_BYTES);
+      const signature = decodeBase64Url(encodedSignature, MAX_SIGNATURE_BYTES);
+      const key = await this.resolveKey(header.kid);
+      const validSignature = verifySignature(
+        'RSA-SHA256',
+        Buffer.from(`${encodedHeader}.${encodedPayload}`, 'ascii'),
+        { key, padding: constants.RSA_PKCS1_PADDING },
+        signature,
+      );
+      if (!validSignature) throw new Error('Invalid signature');
+      return this.validateClaims(payload);
     } catch {
-      // Never include bearer tokens, claims or upstream response bodies in errors.
+      // Never include bearer tokens, claims, key data or upstream bodies in errors.
       throw new UnauthorizedException('Invalid resource access token');
+    }
+  }
+
+  private validateClaims(payload: Record<string, unknown>): VerifiedOidcAccessToken {
+    const skew = this.options.clockToleranceSeconds;
+    const now = Date.now() / 1000;
+    const audience = audienceClaim(payload['aud']);
+    if (
+      payload['iss'] !== this.options.issuer ||
+      typeof payload['sub'] !== 'string' ||
+      payload['sub'].trim().length === 0 ||
+      !audience.some((value) => this.audiences.has(value)) ||
+      typeof payload['azp'] !== 'string' ||
+      !this.authorizedClients.has(payload['azp']) ||
+      typeof payload['iat'] !== 'number' ||
+      !Number.isFinite(payload['iat']) ||
+      payload['iat'] < 0 ||
+      payload['iat'] > now + skew ||
+      typeof payload['exp'] !== 'number' ||
+      !Number.isFinite(payload['exp']) ||
+      payload['exp'] <= payload['iat'] ||
+      payload['exp'] <= now - skew ||
+      (payload['nbf'] !== undefined &&
+        (typeof payload['nbf'] !== 'number' ||
+          !Number.isFinite(payload['nbf']) ||
+          payload['nbf'] > now + skew))
+    ) {
+      throw new Error('Rejected claims');
+    }
+    return payload as VerifiedOidcAccessToken;
+  }
+
+  private async resolveKey(keyId: string): Promise<KeyObject> {
+    const now = Date.now();
+    const cached = this.keys.get(keyId);
+    if (cached !== undefined && now < this.keysExpireAt) return cached;
+
+    const refreshCooldownMs = this.options.jwksRefreshCooldownSeconds * 1000;
+    const shouldRefresh =
+      this.lastRefreshAttemptAt === 0 || now - this.lastRefreshAttemptAt >= refreshCooldownMs;
+    if (this.refreshInFlight !== undefined) await this.refreshInFlight;
+    else if (shouldRefresh) await this.refreshKeys();
+
+    const selected = this.keys.get(keyId);
+    if (selected === undefined || Date.now() >= this.keysExpireAt) {
+      throw new Error('No trusted key');
+    }
+    return selected;
+  }
+
+  private async refreshKeys(): Promise<void> {
+    if (this.refreshInFlight !== undefined) return this.refreshInFlight;
+    this.lastRefreshAttemptAt = Date.now();
+    const operation = this.fetchKeys().then((keys) => {
+      this.keys = keys;
+      this.keysExpireAt = Date.now() + this.options.jwksCacheTtlSeconds * 1000;
+    });
+    this.refreshInFlight = operation;
+    try {
+      await operation;
+    } finally {
+      this.refreshInFlight = undefined;
+    }
+  }
+
+  private async fetchKeys(): Promise<Map<string, KeyObject>> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.options.jwksFetchTimeoutMs);
+    try {
+      const response = await fetch(this.options.jwksUri, {
+        method: 'GET',
+        redirect: 'error',
+        signal: controller.signal,
+        headers: { accept: 'application/json' },
+      });
+      if (!response.ok) throw new Error('JWKS request failed');
+      const document: unknown = JSON.parse(await readBoundedBody(response, MAX_JWKS_BYTES));
+      const jwks = parseJwks(document);
+      const seenKeyIds = new Set<string>();
+      const imported = new Map<string, KeyObject>();
+      for (const candidate of jwks.keys) {
+        const keyId = candidateKeyId(candidate);
+        if (keyId !== undefined) {
+          if (seenKeyIds.has(keyId)) throw new Error('Duplicate JWKS key identifier');
+          seenKeyIds.add(keyId);
+        }
+        const verificationKey = importRsaVerificationKey(candidate);
+        if (verificationKey !== undefined) {
+          imported.set(verificationKey.keyId, verificationKey.key);
+        }
+      }
+      if (imported.size === 0) throw new Error('JWKS has no usable RS256 keys');
+      return imported;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 }

@@ -31,9 +31,10 @@ export interface RecipeOptions {
 
 const AVAILABLE_RECIPES = {
   'oidc-resource-server': {
-    name: 'OIDC resource-server JWT verification',
-    description: 'Explicit JWKS, resource audience and authorized-client verification for APIs',
-    dependencies: ['jose@^6.2.12'],
+    name: 'Dependency-free OIDC resource-server JWT verification',
+    description:
+      'Node crypto RS256 verification with explicit JWKS, audience and authorized-client policy',
+    dependencies: [],
     devDependencies: [],
   },
   'auth-jwt': {

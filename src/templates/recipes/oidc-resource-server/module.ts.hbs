@@ -1,5 +1,26 @@
-import { DynamicModule, Module } from '@nestjs/common';
-import { OIDC_RESOURCE_SERVER_OPTIONS, OidcAccessTokenVerifier, OidcResourceServerOptions } from './oidc-access-token-verifier';
+import {
+  DynamicModule,
+  FactoryProvider,
+  Module,
+  ModuleMetadata,
+} from '@nestjs/common';
+import {
+  OIDC_RESOURCE_SERVER_OPTIONS,
+  OidcAccessTokenVerifier,
+  OidcResourceServerOptions,
+} from './oidc-access-token-verifier';
+
+export interface OidcResourceServerModuleAsyncOptions
+  extends Pick<ModuleMetadata, 'imports'> {
+  inject?: FactoryProvider<OidcResourceServerOptions>['inject'];
+  useFactory: FactoryProvider<OidcResourceServerOptions>['useFactory'];
+}
+
+const verifierProvider: FactoryProvider<OidcAccessTokenVerifier> = {
+  provide: OidcAccessTokenVerifier,
+  inject: [OIDC_RESOURCE_SERVER_OPTIONS],
+  useFactory: (options: OidcResourceServerOptions) => new OidcAccessTokenVerifier(options),
+};
 
 @Module({})
 export class OidcResourceServerModule {
@@ -8,8 +29,22 @@ export class OidcResourceServerModule {
       module: OidcResourceServerModule,
       providers: [
         { provide: OIDC_RESOURCE_SERVER_OPTIONS, useValue: options },
-        OidcAccessTokenVerifier,
+        verifierProvider,
       ],
+      exports: [OidcAccessTokenVerifier],
+    };
+  }
+
+  static registerAsync(options: OidcResourceServerModuleAsyncOptions): DynamicModule {
+    const optionsProvider: FactoryProvider<OidcResourceServerOptions> = {
+      provide: OIDC_RESOURCE_SERVER_OPTIONS,
+      inject: options.inject ?? [],
+      useFactory: options.useFactory,
+    };
+    return {
+      module: OidcResourceServerModule,
+      imports: options.imports ?? [],
+      providers: [optionsProvider, verifierProvider],
       exports: [OidcAccessTokenVerifier],
     };
   }

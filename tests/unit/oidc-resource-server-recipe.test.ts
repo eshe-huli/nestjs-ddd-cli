@@ -24,6 +24,14 @@ describe('OIDC resource-server recipe', () => {
       'src/shared/auth/oidc-resource-server/oidc-access-token-verifier.ts',
     );
     const before = await fs.stat(file);
+    expect(
+      await fs.pathExists(
+        path.join(
+          target,
+          'src/shared/auth/oidc-resource-server/oidc-access-token-verifier.spec.ts',
+        ),
+      ),
+    ).toBe(true);
     await applyOidcResourceServerRecipe(target);
     expect((await fs.stat(file)).mtimeMs).toBe(before.mtimeMs);
     await fs.writeFile(file, 'owned custom implementation');
@@ -43,7 +51,33 @@ describe('OIDC resource-server recipe', () => {
   it('executes real crypto against generated CommonJS verifier and module', async () => {
     await applyOidcResourceServerRecipe(target);
     const sourceDir = path.join(target, 'src/shared/auth/oidc-resource-server');
-    for (const file of await fs.readdir(sourceDir)) {
+    const files = (await fs.readdir(sourceDir)).filter((file) => file.endsWith('.ts'));
+    const program = ts.createProgram(
+      files.map((file) => path.join(sourceDir, file)),
+      {
+        module: ts.ModuleKind.CommonJS,
+        moduleResolution: ts.ModuleResolutionKind.NodeJs,
+        target: ts.ScriptTarget.ES2022,
+        experimentalDecorators: true,
+        emitDecoratorMetadata: true,
+        esModuleInterop: true,
+        skipLibCheck: true,
+        strict: true,
+        noPropertyAccessFromIndexSignature: true,
+        noUncheckedIndexedAccess: true,
+        noUnusedLocals: true,
+        types: ['node', 'jest'],
+      },
+    );
+    const diagnostics = ts.getPreEmitDiagnostics(program);
+    expect(
+      ts.formatDiagnosticsWithColorAndContext(diagnostics, {
+        getCanonicalFileName: (fileName) => fileName,
+        getCurrentDirectory: () => process.cwd(),
+        getNewLine: () => '\n',
+      }),
+    ).toBe('');
+    for (const file of files) {
       const source = await fs.readFile(path.join(sourceDir, file), 'utf8');
       const compiled = ts.transpileModule(source, {
         compilerOptions: {
@@ -62,6 +96,6 @@ describe('OIDC resource-server recipe', () => {
       [path.join(__dirname, '../fixtures/oidc-resource-crypto.cjs'), sourceDir],
       { encoding: 'utf8' },
     );
-    expect(result).toContain('crypto cases passed:');
+    expect(result).toContain('dependency-free crypto cases passed:');
   });
 });

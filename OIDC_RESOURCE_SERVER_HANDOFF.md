@@ -4,19 +4,21 @@ Owner requested implementation stop and commit/push; this is an unpublished
 candidate, not production authentication acceptance. Branch
 codex/oidc-resource-server, base a636dad. No consuming MyDermaLife service changed.
 
-The new recipe emits verifier/module/barrel/docs through the DDD CLI. It requires
-explicit trusted HTTPS issuer/JWKS, resource audiences, authorized clients,
-asymmetric algorithms, exp/iat/sub/azp and bounded clock tolerance. Config arrays
-are snapshotted. No tokens/claims/upstream bodies are returned in failure messages.
-No AppModule wiring or automatic business grants. jose6.2.12 is a development
-test dependency here; generated consumer requires jose^6.2.12.
+The recipe emits a verifier, portable real-key verifier spec, sync/async Nest
+module, barrel, and operator docs through the DDD CLI. It requires explicit
+trusted HTTPS issuer/JWKS, resource audiences, authorized clients, RS256,
+exp/iat/sub/azp, optional nbf, and bounded clock tolerance. Configuration arrays
+are snapshotted. Tokens, claims, key material, and upstream bodies never appear
+in authentication errors. No AppModule wiring or automatic business grants.
+The verifier uses Node/Bun crypto and Fetch only; generated consumers add no
+dependency and do not migrate their package-manager lockfiles.
 
-Worker proof: focused generator tests, build/typecheck/lint and complete-file
-Sonar passed. Generated CommonJS verifier passed37 real-key cases under Bun and
-Node22.22 production-compatibility probe. Dry run writes nothing; repeat/conflict
-and symlink safeguards tested. Full-repository CI/publishing not run for this
-checkpoint. Root reviewed the recipe/template diff; further independent acceptance
-remains before integration/publication. Package version remains3.2.2.
+Current proof is recorded by the follow-up commit on this branch: the generated
+output is strict-typechecked, the standalone CommonJS/Bun fixture executes real
+RSA verification and rejection cases, and the generated consumer spec executes
+19 real-key cases. Dry-run writes nothing; repeat/conflict and symlink safeguards
+remain tested. Full-repository CI and package publication are separate gates.
+Package version remains 3.2.2.
 
 The local pre-commit hook runs `npx lint-staged` with automatic source rewriting.
 For this explicitly requested stop/checkpoint only it is disabled: local commands
@@ -28,7 +30,9 @@ an access token rather than an ID token. The consuming service must fix and prov
 its provider access-token/active-human/organization contract separately. Do not
 invent a generic token-kind bypass or put MyDermaLife IAM policy in this recipe.
 
-Next: review tests/generated output, run complete appropriate CLI gates, integrate
-under that repository's verified branch policy, publish only through its normal
-authorized registry workflow, then consume with dry-run in Identity. Do not run
-ddd update or generate the Pulsar event-backbone for MyDermaLife (Kafka/Debezium).
+Consumer command: `ddd recipe oidc-resource-server --path <service> --dry-run`,
+then the same command without `--dry-run`. Prefer
+`OidcResourceServerModule.registerAsync` with the owning service's validated
+`ConfigService`. Publish only through the normal authorized registry workflow,
+then consume with dry-run in Identity. Do not run `ddd update` or generate the
+Pulsar event-backbone for MyDermaLife (Kafka/Debezium).
