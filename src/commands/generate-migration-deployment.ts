@@ -342,6 +342,8 @@ spec:
       restartPolicy: Never
 ${pullSecret}      securityContext:
         runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
         seccompProfile:
           type: RuntimeDefault
       containers:
