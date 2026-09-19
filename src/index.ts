@@ -20,6 +20,7 @@ import { runDoctor } from './commands/doctor';
 import { interactiveScaffold } from './commands/interactive-scaffold';
 import { generateFromSchema, createSampleSchema } from './commands/generate-from-schema';
 import { generateDeployment } from './commands/generate-deployment';
+import { generateMigrationDeployment } from './commands/generate-migration-deployment';
 import { getCurrentPackageVersion, checkForCliUpdate } from './utils/dependency.utils';
 import { initConfig, listPresets } from './commands/init-config';
 import { runEnhancedDoctor } from './commands/doctor-enhanced';
@@ -360,6 +361,27 @@ program
     } catch (error) {
       console.error(chalk.red('Error:'), (error as Error).message);
       process.exit(1);
+    }
+  });
+
+program
+  .command('deploy-migrations')
+  .description('Generate a TypeORM migration runner and immutable-image Argo PreSync Job')
+  .option('-p, --path <path>', 'Path to the project', process.cwd())
+  .requiredOption('--image <image>', 'Application image pinned by sha256 digest')
+  .option('--app-name <name>', 'Kubernetes application name; defaults to package name')
+  .option('--database-secret <name>', 'Secret containing DATABASE_URL')
+  .option('--database-url-key <key>', 'Database URL key in the Secret', 'DATABASE_URL')
+  .option('--config-map <name>', 'ConfigMap containing DATABASE_SSL')
+  .option('--database-ssl-key <key>', 'Database SSL key in the ConfigMap', 'DATABASE_SSL')
+  .option('--image-pull-secret <name>', 'Registry pull Secret')
+  .option('--dry-run', 'Preview generated files without writing', false)
+  .action(async (options) => {
+    try {
+      await generateMigrationDeployment(options);
+    } catch (error) {
+      console.error(chalk.red('Error:'), (error as Error).message);
+      process.exitCode = 1;
     }
   });
 
