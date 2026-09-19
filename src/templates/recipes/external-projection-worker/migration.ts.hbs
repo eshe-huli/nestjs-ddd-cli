@@ -6,6 +6,7 @@ export class CreateExternalProjectionOperationsMIGRATIONTIMESTAMPPLACEHOLDER
   async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`CREATE TABLE external_projection_operations (
       id uuid PRIMARY KEY,
+      enqueue_sequence bigint GENERATED ALWAYS AS IDENTITY UNIQUE,
       projection_name varchar(120) NOT NULL,
       target_key varchar(500) NOT NULL,
       operation_kind varchar(120) NOT NULL,
@@ -59,9 +60,13 @@ export class CreateExternalProjectionOperationsMIGRATIONTIMESTAMPPLACEHOLDER
         )
     )`);
     await queryRunner.query(`CREATE INDEX ix_external_projection_dispatch
-      ON external_projection_operations (status, next_attempt_at, lease_expires_at, created_at)`);
+      ON external_projection_operations (
+        projection_name, status, next_attempt_at, lease_expires_at, enqueue_sequence
+      )`);
     await queryRunner.query(`CREATE INDEX ix_external_projection_target
-      ON external_projection_operations (projection_name, target_key, created_at)`);
+      ON external_projection_operations (
+        projection_name, target_key, enqueue_sequence, status
+      )`);
   }
 
   async down(queryRunner: QueryRunner): Promise<void> {

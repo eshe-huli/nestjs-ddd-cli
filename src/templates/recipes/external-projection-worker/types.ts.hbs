@@ -46,12 +46,48 @@ export interface EnqueuedExternalProjection {
   created: boolean;
 }
 
-export interface ClaimedExternalProjection extends ExternalProjectionOperation {
+interface ClaimedExternalProjectionBase extends ExternalProjectionOperation {
   status: 'processing';
   leaseOwner: string;
   leaseToken: string;
   leaseExpiresAt: Date;
 }
+
+export type ClaimedExternalProjection =
+  | (ClaimedExternalProjectionBase & {
+      claimReason: 'fresh';
+      previousStatus: 'pending';
+      previousErrorCode?: never;
+      reconciliationRequired: false;
+    })
+  | (ClaimedExternalProjectionBase & {
+      claimReason: 'retry';
+      previousStatus: 'retry_wait';
+      previousErrorCode: string;
+      reconciliationRequired: false;
+    })
+  | (ClaimedExternalProjectionBase & {
+      claimReason: 'uncertain_recovery';
+      previousStatus: 'uncertain';
+      previousErrorCode: string;
+      reconciliationRequired: true;
+    })
+  | (ClaimedExternalProjectionBase & {
+      claimReason: 'expired_lease_recovery';
+      previousStatus: 'processing';
+      previousErrorCode?: string;
+      reconciliationRequired: true;
+    });
+
+export type FreshExternalProjection = Extract<
+  ClaimedExternalProjection,
+  { reconciliationRequired: false }
+>;
+
+export type RecoveryExternalProjection = Extract<
+  ClaimedExternalProjection,
+  { reconciliationRequired: true }
+>;
 
 export type ExternalProjectionFailureDisposition = 'retry_wait' | 'uncertain' | 'blocked';
 
@@ -64,10 +100,12 @@ export type ExternalProjectionExecutionResult =
     };
 
 export interface ExternalProjectionHandler {
-  execute(operation: ClaimedExternalProjection): Promise<ExternalProjectionExecutionResult>;
+  execute(operation: FreshExternalProjection): Promise<ExternalProjectionExecutionResult>;
+  reconcile(operation: RecoveryExternalProjection): Promise<ExternalProjectionExecutionResult>;
 }
 
 export interface ExternalProjectionWorkerOptions {
+  projectionName: string;
   enabled: boolean;
   pollIntervalMs: number;
   batchSize: number;

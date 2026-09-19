@@ -92,8 +92,14 @@ export class ExternalProjectionEnqueuer {
     manager: EntityManager,
     input: ExternalProjectionIntent,
   ): Promise<EnqueuedExternalProjection> {
-    if (!manager || typeof manager.query !== 'function') {
-      throw new Error('External projection enqueue requires the owning EntityManager');
+    if (
+      !manager ||
+      typeof manager.query !== 'function' ||
+      manager.queryRunner?.isTransactionActive !== true
+    ) {
+      throw new Error(
+        'External projection enqueue requires an active transaction-bound EntityManager',
+      );
     }
     const projectionName = requiredIdentifier(input.projectionName, 'name', 120);
     const targetKey = requiredTargetKey(input.targetKey);

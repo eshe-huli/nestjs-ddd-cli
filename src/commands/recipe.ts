@@ -54,6 +54,18 @@ async function applyDryRunRecipe(
   await handler();
 }
 
+async function installRecipeDependencies(
+  basePath: string,
+  recipe: { dependencies: string[]; devDependencies: string[] },
+): Promise<void> {
+  if (recipe.dependencies.length === 0) return;
+  console.log(chalk.cyan('  Installing dependencies...'));
+  await installDependencies(basePath, recipe.dependencies);
+  if (recipe.devDependencies.length > 0) {
+    await installDependencies(basePath, recipe.devDependencies, true);
+  }
+}
+
 const AVAILABLE_RECIPES = {
   'oidc-resource-server': {
     name: 'Dependency-free OIDC resource-server JWT verification',
@@ -313,13 +325,13 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
     return;
   }
 
-  // Install dependencies if requested
-  if (options.installDeps && recipe.dependencies.length > 0) {
-    console.log(chalk.cyan('  Installing dependencies...'));
-    await installDependencies(basePath, recipe.dependencies);
-    if (recipe.devDependencies.length > 0) {
-      await installDependencies(basePath, recipe.devDependencies, true);
-    }
+  const installAfterExternalPreflight =
+    recipeName === 'external-projection-worker' && options.installDeps
+      ? () => installRecipeDependencies(basePath, recipe)
+      : undefined;
+
+  if (options.installDeps && !installAfterExternalPreflight) {
+    await installRecipeDependencies(basePath, recipe);
   }
 
   const handlers = {
@@ -358,6 +370,7 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
     'external-projection-worker': (target: string) =>
       applyExternalProjectionWorkerRecipe(target, {
         migrationTimestamp: options.migrationTimestamp,
+        beforeWrite: installAfterExternalPreflight,
       }),
   } satisfies Record<keyof typeof AVAILABLE_RECIPES, (target: string) => Promise<void>>;
   await handlers[recipeName as keyof typeof handlers](basePath);

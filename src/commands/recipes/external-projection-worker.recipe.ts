@@ -1,5 +1,6 @@
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { open } from 'node:fs/promises';
 import * as fs from 'fs-extra';
 import { loadConfig } from '../../utils/config.utils';
 import { readTemplate } from '../../utils/file.utils';
@@ -7,11 +8,19 @@ import { readTemplate } from '../../utils/file.utils';
 export interface ExternalProjectionWorkerRecipeOptions {
   dryRun?: boolean;
   migrationTimestamp?: string;
+  beforeWrite?: () => Promise<void>;
 }
 
 interface PlannedFile {
   target: string;
   content: string;
+}
+
+interface ExternalProjectionWorkerPlan {
+  root: string;
+  migrationsPath: string;
+  migrationTarget: string;
+  planned: PlannedFile[];
 }
 
 const recipeFiles = [
@@ -120,10 +129,10 @@ async function assertSingleMigration(
   }
 }
 
-export async function applyExternalProjectionWorkerRecipe(
+async function createPlan(
   basePath: string,
   options: ExternalProjectionWorkerRecipeOptions,
-): Promise<void> {
+): Promise<ExternalProjectionWorkerPlan> {
   const timestamp = requiredTimestamp(options.migrationTimestamp);
   const root = path.resolve(basePath);
   const config = await loadConfig(root);
@@ -162,13 +171,51 @@ export async function applyExternalProjectionWorkerRecipe(
   if (new Set(planned.map(({ target }) => target)).size !== planned.length) {
     throw new Error('External projection recipe resolved duplicate output targets');
   }
-  await assertSingleMigration(root, migrationsPath, migrationTarget);
-  for (const file of planned) await assertTarget(root, file);
+  return { root, migrationsPath, migrationTarget, planned };
+}
+
+async function preflightPlan(plan: ExternalProjectionWorkerPlan): Promise<void> {
+  await assertSingleMigration(plan.root, plan.migrationsPath, plan.migrationTarget);
+  for (const file of plan.planned) await assertTarget(plan.root, file);
+}
+
+async function acquireGenerationLock(root: string): Promise<() => Promise<void>> {
+  const lockPath = path.join(root, '.ddd-external-projection-worker.lock');
+  await assertNoSymlink(root, lockPath);
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    try {
+      const handle = await open(lockPath, 'wx');
+      await handle.close();
+      return async () => {
+        await fs.remove(lockPath);
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  throw new Error(`External projection recipe generation is already running for ${root}`);
+}
+
+export async function applyExternalProjectionWorkerRecipe(
+  basePath: string,
+  options: ExternalProjectionWorkerRecipeOptions,
+): Promise<void> {
+  const plan = await createPlan(basePath, options);
 
   if (options.dryRun) {
-    for (const file of planned) console.log(`Would generate: ${file.target}`);
+    await preflightPlan(plan);
+    for (const file of plan.planned) console.log(`Would generate: ${file.target}`);
     return;
   }
 
-  for (const file of planned) await writeExclusive(root, file);
+  const release = await acquireGenerationLock(plan.root);
+  try {
+    await preflightPlan(plan);
+    await options.beforeWrite?.();
+    await preflightPlan(plan);
+    for (const file of plan.planned) await writeExclusive(plan.root, file);
+  } finally {
+    await release();
+  }
 }

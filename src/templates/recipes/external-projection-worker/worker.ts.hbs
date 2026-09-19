@@ -28,11 +28,24 @@ function boundedInteger(value: number, name: string, minimum: number, maximum: n
   return value;
 }
 
+function projectionName(value: string): string {
+  const normalized = value.trim();
+  if (
+    normalized.length < 1 ||
+    normalized.length > 120 ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(normalized)
+  ) {
+    throw new Error('projectionName is invalid');
+  }
+  return normalized;
+}
+
 export function validateExternalProjectionWorkerOptions(
   options: ExternalProjectionWorkerOptions,
 ): Readonly<ExternalProjectionWorkerOptions> {
   if (typeof options.enabled !== 'boolean') throw new Error('enabled must be a boolean');
   const validated = {
+    projectionName: projectionName(options.projectionName),
     enabled: options.enabled,
     pollIntervalMs: boundedInteger(options.pollIntervalMs, 'pollIntervalMs', 50, 3_600_000),
     batchSize: boundedInteger(options.batchSize, 'batchSize', 1, 1_000),
@@ -57,14 +70,22 @@ function normalizeExecutionResult(value: unknown): ExternalProjectionExecutionRe
   }
   const record = value as Record<string, unknown>;
   if (record['disposition'] === 'applied') {
-    if (record['resultReference'] !== undefined && typeof record['resultReference'] !== 'string') {
+    const resultReference = record['resultReference'];
+    if (resultReference !== undefined && typeof resultReference !== 'string') {
       return { disposition: 'blocked', errorCode: 'INVALID_HANDLER_RESULT' };
+    }
+    const normalizedReference = resultReference?.trim();
+    if (
+      resultReference !== undefined &&
+      (!normalizedReference ||
+        normalizedReference.length > 500 ||
+        /[\u0000-\u001f\u007f]/.test(normalizedReference))
+    ) {
+      return { disposition: 'blocked', errorCode: 'INVALID_HANDLER_RESULT_REFERENCE' };
     }
     return {
       disposition: 'applied',
-      ...(record['resultReference'] === undefined
-        ? {}
-        : { resultReference: record['resultReference'] as string }),
+      ...(normalizedReference === undefined ? {} : { resultReference: normalizedReference }),
     };
   }
   const disposition = record['disposition'];
@@ -126,7 +147,12 @@ export class ExternalProjectionWorker implements OnApplicationBootstrap, OnAppli
   private async runBatch(): Promise<number> {
     let processed = 0;
     while (!this.stopping && processed < this.options.batchSize) {
-      const operation = await this.store.claimNext(this.workerId, this.options.leaseSeconds);
+      const operation = await this.store.claimNext(
+        this.options.projectionName,
+        this.workerId,
+        this.options.leaseSeconds,
+        this.options.maxAttempts,
+      );
       if (!operation) break;
       processed += 1;
       await this.process(operation);
@@ -159,7 +185,11 @@ export class ExternalProjectionWorker implements OnApplicationBootstrap, OnAppli
       return;
     }
 
-    const normalized = this.normalizeFailure(result, operation.attemptCount);
+    const normalized = this.normalizeFailure(
+      result,
+      operation.attemptCount,
+      operation.reconciliationRequired,
+    );
     const nextAttemptAt =
       normalized.disposition === 'blocked'
         ? undefined
@@ -195,7 +225,9 @@ export class ExternalProjectionWorker implements OnApplicationBootstrap, OnAppli
     );
     interval.unref();
     try {
-      const result = await this.handler.execute(operation);
+      const result = operation.reconciliationRequired
+        ? await this.handler.reconcile(operation)
+        : await this.handler.execute(operation);
       stopped = true;
       clearInterval(interval);
       await renewal;
@@ -214,6 +246,7 @@ export class ExternalProjectionWorker implements OnApplicationBootstrap, OnAppli
   private normalizeFailure(
     result: Exclude<ExternalProjectionExecutionResult, { disposition: 'applied' }>,
     attemptCount: number,
+    reconciliationRequired: boolean,
   ): {
     disposition: ExternalProjectionFailureDisposition;
     errorCode: string;
@@ -225,6 +258,10 @@ export class ExternalProjectionWorker implements OnApplicationBootstrap, OnAppli
     if (result.disposition === 'blocked' || attemptCount >= this.options.maxAttempts) {
       return { disposition: 'blocked', errorCode: result.errorCode, retryAfterMs: 0 };
     }
+    const disposition =
+      reconciliationRequired && result.disposition === 'retry_wait'
+        ? 'uncertain'
+        : result.disposition;
     const fallback = Math.min(
       this.options.retryMaxMs,
       this.options.retryBaseMs * 2 ** Math.max(0, Math.min(20, attemptCount - 1)),
@@ -238,7 +275,7 @@ export class ExternalProjectionWorker implements OnApplicationBootstrap, OnAppli
       return { disposition: 'blocked', errorCode: 'INVALID_HANDLER_RETRY_DELAY', retryAfterMs: 0 };
     }
     return {
-      disposition: result.disposition,
+      disposition,
       errorCode: result.errorCode,
       retryAfterMs: requested,
     };

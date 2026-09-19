@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { Injectable } from '@nestjs/common';
-import type { DataSource } from 'typeorm';
+import { Inject, Injectable } from '@nestjs/common';
+import { DataSource } from 'typeorm';
 import { canonicalizeExternalProjectionJson } from './canonical-json';
 import {
   ClaimedExternalProjection,
@@ -30,6 +30,9 @@ interface ClaimedOperationRow {
   lease_expires_at: Date | string;
   created_at: Date | string;
   updated_at: Date | string;
+  previous_status: 'pending' | 'processing' | 'retry_wait' | 'uncertain';
+  previous_error_code: string | null;
+  claim_reason: 'fresh' | 'retry' | 'uncertain_recovery' | 'expired_lease_recovery';
 }
 
 export interface ExternalProjectionFailureCompletion {
@@ -51,7 +54,7 @@ function claimedFromRow(row: ClaimedOperationRow): ClaimedExternalProjection {
   const payload: ExternalProjectionJsonValue = canonicalizeExternalProjectionJson(
     row.payload,
   ).value;
-  return {
+  const operation = {
     id: row.id,
     projectionName: row.projection_name,
     targetKey: row.target_key,
@@ -59,7 +62,7 @@ function claimedFromRow(row: ClaimedOperationRow): ClaimedExternalProjection {
     idempotencyKey: row.idempotency_key,
     payload,
     payloadHash: row.payload_hash,
-    status: row.status,
+    status: 'processing' as const,
     attemptCount: Number(row.attempt_count),
     resultReference: row.result_reference ?? undefined,
     nextAttemptAt: optionalDate(row.next_attempt_at),
@@ -72,6 +75,62 @@ function claimedFromRow(row: ClaimedOperationRow): ClaimedExternalProjection {
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   };
+  if (row.claim_reason === 'fresh' && row.previous_status === 'pending') {
+    return {
+      ...operation,
+      claimReason: 'fresh',
+      previousStatus: 'pending',
+      reconciliationRequired: false,
+    };
+  }
+  if (
+    row.claim_reason === 'retry' &&
+    row.previous_status === 'retry_wait' &&
+    row.previous_error_code
+  ) {
+    return {
+      ...operation,
+      claimReason: 'retry',
+      previousStatus: 'retry_wait',
+      previousErrorCode: row.previous_error_code,
+      reconciliationRequired: false,
+    };
+  }
+  if (
+    row.claim_reason === 'uncertain_recovery' &&
+    row.previous_status === 'uncertain' &&
+    row.previous_error_code
+  ) {
+    return {
+      ...operation,
+      claimReason: 'uncertain_recovery',
+      previousStatus: 'uncertain',
+      previousErrorCode: row.previous_error_code,
+      reconciliationRequired: true,
+    };
+  }
+  if (row.claim_reason === 'expired_lease_recovery' && row.previous_status === 'processing') {
+    return {
+      ...operation,
+      claimReason: 'expired_lease_recovery',
+      previousStatus: 'processing',
+      previousErrorCode: row.previous_error_code ?? undefined,
+      reconciliationRequired: true,
+    };
+  }
+  throw new Error('External projection claim provenance is inconsistent');
+}
+
+function validProjectionName(value: string): string {
+  const normalized = value.trim();
+  if (
+    normalized.length < 1 ||
+    normalized.length > 120 ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(normalized)
+  ) {
+    throw new Error('External projection name is invalid');
+  }
+  return normalized;
 }
 
 function validWorkerId(value: string): string {
@@ -93,6 +152,13 @@ function validLeaseSeconds(value: number): number {
   return value;
 }
 
+function validMaxAttempts(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 100) {
+    throw new Error('External projection max attempts must be between 1 and 100');
+  }
+  return value;
+}
+
 function validErrorCode(value: string): string {
   if (!/^[A-Z][A-Z0-9_]{0,159}$/.test(value)) {
     throw new Error('External projection error code is invalid');
@@ -102,45 +168,90 @@ function validErrorCode(value: string): string {
 
 @Injectable()
 export class ExternalProjectionStore {
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(@Inject(DataSource) private readonly dataSource: DataSource) {}
 
   async claimNext(
+    projectionName: string,
     workerId: string,
     leaseSeconds: number,
+    maxAttempts: number,
   ): Promise<ClaimedExternalProjection | null> {
+    const projection = validProjectionName(projectionName);
     const leaseOwner = validWorkerId(workerId);
     const boundedLease = validLeaseSeconds(leaseSeconds);
+    const boundedAttempts = validMaxAttempts(maxAttempts);
     const leaseToken = randomUUID();
     return this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `UPDATE external_projection_operations
+         SET status = 'blocked',
+             lease_owner = NULL,
+             lease_token = NULL,
+             lease_expires_at = NULL,
+             next_attempt_at = NULL,
+             last_error_code = 'MAX_ATTEMPTS_EXHAUSTED',
+             updated_at = now()
+         WHERE projection_name = $1
+           AND attempt_count >= $2
+           AND (
+             status IN ('pending', 'retry_wait', 'uncertain')
+             OR (status = 'processing' AND lease_expires_at <= now())
+           )
+           AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+           AND (lease_expires_at IS NULL OR lease_expires_at <= now())`,
+        [projection, boundedAttempts],
+      );
       const rows = rowsFromQuery<ClaimedOperationRow>(
         await manager.query(
           `WITH candidate AS (
-            SELECT id
-            FROM external_projection_operations
+            SELECT operation.id,
+                   operation.status AS previous_status,
+                   operation.last_error_code AS previous_error_code,
+                   CASE operation.status
+                     WHEN 'pending' THEN 'fresh'
+                     WHEN 'retry_wait' THEN 'retry'
+                     WHEN 'uncertain' THEN 'uncertain_recovery'
+                     WHEN 'processing' THEN 'expired_lease_recovery'
+                   END AS claim_reason
+            FROM external_projection_operations AS operation
             WHERE (
-                status IN ('pending', 'retry_wait', 'uncertain')
-                OR (status = 'processing' AND lease_expires_at <= now())
+                operation.status IN ('pending', 'retry_wait', 'uncertain')
+                OR (operation.status = 'processing' AND operation.lease_expires_at <= now())
               )
-              AND (next_attempt_at IS NULL OR next_attempt_at <= now())
-              AND (lease_expires_at IS NULL OR lease_expires_at <= now())
-            ORDER BY COALESCE(next_attempt_at, created_at), created_at, id
-            FOR UPDATE SKIP LOCKED
+              AND operation.projection_name = $1
+              AND operation.attempt_count < $5
+              AND (operation.next_attempt_at IS NULL OR operation.next_attempt_at <= now())
+              AND (operation.lease_expires_at IS NULL OR operation.lease_expires_at <= now())
+              AND NOT EXISTS (
+                SELECT 1
+                FROM external_projection_operations AS predecessor
+                WHERE predecessor.projection_name = operation.projection_name
+                  AND predecessor.target_key = operation.target_key
+                  AND predecessor.enqueue_sequence < operation.enqueue_sequence
+                  AND predecessor.status <> 'applied'
+              )
+            ORDER BY COALESCE(operation.next_attempt_at, operation.created_at),
+                     operation.enqueue_sequence
+            FOR UPDATE OF operation SKIP LOCKED
             LIMIT 1
           )
           UPDATE external_projection_operations AS operation
           SET status = 'processing',
               attempt_count = operation.attempt_count + 1,
-              lease_owner = $1,
-              lease_token = $2,
-              lease_expires_at = now() + make_interval(secs => $3::int),
+              lease_owner = $2,
+              lease_token = $3,
+              lease_expires_at = now() + make_interval(secs => $4::int),
               next_attempt_at = NULL,
               last_attempt_at = now(),
               last_error_code = NULL,
               updated_at = now()
           FROM candidate
           WHERE operation.id = candidate.id
-          RETURNING operation.*`,
-          [leaseOwner, leaseToken, boundedLease],
+          RETURNING operation.*,
+                    candidate.previous_status,
+                    candidate.previous_error_code,
+                    candidate.claim_reason`,
+          [projection, leaseOwner, leaseToken, boundedLease, boundedAttempts],
         ),
       );
       return rows[0] ? claimedFromRow(rows[0]) : null;
@@ -170,8 +281,11 @@ export class ExternalProjectionStore {
     resultReference?: string,
   ): Promise<boolean> {
     const reference = resultReference?.trim();
-    if (reference && (reference.length > 500 || /[\u0000-\u001f\u007f]/.test(reference))) {
-      throw new Error('External projection result reference is invalid');
+    if (
+      resultReference !== undefined &&
+      (!reference || reference.length > 500 || /[\u0000-\u001f\u007f]/.test(reference))
+    ) {
+      throw new TypeError('External projection result reference is invalid');
     }
     const rows = rowsFromQuery<{ id: string }>(
       await this.dataSource.query(

@@ -24,14 +24,17 @@ The recipe supports only `.dddrc.json` configurations with `orm: "typeorm"`
 and `database: "postgres"`. It honors `paths.shared` and `paths.migrations`,
 preflights every output before writing, refuses symlink traversal, and will not
 create a second migration under a different timestamp. An identical rerun is a
-no-op; an adapted target is left untouched and reported as a conflict.
+no-op; an adapted target is left untouched and reported as a conflict. Recipe
+generation is locked per project, and dependency installation begins only after
+the timestamp, schema, symlink, migration, and target conflict checks pass.
 
 1. Review and register the generated migration in the service's existing
    migration runner before enabling the worker.
 2. Generate the application adapter with `ddd generate service`. Implement
    `ExternalProjectionHandler`, export it from its owning module, and import that
    module through `ExternalProjectionWorkerModule.register(...)`. Do not
-   redeclare the handler in the worker module.
+   redeclare the handler in the worker module. The imported composition must
+   also expose TypeORM's default `DataSource` provider to the worker module.
 3. Enable Nest shutdown hooks. Supply bounded settings from validated service
    configuration. Keep `enabled: false` until the migration is applied.
 4. Export `ExternalProjectionWorkerModule` only from the composition root that
@@ -40,6 +43,7 @@ no-op; an adapted target is left untouched and reported as a conflict.
 ```ts
 ExternalProjectionWorkerModule.register(
   {
+    projectionName: 'directory-v1',
     enabled: true,
     pollIntervalMs: 1_000,
     batchSize: 25,
@@ -55,7 +59,8 @@ ExternalProjectionWorkerModule.register(
 
 ## Atomic enqueue is mandatory
 
-`enqueue` intentionally accepts an `EntityManager`, not a `DataSource`. Call it
+`enqueue` intentionally accepts an `EntityManager`, not a `DataSource`, and
+rejects a manager without an active transaction-bound `QueryRunner`. Call it
 inside the same transaction that commits the owning domain change:
 
 ```ts
@@ -90,6 +95,22 @@ LOCKED`; renewal and completion require the current owner, token and an
 - `applied`: reconciliation completed and may retain a non-secret provider
   reference.
 
+Each worker is bound to exactly one configured `projectionName`; it cannot
+claim another handler's rows. Claims are serialized by `(projection_name,
+target_key)` in database-assigned `enqueue_sequence` order: a later operation
+cannot overtake any earlier operation that has not reached `applied`. A `blocked` operation
+deliberately remains an ordering barrier until an owning operator resolves it.
+Attempts exhausted by repeated lease expiry are changed to `blocked` before
+another handler call.
+
+The handler has separate entry points. `execute` receives only fresh or known
+retryable work. `reconcile` receives `uncertain_recovery` and
+`expired_lease_recovery` claims, including their prior status and prior error
+when one exists. Reconciliation must read the external system with stable
+identifiers before deciding whether any write is still required. The worker
+never routes recovery claims through `execute`; a retryable reconciliation
+failure remains `uncertain` so the following attempt also enters `reconcile`.
+
 This is at-least-once orchestration, not exactly-once external delivery. The
 handler must pass the durable operation id or another stable idempotency key to
 the external provider when supported. A lost lease fences database completion;
@@ -99,12 +120,15 @@ success, and do not blindly repeat non-idempotent writes.
 The worker runs one batch at a time per process, renews leases during handler
 execution, stops scheduling before shutdown, and waits for the active batch.
 Multiple replicas may run because claims use row locks and `SKIP LOCKED`.
+An optional result reference is trimmed and must be a non-empty, control-free
+string of at most 500 characters.
 
 ## Acceptance before enablement
 
 Prove against disposable PostgreSQL: migration up/down, same-key replay,
 changed-payload conflict, concurrent distinct claims, expired-lease reclaim,
-stale-owner completion rejection, renewal, every disposition, max-attempt
+same-target ordering, cross-projection routing, recovery dispatch, stale-owner
+completion rejection, renewal, every disposition, crash-driven max-attempt
 blocking, and graceful shutdown. Also prove the concrete provider adapter's
 create/update/delete/readback behavior and its own target-ordering requirements.
 Alert on old `pending`, `retry_wait`, `uncertain`, `blocked`, expired

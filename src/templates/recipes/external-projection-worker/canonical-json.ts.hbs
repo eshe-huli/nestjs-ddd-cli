@@ -69,7 +69,7 @@ function canonicalObject(
     if (left > right) return 1;
     return 0;
   });
-  const output: Record<string, ExternalProjectionJsonValue> = {};
+  const output = Object.create(null) as Record<string, ExternalProjectionJsonValue>;
   const entries: string[] = [];
   for (const key of keys) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);

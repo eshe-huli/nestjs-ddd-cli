@@ -399,6 +399,9 @@ npm link
 
 # Test locally
 ddd scaffold Test -m test-module --fields "name:string"
+
+# External projection database proof (requires a disposable PostgreSQL URL)
+EXTERNAL_PROJECTION_TEST_DATABASE_URL=postgres://... bun run test:external-projection-postgres
 ```
 
 ## License
