@@ -168,13 +168,19 @@ function parseBoolean(value: string, name: string): boolean {
   throw new Error(\`${'${name}'} must be true or false\`);
 }
 
-if (require.main === module) {
+async function main(): Promise<void> {
   const dataSource = new DataSource(createMigrationDataSourceOptions());
-  runMigrations(dataSource).catch((error: unknown) => {
+  try {
+    await runMigrations(dataSource);
+  } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Unknown migration failure';
     console.error(\`Migration failed: ${'${message}'}\`);
     process.exitCode = 1;
-  });
+  }
+}
+
+if (require.main === module) {
+  void main(); // NOSONAR -- CommonJS executable entrypoints cannot use top-level await.
 }
 `;
 }
