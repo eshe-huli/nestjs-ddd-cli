@@ -374,6 +374,13 @@ program
   .option('--database-url-key <key>', 'Database URL key in the Secret', 'DATABASE_URL')
   .option('--config-map <name>', 'ConfigMap containing DATABASE_SSL')
   .option('--database-ssl-key <key>', 'Database SSL key in the ConfigMap', 'DATABASE_SSL')
+  .option('--database-ssl-ca-secret <name>', 'Secret containing a trusted database CA')
+  .option('--database-ssl-ca-key <key>', 'Database CA key in the Secret')
+  .option(
+    '--database-ssl-insecure-skip-verify',
+    'Explicitly disable database certificate verification',
+    false,
+  )
   .option('--image-pull-secret <name>', 'Registry pull Secret')
   .option('--dry-run', 'Preview generated files without writing', false)
   .action(async (options) => {

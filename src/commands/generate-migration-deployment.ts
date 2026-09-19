@@ -2,6 +2,8 @@ import * as fs from 'fs-extra';
 import * as path from 'node:path';
 import chalk from 'chalk';
 import { ensureDir, fileExists, writeGeneratedFile } from '../utils/file.utils';
+import { resolveMigrationOutputPath } from './migration';
+import { loadConfig } from '../utils/config.utils';
 
 export interface MigrationDeploymentOptions {
   path?: string;
@@ -11,6 +13,9 @@ export interface MigrationDeploymentOptions {
   databaseUrlKey?: string;
   configMap?: string;
   databaseSslKey?: string;
+  databaseSslCaSecret?: string;
+  databaseSslCaKey?: string;
+  databaseSslInsecureSkipVerify?: boolean;
   imagePullSecret?: string;
   dryRun?: boolean;
 }
@@ -23,7 +28,11 @@ interface ResolvedMigrationDeploymentOptions {
   databaseUrlKey: string;
   configMap?: string;
   databaseSslKey: string;
+  databaseSslCaSecret?: string;
+  databaseSslCaKey: string;
+  databaseSslInsecureSkipVerify: boolean;
   imagePullSecret?: string;
+  migrationRuntimeDirectory: string;
   dryRun: boolean;
 }
 
@@ -45,7 +54,11 @@ export async function generateMigrationDeployment(
     await ensureDir(path.dirname(jobPath));
   }
 
-  await writeGeneratedFile(runnerPath, renderMigrationRunner(), resolved.dryRun);
+  await writeGeneratedFile(
+    runnerPath,
+    renderMigrationRunner(resolved.migrationRuntimeDirectory),
+    resolved.dryRun,
+  );
   await writeGeneratedFile(jobPath, renderMigrationJob(resolved), resolved.dryRun);
 
   const verb = resolved.dryRun ? 'Would generate' : 'Generated';
@@ -87,6 +100,47 @@ async function resolveOptions(
     validateDnsLabel(options.imagePullSecret, '--image-pull-secret');
   }
 
+  const databaseSslCaSecret = options.databaseSslCaSecret;
+  const databaseSslCaKey = options.databaseSslCaKey ?? 'DATABASE_SSL_CA';
+  if (databaseSslCaSecret) {
+    validateDnsLabel(databaseSslCaSecret, '--database-ssl-ca-secret');
+    validateSecretKey(databaseSslCaKey, '--database-ssl-ca-key');
+  } else if (options.databaseSslCaKey) {
+    throw new Error('--database-ssl-ca-key requires --database-ssl-ca-secret');
+  }
+
+  const databaseSslInsecureSkipVerify = options.databaseSslInsecureSkipVerify ?? false;
+  if (databaseSslCaSecret && databaseSslInsecureSkipVerify) {
+    throw new Error(
+      '--database-ssl-ca-secret cannot be combined with --database-ssl-insecure-skip-verify',
+    );
+  }
+  if ((databaseSslCaSecret || databaseSslInsecureSkipVerify) && !options.configMap) {
+    throw new Error(
+      '--config-map is required when configuring a database CA or insecure TLS opt-in',
+    );
+  }
+
+  const config = await loadConfig(basePath);
+  const configuredMigrationPath: unknown = config.paths?.migrations;
+  if (
+    typeof configuredMigrationPath !== 'string' ||
+    configuredMigrationPath.trim().length === 0 ||
+    /[\0*?{}[\]]/.test(configuredMigrationPath)
+  ) {
+    throw new Error('.dddrc.json paths.migrations must be a non-empty directory path');
+  }
+
+  const migrationSourceDirectory = resolveMigrationOutputPath(
+    basePath,
+    configuredMigrationPath,
+    'src/migrations',
+  );
+  const migrationRuntimeDirectory = resolveCompiledMigrationRuntimeDirectory(
+    basePath,
+    migrationSourceDirectory,
+  );
+
   return {
     basePath,
     appName,
@@ -95,9 +149,52 @@ async function resolveOptions(
     databaseUrlKey,
     configMap: options.configMap,
     databaseSslKey,
+    databaseSslCaSecret,
+    databaseSslCaKey,
+    databaseSslInsecureSkipVerify,
     imagePullSecret: options.imagePullSecret,
+    migrationRuntimeDirectory,
     dryRun: options.dryRun ?? false,
   };
+}
+
+function resolveCompiledMigrationRuntimeDirectory(
+  basePath: string,
+  migrationSourceDirectory: string,
+): string {
+  const sourceRoot = findOwningSourceRoot(migrationSourceDirectory);
+  if (!sourceRoot) {
+    throw new Error('.dddrc.json paths.migrations must be inside a source directory named "src"');
+  }
+
+  const compiledMigrationDirectory = path.join(
+    path.dirname(sourceRoot),
+    'dist',
+    path.relative(sourceRoot, migrationSourceDirectory),
+  );
+  const compiledRunnerDirectory = path.join(basePath, 'dist');
+  const relativeRuntimeDirectory = path.relative(
+    compiledRunnerDirectory,
+    compiledMigrationDirectory,
+  );
+
+  return (relativeRuntimeDirectory || '.').split(path.sep).join('/');
+}
+
+function findOwningSourceRoot(migrationSourceDirectory: string): string | undefined {
+  let current = path.resolve(migrationSourceDirectory);
+
+  while (true) {
+    if (path.basename(current) === 'src') {
+      return current;
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return undefined;
+    }
+    current = parent;
+  }
 }
 
 function isDnsLabel(value: string): boolean {
@@ -122,7 +219,9 @@ async function assertSafeOutput(filePath: string, dryRun: boolean): Promise<void
   }
 }
 
-function renderMigrationRunner(): string {
+function renderMigrationRunner(migrationRuntimeDirectory: string): string {
+  const serializedRuntimeDirectory = JSON.stringify(migrationRuntimeDirectory);
+
   return `import 'reflect-metadata';
 import * as path from 'node:path';
 import { DataSource, DataSourceOptions } from 'typeorm';
@@ -137,16 +236,39 @@ export function createMigrationDataSourceOptions(
     throw new Error('DATABASE_URL is required to run migrations');
   }
 
-  const ssl = parseBoolean(environment.DATABASE_SSL ?? 'false', 'DATABASE_SSL');
+  const sslEnabled = parseBoolean(environment.DATABASE_SSL ?? 'false', 'DATABASE_SSL');
+  const insecureSkipVerify = parseBoolean(
+    environment.DATABASE_SSL_INSECURE_SKIP_VERIFY ?? 'false',
+    'DATABASE_SSL_INSECURE_SKIP_VERIFY',
+  );
+  const certificateAuthority = environment.DATABASE_SSL_CA?.trim();
+
+  if (!sslEnabled && (insecureSkipVerify || certificateAuthority)) {
+    throw new Error(
+      'DATABASE_SSL must be true when DATABASE_SSL_INSECURE_SKIP_VERIFY or DATABASE_SSL_CA is set',
+    );
+  }
+  if (insecureSkipVerify && certificateAuthority) {
+    throw new Error(
+      'DATABASE_SSL_CA cannot be combined with DATABASE_SSL_INSECURE_SKIP_VERIFY=true',
+    );
+  }
+
+  const ssl = sslEnabled
+    ? {
+        rejectUnauthorized: !insecureSkipVerify,
+        ...(certificateAuthority ? { ca: certificateAuthority } : {}),
+      }
+    : false;
 
   return {
     type: 'postgres',
     url: databaseUrl,
-    ssl: ssl ? { rejectUnauthorized: false } : false,
+    ssl,
     synchronize: false,
     migrationsRun: false,
     migrationsTableName: 'migrations',
-    migrations: [path.join(__dirname, 'migrations', '*.{js,ts}')],
+    migrations: [path.resolve(__dirname, ${serializedRuntimeDirectory}, '*.js')],
   };
 }
 
@@ -192,6 +314,9 @@ function renderMigrationJob(options: ResolvedMigrationDeploymentOptions): string
   const sslSource = options.configMap
     ? `            - name: DATABASE_SSL\n              valueFrom:\n                configMapKeyRef:\n                  name: ${options.configMap}\n                  key: ${options.databaseSslKey}\n`
     : `            - name: DATABASE_SSL\n              value: 'false'\n`;
+  const caSource = options.databaseSslCaSecret
+    ? `            - name: DATABASE_SSL_CA\n              valueFrom:\n                secretKeyRef:\n                  name: ${options.databaseSslCaSecret}\n                  key: ${options.databaseSslCaKey}\n`
+    : '';
 
   return `apiVersion: batch/v1
 kind: Job
@@ -232,7 +357,9 @@ ${pullSecret}      securityContext:
                 secretKeyRef:
                   name: ${options.databaseSecret}
                   key: ${options.databaseUrlKey}
-${sslSource}          securityContext:
+${sslSource}            - name: DATABASE_SSL_INSECURE_SKIP_VERIFY
+              value: '${options.databaseSslInsecureSkipVerify ? 'true' : 'false'}'
+${caSource}          securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
