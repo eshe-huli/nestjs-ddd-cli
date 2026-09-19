@@ -156,6 +156,12 @@ describe('generateMigrationDeployment', () => {
           spec: {
             automountServiceAccountToken: false,
             restartPolicy: 'Never',
+            securityContext: {
+              runAsNonRoot: true,
+              runAsUser: 1001,
+              runAsGroup: 1001,
+              seccompProfile: { type: 'RuntimeDefault' },
+            },
             imagePullSecrets: [{ name: 'registry-pull' }],
             containers: [
               {
