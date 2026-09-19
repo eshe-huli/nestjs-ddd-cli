@@ -1,0 +1,259 @@
+import { hostname } from 'node:os';
+import { randomUUID } from 'node:crypto';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  OnApplicationBootstrap,
+  OnApplicationShutdown,
+} from '@nestjs/common';
+import { ExternalProjectionStore } from './external-projection-store';
+import {
+  ClaimedExternalProjection,
+  ExternalProjectionDispositionError,
+  ExternalProjectionExecutionResult,
+  ExternalProjectionFailureDisposition,
+  ExternalProjectionHandler,
+  ExternalProjectionWorkerOptions,
+} from './external-projection-worker.types';
+
+export const EXTERNAL_PROJECTION_HANDLER = Symbol('EXTERNAL_PROJECTION_HANDLER');
+export const EXTERNAL_PROJECTION_WORKER_OPTIONS = Symbol('EXTERNAL_PROJECTION_WORKER_OPTIONS');
+const LEASE_LOST = Symbol('LEASE_LOST');
+
+function boundedInteger(value: number, name: string, minimum: number, maximum: number): number {
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${name} must be an integer between ${minimum} and ${maximum}`);
+  }
+  return value;
+}
+
+export function validateExternalProjectionWorkerOptions(
+  options: ExternalProjectionWorkerOptions,
+): Readonly<ExternalProjectionWorkerOptions> {
+  if (typeof options.enabled !== 'boolean') throw new Error('enabled must be a boolean');
+  const validated = {
+    enabled: options.enabled,
+    pollIntervalMs: boundedInteger(options.pollIntervalMs, 'pollIntervalMs', 50, 3_600_000),
+    batchSize: boundedInteger(options.batchSize, 'batchSize', 1, 1_000),
+    leaseSeconds: boundedInteger(options.leaseSeconds, 'leaseSeconds', 3, 3_600),
+    maxAttempts: boundedInteger(options.maxAttempts, 'maxAttempts', 1, 100),
+    retryBaseMs: boundedInteger(options.retryBaseMs, 'retryBaseMs', 100, 86_400_000),
+    retryMaxMs: boundedInteger(options.retryMaxMs, 'retryMaxMs', 100, 604_800_000),
+  };
+  if (validated.retryMaxMs < validated.retryBaseMs) {
+    throw new Error('retryMaxMs must be greater than or equal to retryBaseMs');
+  }
+  return Object.freeze(validated);
+}
+
+function validErrorCode(value: string): boolean {
+  return /^[A-Z][A-Z0-9_]{0,159}$/.test(value);
+}
+
+function normalizeExecutionResult(value: unknown): ExternalProjectionExecutionResult {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { disposition: 'blocked', errorCode: 'INVALID_HANDLER_RESULT' };
+  }
+  const record = value as Record<string, unknown>;
+  if (record['disposition'] === 'applied') {
+    if (record['resultReference'] !== undefined && typeof record['resultReference'] !== 'string') {
+      return { disposition: 'blocked', errorCode: 'INVALID_HANDLER_RESULT' };
+    }
+    return {
+      disposition: 'applied',
+      ...(record['resultReference'] === undefined
+        ? {}
+        : { resultReference: record['resultReference'] as string }),
+    };
+  }
+  const disposition = record['disposition'];
+  if (
+    typeof disposition !== 'string' ||
+    !['retry_wait', 'uncertain', 'blocked'].includes(disposition) ||
+    typeof record['errorCode'] !== 'string' ||
+    (record['retryAfterMs'] !== undefined && typeof record['retryAfterMs'] !== 'number')
+  ) {
+    return { disposition: 'blocked', errorCode: 'INVALID_HANDLER_RESULT' };
+  }
+  return {
+    disposition: disposition as ExternalProjectionFailureDisposition,
+    errorCode: record['errorCode'],
+    ...(record['retryAfterMs'] === undefined
+      ? {}
+      : { retryAfterMs: record['retryAfterMs'] as number }),
+  };
+}
+
+@Injectable()
+export class ExternalProjectionWorker implements OnApplicationBootstrap, OnApplicationShutdown {
+  private readonly logger = new Logger(ExternalProjectionWorker.name);
+  private readonly workerId = `${hostname()}:${process.pid}:${randomUUID()}`;
+  private readonly options: Readonly<ExternalProjectionWorkerOptions>;
+  private timer?: NodeJS.Timeout;
+  private activeRun?: Promise<number>;
+  private stopping = false;
+
+  constructor(
+    private readonly store: ExternalProjectionStore,
+    @Inject(EXTERNAL_PROJECTION_HANDLER) private readonly handler: ExternalProjectionHandler,
+    @Inject(EXTERNAL_PROJECTION_WORKER_OPTIONS) options: ExternalProjectionWorkerOptions,
+  ) {
+    this.options = validateExternalProjectionWorkerOptions(options);
+  }
+
+  onApplicationBootstrap(): void {
+    if (!this.options.enabled || this.stopping) return;
+    this.scheduleRun();
+    this.timer = setInterval(() => this.scheduleRun(), this.options.pollIntervalMs);
+    this.timer.unref();
+  }
+
+  async onApplicationShutdown(): Promise<void> {
+    this.stopping = true;
+    if (this.timer) clearInterval(this.timer);
+    await this.activeRun;
+  }
+
+  runOnce(): Promise<number> {
+    if (this.stopping) return Promise.resolve(0);
+    this.activeRun ??= this.runBatch().finally(() => {
+      this.activeRun = undefined;
+    });
+    return this.activeRun;
+  }
+
+  private async runBatch(): Promise<number> {
+    let processed = 0;
+    while (!this.stopping && processed < this.options.batchSize) {
+      const operation = await this.store.claimNext(this.workerId, this.options.leaseSeconds);
+      if (!operation) break;
+      processed += 1;
+      await this.process(operation);
+    }
+    return processed;
+  }
+
+  private async process(operation: ClaimedExternalProjection): Promise<void> {
+    let result: ExternalProjectionExecutionResult;
+    try {
+      const execution = await this.executeWithLeaseRenewal(operation);
+      if (execution === LEASE_LOST) return;
+      result = normalizeExecutionResult(execution);
+    } catch (error) {
+      if (error instanceof ExternalProjectionDispositionError) {
+        result = {
+          disposition: error.disposition,
+          errorCode: error.code,
+          retryAfterMs: error.retryAfterMs,
+        };
+      } else {
+        result = { disposition: 'retry_wait', errorCode: 'UNEXPECTED_EXECUTION_FAILURE' };
+      }
+    }
+
+    if (result.disposition === 'applied') {
+      if (!(await this.store.markApplied(operation, result.resultReference))) {
+        this.logLeaseLost(operation.id);
+      }
+      return;
+    }
+
+    const normalized = this.normalizeFailure(result, operation.attemptCount);
+    const nextAttemptAt =
+      normalized.disposition === 'blocked'
+        ? undefined
+        : new Date(Date.now() + normalized.retryAfterMs);
+    if (
+      !(await this.store.markFailure(operation, {
+        disposition: normalized.disposition,
+        errorCode: normalized.errorCode,
+        nextAttemptAt,
+      }))
+    ) {
+      this.logLeaseLost(operation.id);
+    }
+  }
+
+  private async executeWithLeaseRenewal(operation: ClaimedExternalProjection): Promise<unknown> {
+    let leaseValid = true;
+    let stopped = false;
+    let renewal: Promise<void> = Promise.resolve();
+    const renew = (): void => {
+      renewal = renewal.then(async () => {
+        if (stopped || !leaseValid) return;
+        try {
+          leaseValid = await this.store.renewLease(operation, this.options.leaseSeconds);
+        } catch {
+          leaseValid = false;
+        }
+      });
+    };
+    const interval = setInterval(
+      renew,
+      Math.max(1_000, Math.floor((this.options.leaseSeconds * 1_000) / 3)),
+    );
+    interval.unref();
+    try {
+      const result = await this.handler.execute(operation);
+      stopped = true;
+      clearInterval(interval);
+      await renewal;
+      if (!leaseValid || !(await this.store.renewLease(operation, this.options.leaseSeconds))) {
+        this.logLeaseLost(operation.id);
+        return LEASE_LOST;
+      }
+      return result;
+    } finally {
+      stopped = true;
+      clearInterval(interval);
+      await renewal;
+    }
+  }
+
+  private normalizeFailure(
+    result: Exclude<ExternalProjectionExecutionResult, { disposition: 'applied' }>,
+    attemptCount: number,
+  ): {
+    disposition: ExternalProjectionFailureDisposition;
+    errorCode: string;
+    retryAfterMs: number;
+  } {
+    if (!validErrorCode(result.errorCode)) {
+      return { disposition: 'blocked', errorCode: 'INVALID_HANDLER_ERROR_CODE', retryAfterMs: 0 };
+    }
+    if (result.disposition === 'blocked' || attemptCount >= this.options.maxAttempts) {
+      return { disposition: 'blocked', errorCode: result.errorCode, retryAfterMs: 0 };
+    }
+    const fallback = Math.min(
+      this.options.retryMaxMs,
+      this.options.retryBaseMs * 2 ** Math.max(0, Math.min(20, attemptCount - 1)),
+    );
+    const requested = result.retryAfterMs ?? fallback;
+    if (
+      !Number.isSafeInteger(requested) ||
+      requested < 100 ||
+      requested > this.options.retryMaxMs
+    ) {
+      return { disposition: 'blocked', errorCode: 'INVALID_HANDLER_RETRY_DELAY', retryAfterMs: 0 };
+    }
+    return {
+      disposition: result.disposition,
+      errorCode: result.errorCode,
+      retryAfterMs: requested,
+    };
+  }
+
+  private scheduleRun(): void {
+    if (this.stopping) return;
+    void this.runOnce().catch(() => {
+      this.logger.error('External projection poll failed');
+    });
+  }
+
+  private logLeaseLost(operationId: string): void {
+    this.logger.warn(
+      `External projection ${operationId} was not completed because its lease changed`,
+    );
+  }
+}

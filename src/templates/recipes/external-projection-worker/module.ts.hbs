@@ -1,0 +1,36 @@
+import { DynamicModule, Module, ModuleMetadata, Type } from '@nestjs/common';
+import { ExternalProjectionEnqueuer } from './external-projection-enqueuer';
+import { ExternalProjectionStore } from './external-projection-store';
+import {
+  EXTERNAL_PROJECTION_HANDLER,
+  EXTERNAL_PROJECTION_WORKER_OPTIONS,
+  ExternalProjectionWorker,
+  validateExternalProjectionWorkerOptions,
+} from './external-projection-worker';
+import {
+  ExternalProjectionHandler,
+  ExternalProjectionWorkerOptions,
+} from './external-projection-worker.types';
+
+@Module({})
+export class ExternalProjectionWorkerModule {
+  static register(
+    options: ExternalProjectionWorkerOptions,
+    handler: Type<ExternalProjectionHandler>,
+    imports: ModuleMetadata['imports'] = [],
+  ): DynamicModule {
+    const validated = validateExternalProjectionWorkerOptions(options);
+    return {
+      module: ExternalProjectionWorkerModule,
+      imports,
+      providers: [
+        { provide: EXTERNAL_PROJECTION_WORKER_OPTIONS, useValue: validated },
+        { provide: EXTERNAL_PROJECTION_HANDLER, useExisting: handler },
+        ExternalProjectionEnqueuer,
+        ExternalProjectionStore,
+        ExternalProjectionWorker,
+      ],
+      exports: [ExternalProjectionEnqueuer],
+    };
+  }
+}

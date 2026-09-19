@@ -1,0 +1,70 @@
+import type { MigrationInterface, QueryRunner } from 'typeorm';
+
+export class CreateExternalProjectionOperationsMIGRATIONTIMESTAMPPLACEHOLDER
+  implements MigrationInterface
+{
+  async up(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`CREATE TABLE external_projection_operations (
+      id uuid PRIMARY KEY,
+      projection_name varchar(120) NOT NULL,
+      target_key varchar(500) NOT NULL,
+      operation_kind varchar(120) NOT NULL,
+      idempotency_key varchar(200) NOT NULL,
+      payload jsonb NOT NULL,
+      payload_hash char(64) NOT NULL,
+      status varchar(20) NOT NULL DEFAULT 'pending',
+      attempt_count integer NOT NULL DEFAULT 0,
+      result_reference varchar(500),
+      lease_owner varchar(200),
+      lease_token uuid,
+      lease_expires_at timestamptz,
+      next_attempt_at timestamptz,
+      last_attempt_at timestamptz,
+      applied_at timestamptz,
+      last_error_code varchar(160),
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT uq_external_projection_idempotency
+        UNIQUE (projection_name, idempotency_key),
+      CONSTRAINT ck_external_projection_status
+        CHECK (status IN ('pending', 'processing', 'retry_wait', 'uncertain', 'blocked', 'applied')),
+      CONSTRAINT ck_external_projection_attempts CHECK (attempt_count >= 0),
+      CONSTRAINT ck_external_projection_payload_hash
+        CHECK (payload_hash ~ '^[0-9a-f]{64}$'),
+      CONSTRAINT ck_external_projection_payload_size
+        CHECK (octet_length(payload::text) <= 524288),
+      CONSTRAINT ck_external_projection_lease
+        CHECK (
+          (status = 'processing' AND lease_owner IS NOT NULL AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL)
+          OR
+          (status <> 'processing' AND lease_owner IS NULL AND lease_token IS NULL AND lease_expires_at IS NULL)
+        ),
+      CONSTRAINT ck_external_projection_retry_time
+        CHECK (
+          (status IN ('retry_wait', 'uncertain') AND next_attempt_at IS NOT NULL)
+          OR
+          (status NOT IN ('retry_wait', 'uncertain') AND next_attempt_at IS NULL)
+        ),
+      CONSTRAINT ck_external_projection_applied_time
+        CHECK (
+          (status = 'applied' AND applied_at IS NOT NULL)
+          OR
+          (status <> 'applied' AND applied_at IS NULL)
+        ),
+      CONSTRAINT ck_external_projection_error
+        CHECK (
+          (status IN ('retry_wait', 'uncertain', 'blocked') AND last_error_code IS NOT NULL)
+          OR
+          (status NOT IN ('retry_wait', 'uncertain', 'blocked') AND last_error_code IS NULL)
+        )
+    )`);
+    await queryRunner.query(`CREATE INDEX ix_external_projection_dispatch
+      ON external_projection_operations (status, next_attempt_at, lease_expires_at, created_at)`);
+    await queryRunner.query(`CREATE INDEX ix_external_projection_target
+      ON external_projection_operations (projection_name, target_key, created_at)`);
+  }
+
+  async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query('DROP TABLE external_projection_operations');
+  }
+}

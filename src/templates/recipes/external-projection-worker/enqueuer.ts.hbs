@@ -1,0 +1,143 @@
+import { randomUUID } from 'node:crypto';
+import { Injectable } from '@nestjs/common';
+import type { EntityManager } from 'typeorm';
+import { canonicalizeExternalProjectionJson } from './canonical-json';
+import {
+  EnqueuedExternalProjection,
+  ExternalProjectionIdempotencyConflictError,
+  ExternalProjectionIntent,
+  ExternalProjectionOperation,
+  ExternalProjectionStatus,
+} from './external-projection-worker.types';
+
+type DatabaseDate = Date | string | null;
+
+interface OperationRow {
+  id: string;
+  projection_name: string;
+  target_key: string;
+  operation_kind: string;
+  idempotency_key: string;
+  payload: unknown;
+  payload_hash: string;
+  status: ExternalProjectionStatus;
+  attempt_count: number | string;
+  result_reference: string | null;
+  next_attempt_at: DatabaseDate;
+  last_attempt_at: DatabaseDate;
+  applied_at: DatabaseDate;
+  last_error_code: string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+function requiredIdentifier(value: string, name: string, maximum: number): string {
+  const normalized = value.trim();
+  if (
+    normalized.length < 1 ||
+    normalized.length > maximum ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(normalized)
+  ) {
+    throw new Error(`External projection ${name} is invalid`);
+  }
+  return normalized;
+}
+
+function requiredTargetKey(value: string): string {
+  const normalized = value.trim();
+  if (
+    normalized.length < 1 ||
+    normalized.length > 500 ||
+    /[\u0000-\u001f\u007f]/.test(normalized)
+  ) {
+    throw new Error('External projection target key is invalid');
+  }
+  return normalized;
+}
+
+function rowsFromQuery<T>(result: unknown): T[] {
+  if (!Array.isArray(result)) return [];
+  return Array.isArray(result[0]) ? (result[0] as T[]) : (result as T[]);
+}
+
+function optionalDate(value: Date | string | null): Date | undefined {
+  return value === null ? undefined : new Date(value);
+}
+
+function operationFromRow(row: OperationRow): ExternalProjectionOperation {
+  const payload = canonicalizeExternalProjectionJson(row.payload).value;
+  return {
+    id: row.id,
+    projectionName: row.projection_name,
+    targetKey: row.target_key,
+    operationKind: row.operation_kind,
+    idempotencyKey: row.idempotency_key,
+    payload,
+    payloadHash: row.payload_hash,
+    status: row.status,
+    attemptCount: Number(row.attempt_count),
+    resultReference: row.result_reference ?? undefined,
+    nextAttemptAt: optionalDate(row.next_attempt_at),
+    lastAttemptAt: optionalDate(row.last_attempt_at),
+    appliedAt: optionalDate(row.applied_at),
+    lastErrorCode: row.last_error_code ?? undefined,
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+  };
+}
+
+@Injectable()
+export class ExternalProjectionEnqueuer {
+  async enqueue(
+    manager: EntityManager,
+    input: ExternalProjectionIntent,
+  ): Promise<EnqueuedExternalProjection> {
+    if (!manager || typeof manager.query !== 'function') {
+      throw new Error('External projection enqueue requires the owning EntityManager');
+    }
+    const projectionName = requiredIdentifier(input.projectionName, 'name', 120);
+    const targetKey = requiredTargetKey(input.targetKey);
+    const operationKind = requiredIdentifier(input.operationKind, 'operation kind', 120);
+    const idempotencyKey = requiredIdentifier(input.idempotencyKey, 'idempotency key', 200);
+    const payload = canonicalizeExternalProjectionJson(input.payload);
+    const envelope = canonicalizeExternalProjectionJson({
+      operationKind,
+      payload: payload.value,
+      projectionName,
+      targetKey,
+    });
+    const inserted = rowsFromQuery<OperationRow>(
+      await manager.query(
+        `INSERT INTO external_projection_operations (
+          id, projection_name, target_key, operation_kind, idempotency_key, payload, payload_hash
+        ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+        ON CONFLICT (projection_name, idempotency_key) DO NOTHING
+        RETURNING *`,
+        [
+          randomUUID(),
+          projectionName,
+          targetKey,
+          operationKind,
+          idempotencyKey,
+          payload.text,
+          envelope.sha256,
+        ],
+      ),
+    );
+    const created = inserted[0];
+    if (created) return { operation: operationFromRow(created), created: true };
+
+    const existing = rowsFromQuery<OperationRow>(
+      await manager.query(
+        `SELECT * FROM external_projection_operations
+         WHERE projection_name = $1 AND idempotency_key = $2`,
+        [projectionName, idempotencyKey],
+      ),
+    )[0];
+    if (!existing) throw new Error('External projection idempotency lookup failed');
+    if (existing.payload_hash !== envelope.sha256) {
+      throw new ExternalProjectionIdempotencyConflictError();
+    }
+    return { operation: operationFromRow(existing), created: false };
+  }
+}

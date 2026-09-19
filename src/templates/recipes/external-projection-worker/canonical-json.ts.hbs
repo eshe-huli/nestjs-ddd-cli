@@ -1,0 +1,123 @@
+import { createHash } from 'node:crypto';
+import type { ExternalProjectionJsonValue } from './external-projection-worker.types';
+
+export const EXTERNAL_PROJECTION_MAX_JSON_BYTES = 262_144;
+const MAX_DEPTH = 32;
+const MAX_NODES = 10_000;
+
+export interface CanonicalExternalProjectionJson {
+  value: ExternalProjectionJsonValue;
+  text: string;
+  sha256: string;
+}
+
+interface CanonicalizationState {
+  nodes: number;
+  stack: WeakSet<object>;
+}
+
+interface CanonicalNode {
+  value: ExternalProjectionJsonValue;
+  text: string;
+}
+
+function canonicalNumber(value: number): CanonicalNode {
+  if (!Number.isFinite(value)) {
+    throw new TypeError('External projection JSON requires finite numbers');
+  }
+  const normalized = Object.is(value, -0) ? 0 : value;
+  return { value: normalized, text: JSON.stringify(normalized) };
+}
+
+function canonicalArray(
+  value: unknown[],
+  depth: number,
+  state: CanonicalizationState,
+): CanonicalNode {
+  const children: CanonicalNode[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.hasOwn(value, index)) {
+      throw new TypeError('External projection JSON cannot contain sparse arrays');
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor?.enumerable || !('value' in descriptor)) {
+      throw new TypeError('External projection JSON arrays require enumerable data elements');
+    }
+    children.push(canonicalNode(descriptor.value, depth + 1, state));
+  }
+  return {
+    value: children.map((child) => child.value),
+    text: `[${children.map((child) => child.text).join(',')}]`,
+  };
+}
+
+function canonicalObject(
+  value: object,
+  depth: number,
+  state: CanonicalizationState,
+): CanonicalNode {
+  const prototype = Object.getPrototypeOf(value) as object | null;
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError('External projection JSON requires plain objects');
+  }
+  const properties = Reflect.ownKeys(value);
+  if (properties.some((key) => typeof key !== 'string')) {
+    throw new TypeError('External projection JSON cannot contain symbol keys');
+  }
+  const keys = (properties as string[]).sort((left, right) => {
+    if (left < right) return -1;
+    if (left > right) return 1;
+    return 0;
+  });
+  const output: Record<string, ExternalProjectionJsonValue> = {};
+  const entries: string[] = [];
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor?.enumerable || !('value' in descriptor)) {
+      throw new TypeError('External projection JSON requires enumerable data properties');
+    }
+    const child = canonicalNode(descriptor.value, depth + 1, state);
+    output[key] = child.value;
+    entries.push(`${JSON.stringify(key)}:${child.text}`);
+  }
+  return { value: output, text: `{${entries.join(',')}}` };
+}
+
+function canonicalNode(value: unknown, depth: number, state: CanonicalizationState): CanonicalNode {
+  if (depth > MAX_DEPTH || ++state.nodes > MAX_NODES) {
+    throw new Error('External projection JSON exceeds structural limits');
+  }
+  if (value === null) return { value: null, text: 'null' };
+  if (typeof value === 'boolean') return { value, text: value ? 'true' : 'false' };
+  if (typeof value === 'string') return { value, text: JSON.stringify(value) };
+  if (typeof value === 'number') return canonicalNumber(value);
+  if (typeof value !== 'object') {
+    throw new TypeError('External projection payload must contain only JSON values');
+  }
+  if (state.stack.has(value)) throw new Error('External projection JSON cannot contain cycles');
+  state.stack.add(value);
+  try {
+    return Array.isArray(value)
+      ? canonicalArray(value, depth, state)
+      : canonicalObject(value, depth, state);
+  } finally {
+    state.stack.delete(value);
+  }
+}
+
+export function canonicalizeExternalProjectionJson(
+  value: unknown,
+  maxBytes = EXTERNAL_PROJECTION_MAX_JSON_BYTES,
+): CanonicalExternalProjectionJson {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 1_048_576) {
+    throw new Error('External projection JSON byte limit is invalid');
+  }
+  const canonical = canonicalNode(value, 0, { nodes: 0, stack: new WeakSet<object>() });
+  if (Buffer.byteLength(canonical.text, 'utf8') > maxBytes) {
+    throw new Error('External projection JSON exceeds its byte limit');
+  }
+  return {
+    ...canonical,
+    sha256: createHash('sha256').update(canonical.text).digest('hex'),
+  };
+}

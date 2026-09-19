@@ -174,6 +174,7 @@ ddd recipe auth-jwt --install-deps
 ddd recipe event-backbone --install-deps
 ddd recipe oidc-dashboard --install-deps
 ddd recipe platform-service-access-request-context
+ddd recipe external-projection-worker --migration-timestamp 1790000000000 --install-deps
 ```
 
 | Recipe | Description |
@@ -189,6 +190,7 @@ ddd recipe platform-service-access-request-context
 | `platform-service-access-request-context` | Fail-closed Service Access lease introspection before route-specific PARC authorization |
 | `banklink-connector-contract` | BankLink NestJS control-plane and Go sidecar connector boundary contract |
 | `oidc-dashboard` | OIDC broker integration for internal dashboards and admin APIs |
+| `external-projection-worker` | Postgres-backed external projection intents with atomic enqueue, canonical idempotency, fenced leases, and bounded retry outcomes |
 
 ## Generated Structure
 
