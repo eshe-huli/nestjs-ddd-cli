@@ -3323,7 +3323,7 @@ export class LoggingModule {}
   const requestContextContent = `import { Injectable, NestMiddleware } from "@nestjs/common";
 import { Request, Response, NextFunction } from "express";
 import { randomUUID } from "node:crypto";
-import { AsyncLocalStorage } from "async_hooks";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 export interface RequestContext {
   requestId: string;
@@ -3335,11 +3335,19 @@ export interface RequestContext {
 
 export const requestContextStorage = new AsyncLocalStorage<RequestContext>();
 
+interface AuthenticatedRequest extends Request {
+  user?: { id?: unknown };
+}
+
 @Injectable()
 export class RequestContextMiddleware implements NestMiddleware {
   use(req: Request, res: Response, next: NextFunction) {
     const requestId = (req.headers["x-request-id"] as string) || randomUUID();
-    const userId = (req as any).user?.id;
+    const candidateUserId = (req as AuthenticatedRequest).user?.id;
+    const userId =
+      typeof candidateUserId === "string" && candidateUserId.trim()
+        ? candidateUserId
+        : undefined;
 
     const context: RequestContext = {
       requestId,

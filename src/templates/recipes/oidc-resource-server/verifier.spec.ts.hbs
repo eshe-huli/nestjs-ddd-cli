@@ -59,13 +59,15 @@ describe('OidcAccessTokenVerifier', () => {
   beforeEach(() => {
     publishedKeys = [trustedJwk];
     requests = 0;
-    globalThis.fetch = async (input) => {
+    globalThis.fetch = (input) => {
       expect(String(input)).toBe(options.jwksUri);
       requests += 1;
-      return new Response(JSON.stringify({ keys: publishedKeys }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
+      return Promise.resolve(
+        new Response(JSON.stringify({ keys: publishedKeys }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
     };
   });
 
@@ -171,9 +173,9 @@ describe('OidcAccessTokenVerifier', () => {
   });
 
   it('fails closed and rate-limits repeated JWKS outage retries', async () => {
-    globalThis.fetch = async () => {
+    globalThis.fetch = () => {
       requests += 1;
-      throw new Error('offline with upstream details');
+      return Promise.reject(new Error('offline with upstream details'));
     };
     const verifier = new OidcAccessTokenVerifier(options);
     const token = signedToken(claims(), trusted.privateKey);

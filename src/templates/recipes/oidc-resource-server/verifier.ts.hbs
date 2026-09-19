@@ -213,12 +213,12 @@ function importRsaVerificationKey(
 
 function audienceClaim(value: unknown): readonly string[] {
   if (typeof value === 'string' && value.length > 0) return [value];
+  const values: readonly unknown[] = Array.isArray(value) ? value : [];
   if (
-    Array.isArray(value) &&
-    value.length > 0 &&
-    value.every((audience) => typeof audience === 'string' && audience.length > 0)
+    values.length > 0 &&
+    values.every((audience) => typeof audience === 'string' && audience.length > 0)
   ) {
-    return value;
+    return values as readonly string[];
   }
   return [];
 }
