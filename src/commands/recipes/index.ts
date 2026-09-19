@@ -14,3 +14,4 @@ export * from './platform-service-access-request-context.recipe';
 export * from './platform-parc-authorization.recipe';
 export * from './banklink-connector-contract.recipe';
 export * from './oidc-dashboard.recipe';
+export * from './external-projection-worker.recipe';

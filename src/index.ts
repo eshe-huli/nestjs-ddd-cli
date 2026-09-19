@@ -318,6 +318,10 @@ program
     'Preview supported recipe output without writes or dependency installation',
     false,
   )
+  .option(
+    '--migration-timestamp <timestamp>',
+    'Explicit 13-digit migration timestamp required by recipes that emit migrations',
+  )
   .option('--install-deps', 'Install required dependencies', false)
   .action(async (recipeName, options) => {
     try {

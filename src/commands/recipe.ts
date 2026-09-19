@@ -22,11 +22,48 @@ import { applyPlatformParcAuthorizationRecipe } from './recipes/platform-parc-au
 import { applyBanklinkConnectorContractRecipe } from './recipes/banklink-connector-contract.recipe';
 import { applyOidcDashboardRecipe } from './recipes/oidc-dashboard.recipe';
 import { applyOidcResourceServerRecipe } from './recipes/oidc-resource-server.recipe';
+import { applyExternalProjectionWorkerRecipe } from './recipes/external-projection-worker.recipe';
 
 export interface RecipeOptions {
   path?: string;
   installDeps?: boolean;
   dryRun?: boolean;
+  migrationTimestamp?: string;
+}
+
+async function applyDryRunRecipe(
+  recipeName: string,
+  basePath: string,
+  options: RecipeOptions,
+): Promise<void> {
+  const handlers: Record<string, (() => Promise<void>) | undefined> = {
+    'external-projection-worker': () =>
+      applyExternalProjectionWorkerRecipe(basePath, {
+        dryRun: true,
+        migrationTimestamp: options.migrationTimestamp,
+      }),
+    'oidc-resource-server': () => applyOidcResourceServerRecipe(basePath, true),
+    'kafka-consumer': () => applyKafkaConsumerRecipe(basePath, true),
+  };
+  const handler = handlers[recipeName];
+  if (!handler) {
+    throw new Error(
+      'Dry-run is currently supported only by external-projection-worker, oidc-resource-server, and kafka-consumer',
+    );
+  }
+  await handler();
+}
+
+async function installRecipeDependencies(
+  basePath: string,
+  recipe: { dependencies: string[]; devDependencies: string[] },
+): Promise<void> {
+  if (recipe.dependencies.length === 0) return;
+  console.log(chalk.cyan('  Installing dependencies...'));
+  await installDependencies(basePath, recipe.dependencies);
+  if (recipe.devDependencies.length > 0) {
+    await installDependencies(basePath, recipe.devDependencies, true);
+  }
 }
 
 const AVAILABLE_RECIPES = {
@@ -35,6 +72,13 @@ const AVAILABLE_RECIPES = {
     description:
       'Node crypto RS256 verification with explicit JWKS, audience and authorized-client policy',
     dependencies: [],
+    devDependencies: [],
+  },
+  'external-projection-worker': {
+    name: 'External Projection Worker',
+    description:
+      'PostgreSQL projection intents with atomic enqueue, canonical idempotency and fenced leases',
+    dependencies: ['@nestjs/common', 'typeorm', 'pg'],
     devDependencies: [],
   },
   'auth-jwt': {
@@ -277,23 +321,17 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
   const basePath = options.path || process.cwd();
 
   if (options.dryRun) {
-    if (recipeName === 'oidc-resource-server') {
-      await applyOidcResourceServerRecipe(basePath, true);
-      return;
-    }
-    if (recipeName !== 'kafka-consumer')
-      throw new Error('Dry-run is currently supported only by kafka-consumer');
-    await applyKafkaConsumerRecipe(basePath, true);
+    await applyDryRunRecipe(recipeName, basePath, options);
     return;
   }
 
-  // Install dependencies if requested
-  if (options.installDeps && recipe.dependencies.length > 0) {
-    console.log(chalk.cyan('  Installing dependencies...'));
-    await installDependencies(basePath, recipe.dependencies);
-    if (recipe.devDependencies.length > 0) {
-      await installDependencies(basePath, recipe.devDependencies, true);
-    }
+  const installAfterExternalPreflight =
+    recipeName === 'external-projection-worker' && options.installDeps
+      ? () => installRecipeDependencies(basePath, recipe)
+      : undefined;
+
+  if (options.installDeps && !installAfterExternalPreflight) {
+    await installRecipeDependencies(basePath, recipe);
   }
 
   const handlers = {
@@ -329,6 +367,11 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
     'banklink-connector-contract': applyBanklinkConnectorContractRecipe,
     'oidc-dashboard': applyOidcDashboardRecipe,
     'oidc-resource-server': applyOidcResourceServerRecipe,
+    'external-projection-worker': (target: string) =>
+      applyExternalProjectionWorkerRecipe(target, {
+        migrationTimestamp: options.migrationTimestamp,
+        beforeWrite: installAfterExternalPreflight,
+      }),
   } satisfies Record<keyof typeof AVAILABLE_RECIPES, (target: string) => Promise<void>>;
   await handlers[recipeName as keyof typeof handlers](basePath);
 

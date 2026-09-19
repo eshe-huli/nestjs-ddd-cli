@@ -1,0 +1,134 @@
+export type ExternalProjectionJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | ExternalProjectionJsonValue[]
+  | { [key: string]: ExternalProjectionJsonValue };
+
+export type ExternalProjectionStatus =
+  | 'pending'
+  | 'processing'
+  | 'retry_wait'
+  | 'uncertain'
+  | 'blocked'
+  | 'applied';
+
+export interface ExternalProjectionIntent {
+  projectionName: string;
+  targetKey: string;
+  operationKind: string;
+  idempotencyKey: string;
+  payload: unknown;
+}
+
+export interface ExternalProjectionOperation {
+  id: string;
+  projectionName: string;
+  targetKey: string;
+  operationKind: string;
+  idempotencyKey: string;
+  payload: ExternalProjectionJsonValue;
+  payloadHash: string;
+  status: ExternalProjectionStatus;
+  attemptCount: number;
+  resultReference?: string;
+  nextAttemptAt?: Date;
+  lastAttemptAt?: Date;
+  appliedAt?: Date;
+  lastErrorCode?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface EnqueuedExternalProjection {
+  operation: ExternalProjectionOperation;
+  created: boolean;
+}
+
+interface ClaimedExternalProjectionBase extends ExternalProjectionOperation {
+  status: 'processing';
+  leaseOwner: string;
+  leaseToken: string;
+  leaseExpiresAt: Date;
+}
+
+export type ClaimedExternalProjection =
+  | (ClaimedExternalProjectionBase & {
+      claimReason: 'fresh';
+      previousStatus: 'pending';
+      previousErrorCode?: never;
+      reconciliationRequired: false;
+    })
+  | (ClaimedExternalProjectionBase & {
+      claimReason: 'retry';
+      previousStatus: 'retry_wait';
+      previousErrorCode: string;
+      reconciliationRequired: false;
+    })
+  | (ClaimedExternalProjectionBase & {
+      claimReason: 'uncertain_recovery';
+      previousStatus: 'uncertain';
+      previousErrorCode: string;
+      reconciliationRequired: true;
+    })
+  | (ClaimedExternalProjectionBase & {
+      claimReason: 'expired_lease_recovery';
+      previousStatus: 'processing';
+      previousErrorCode?: string;
+      reconciliationRequired: true;
+    });
+
+export type FreshExternalProjection = Extract<
+  ClaimedExternalProjection,
+  { reconciliationRequired: false }
+>;
+
+export type RecoveryExternalProjection = Extract<
+  ClaimedExternalProjection,
+  { reconciliationRequired: true }
+>;
+
+export type ExternalProjectionFailureDisposition = 'retry_wait' | 'uncertain' | 'blocked';
+
+export type ExternalProjectionExecutionResult =
+  | { disposition: 'applied'; resultReference?: string }
+  | {
+      disposition: ExternalProjectionFailureDisposition;
+      errorCode: string;
+      retryAfterMs?: number;
+    };
+
+export interface ExternalProjectionHandler {
+  execute(operation: FreshExternalProjection): Promise<ExternalProjectionExecutionResult>;
+  reconcile(operation: RecoveryExternalProjection): Promise<ExternalProjectionExecutionResult>;
+}
+
+export interface ExternalProjectionWorkerOptions {
+  projectionName: string;
+  enabled: boolean;
+  pollIntervalMs: number;
+  batchSize: number;
+  leaseSeconds: number;
+  maxAttempts: number;
+  retryBaseMs: number;
+  retryMaxMs: number;
+}
+
+export class ExternalProjectionIdempotencyConflictError extends Error {
+  constructor() {
+    super('External projection idempotency key was reused with different content');
+    this.name = 'ExternalProjectionIdempotencyConflictError';
+  }
+}
+
+export class ExternalProjectionDispositionError extends Error {
+  constructor(
+    public readonly disposition: ExternalProjectionFailureDisposition,
+    public readonly code: string,
+    public readonly retryAfterMs?: number,
+  ) {
+    super(code);
+    this.name = 'ExternalProjectionDispositionError';
+  }
+}

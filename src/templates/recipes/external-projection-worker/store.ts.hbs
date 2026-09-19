@@ -1,0 +1,354 @@
+import { randomUUID } from 'node:crypto';
+import { Inject, Injectable } from '@nestjs/common';
+import { DataSource } from 'typeorm';
+import { canonicalizeExternalProjectionJson } from './canonical-json';
+import {
+  ClaimedExternalProjection,
+  ExternalProjectionFailureDisposition,
+  ExternalProjectionJsonValue,
+} from './external-projection-worker.types';
+
+type DatabaseDate = Date | string | null;
+
+interface ClaimedOperationRow {
+  id: string;
+  projection_name: string;
+  target_key: string;
+  operation_kind: string;
+  idempotency_key: string;
+  payload: unknown;
+  payload_hash: string;
+  status: 'processing';
+  attempt_count: number | string;
+  result_reference: string | null;
+  next_attempt_at: DatabaseDate;
+  last_attempt_at: DatabaseDate;
+  applied_at: DatabaseDate;
+  last_error_code: string | null;
+  lease_owner: string;
+  lease_token: string;
+  lease_expires_at: Date | string;
+  created_at: Date | string;
+  updated_at: Date | string;
+  previous_status: 'pending' | 'processing' | 'retry_wait' | 'uncertain';
+  previous_error_code: string | null;
+  claim_reason: 'fresh' | 'retry' | 'uncertain_recovery' | 'expired_lease_recovery';
+}
+
+export interface ExternalProjectionFailureCompletion {
+  disposition: ExternalProjectionFailureDisposition;
+  errorCode: string;
+  nextAttemptAt?: Date;
+}
+
+function rowsFromQuery<T>(result: unknown): T[] {
+  if (!Array.isArray(result)) return [];
+  return Array.isArray(result[0]) ? (result[0] as T[]) : (result as T[]);
+}
+
+function optionalDate(value: Date | string | null): Date | undefined {
+  return value === null ? undefined : new Date(value);
+}
+
+function claimedFromRow(row: ClaimedOperationRow): ClaimedExternalProjection {
+  const payload: ExternalProjectionJsonValue = canonicalizeExternalProjectionJson(
+    row.payload,
+  ).value;
+  const operation = {
+    id: row.id,
+    projectionName: row.projection_name,
+    targetKey: row.target_key,
+    operationKind: row.operation_kind,
+    idempotencyKey: row.idempotency_key,
+    payload,
+    payloadHash: row.payload_hash,
+    status: 'processing' as const,
+    attemptCount: Number(row.attempt_count),
+    resultReference: row.result_reference ?? undefined,
+    nextAttemptAt: optionalDate(row.next_attempt_at),
+    lastAttemptAt: optionalDate(row.last_attempt_at),
+    appliedAt: optionalDate(row.applied_at),
+    lastErrorCode: row.last_error_code ?? undefined,
+    leaseOwner: row.lease_owner,
+    leaseToken: row.lease_token,
+    leaseExpiresAt: new Date(row.lease_expires_at),
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+  };
+  if (row.claim_reason === 'fresh' && row.previous_status === 'pending') {
+    return {
+      ...operation,
+      claimReason: 'fresh',
+      previousStatus: 'pending',
+      reconciliationRequired: false,
+    };
+  }
+  if (
+    row.claim_reason === 'retry' &&
+    row.previous_status === 'retry_wait' &&
+    row.previous_error_code
+  ) {
+    return {
+      ...operation,
+      claimReason: 'retry',
+      previousStatus: 'retry_wait',
+      previousErrorCode: row.previous_error_code,
+      reconciliationRequired: false,
+    };
+  }
+  if (
+    row.claim_reason === 'uncertain_recovery' &&
+    row.previous_status === 'uncertain' &&
+    row.previous_error_code
+  ) {
+    return {
+      ...operation,
+      claimReason: 'uncertain_recovery',
+      previousStatus: 'uncertain',
+      previousErrorCode: row.previous_error_code,
+      reconciliationRequired: true,
+    };
+  }
+  if (row.claim_reason === 'expired_lease_recovery' && row.previous_status === 'processing') {
+    return {
+      ...operation,
+      claimReason: 'expired_lease_recovery',
+      previousStatus: 'processing',
+      previousErrorCode: row.previous_error_code ?? undefined,
+      reconciliationRequired: true,
+    };
+  }
+  throw new Error('External projection claim provenance is inconsistent');
+}
+
+function validProjectionName(value: string): string {
+  const normalized = value.trim();
+  if (
+    normalized.length < 1 ||
+    normalized.length > 120 ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(normalized)
+  ) {
+    throw new Error('External projection name is invalid');
+  }
+  return normalized;
+}
+
+function validWorkerId(value: string): string {
+  const normalized = value.trim();
+  if (
+    normalized.length < 1 ||
+    normalized.length > 200 ||
+    /[\u0000-\u001f\u007f]/.test(normalized)
+  ) {
+    throw new Error('External projection worker id is invalid');
+  }
+  return normalized;
+}
+
+function validLeaseSeconds(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 3 || value > 3600) {
+    throw new Error('External projection lease must be between 3 and 3600 seconds');
+  }
+  return value;
+}
+
+function validMaxAttempts(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 100) {
+    throw new Error('External projection max attempts must be between 1 and 100');
+  }
+  return value;
+}
+
+function validErrorCode(value: string): string {
+  if (!/^[A-Z][A-Z0-9_]{0,159}$/.test(value)) {
+    throw new Error('External projection error code is invalid');
+  }
+  return value;
+}
+
+@Injectable()
+export class ExternalProjectionStore {
+  constructor(@Inject(DataSource) private readonly dataSource: DataSource) {}
+
+  async claimNext(
+    projectionName: string,
+    workerId: string,
+    leaseSeconds: number,
+    maxAttempts: number,
+  ): Promise<ClaimedExternalProjection | null> {
+    const projection = validProjectionName(projectionName);
+    const leaseOwner = validWorkerId(workerId);
+    const boundedLease = validLeaseSeconds(leaseSeconds);
+    const boundedAttempts = validMaxAttempts(maxAttempts);
+    const leaseToken = randomUUID();
+    return this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `UPDATE external_projection_operations
+         SET status = 'blocked',
+             lease_owner = NULL,
+             lease_token = NULL,
+             lease_expires_at = NULL,
+             next_attempt_at = NULL,
+             last_error_code = 'MAX_ATTEMPTS_EXHAUSTED',
+             updated_at = now()
+         WHERE projection_name = $1
+           AND attempt_count >= $2
+           AND (
+             status IN ('pending', 'retry_wait', 'uncertain')
+             OR (status = 'processing' AND lease_expires_at <= now())
+           )
+           AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+           AND (lease_expires_at IS NULL OR lease_expires_at <= now())`,
+        [projection, boundedAttempts],
+      );
+      const rows = rowsFromQuery<ClaimedOperationRow>(
+        await manager.query(
+          `WITH candidate AS (
+            SELECT operation.id,
+                   operation.status AS previous_status,
+                   operation.last_error_code AS previous_error_code,
+                   CASE operation.status
+                     WHEN 'pending' THEN 'fresh'
+                     WHEN 'retry_wait' THEN 'retry'
+                     WHEN 'uncertain' THEN 'uncertain_recovery'
+                     WHEN 'processing' THEN 'expired_lease_recovery'
+                   END AS claim_reason
+            FROM external_projection_operations AS operation
+            WHERE (
+                operation.status IN ('pending', 'retry_wait', 'uncertain')
+                OR (operation.status = 'processing' AND operation.lease_expires_at <= now())
+              )
+              AND operation.projection_name = $1
+              AND operation.attempt_count < $5
+              AND (operation.next_attempt_at IS NULL OR operation.next_attempt_at <= now())
+              AND (operation.lease_expires_at IS NULL OR operation.lease_expires_at <= now())
+              AND NOT EXISTS (
+                SELECT 1
+                FROM external_projection_operations AS predecessor
+                WHERE predecessor.projection_name = operation.projection_name
+                  AND predecessor.target_key = operation.target_key
+                  AND predecessor.enqueue_sequence < operation.enqueue_sequence
+                  AND predecessor.status <> 'applied'
+              )
+            ORDER BY COALESCE(operation.next_attempt_at, operation.created_at),
+                     operation.enqueue_sequence
+            FOR UPDATE OF operation SKIP LOCKED
+            LIMIT 1
+          )
+          UPDATE external_projection_operations AS operation
+          SET status = 'processing',
+              attempt_count = operation.attempt_count + 1,
+              lease_owner = $2,
+              lease_token = $3,
+              lease_expires_at = now() + make_interval(secs => $4::int),
+              next_attempt_at = NULL,
+              last_attempt_at = now(),
+              last_error_code = NULL,
+              updated_at = now()
+          FROM candidate
+          WHERE operation.id = candidate.id
+          RETURNING operation.*,
+                    candidate.previous_status,
+                    candidate.previous_error_code,
+                    candidate.claim_reason`,
+          [projection, leaseOwner, leaseToken, boundedLease, boundedAttempts],
+        ),
+      );
+      return rows[0] ? claimedFromRow(rows[0]) : null;
+    });
+  }
+
+  async renewLease(operation: ClaimedExternalProjection, leaseSeconds: number): Promise<boolean> {
+    const boundedLease = validLeaseSeconds(leaseSeconds);
+    const rows = rowsFromQuery<{ id: string }>(
+      await this.dataSource.query(
+        `UPDATE external_projection_operations
+         SET lease_expires_at = now() + make_interval(secs => $4::int), updated_at = now()
+         WHERE id = $1
+           AND status = 'processing'
+           AND lease_owner = $2
+           AND lease_token = $3
+           AND lease_expires_at > now()
+         RETURNING id`,
+        [operation.id, operation.leaseOwner, operation.leaseToken, boundedLease],
+      ),
+    );
+    return rows.length === 1;
+  }
+
+  async markApplied(
+    operation: ClaimedExternalProjection,
+    resultReference?: string,
+  ): Promise<boolean> {
+    const reference = resultReference?.trim();
+    if (
+      resultReference !== undefined &&
+      (!reference || reference.length > 500 || /[\u0000-\u001f\u007f]/.test(reference))
+    ) {
+      throw new TypeError('External projection result reference is invalid');
+    }
+    const rows = rowsFromQuery<{ id: string }>(
+      await this.dataSource.query(
+        `UPDATE external_projection_operations
+         SET status = 'applied',
+             result_reference = $4,
+             applied_at = now(),
+             lease_owner = NULL,
+             lease_token = NULL,
+             lease_expires_at = NULL,
+             next_attempt_at = NULL,
+             last_error_code = NULL,
+             updated_at = now()
+         WHERE id = $1
+           AND status = 'processing'
+           AND lease_owner = $2
+           AND lease_token = $3
+           AND lease_expires_at > now()
+         RETURNING id`,
+        [operation.id, operation.leaseOwner, operation.leaseToken, reference ?? null],
+      ),
+    );
+    return rows.length === 1;
+  }
+
+  async markFailure(
+    operation: ClaimedExternalProjection,
+    completion: ExternalProjectionFailureCompletion,
+  ): Promise<boolean> {
+    const errorCode = validErrorCode(completion.errorCode);
+    const retrying = completion.disposition !== 'blocked';
+    if (retrying !== completion.nextAttemptAt instanceof Date) {
+      throw new TypeError('External projection retry outcomes require one next-attempt time');
+    }
+    if (completion.nextAttemptAt && !Number.isFinite(completion.nextAttemptAt.getTime())) {
+      throw new Error('External projection next-attempt time is invalid');
+    }
+    const rows = rowsFromQuery<{ id: string }>(
+      await this.dataSource.query(
+        `UPDATE external_projection_operations
+         SET status = $4,
+             lease_owner = NULL,
+             lease_token = NULL,
+             lease_expires_at = NULL,
+             next_attempt_at = $5,
+             last_error_code = $6,
+             updated_at = now()
+         WHERE id = $1
+           AND status = 'processing'
+           AND lease_owner = $2
+           AND lease_token = $3
+           AND lease_expires_at > now()
+         RETURNING id`,
+        [
+          operation.id,
+          operation.leaseOwner,
+          operation.leaseToken,
+          completion.disposition,
+          completion.nextAttemptAt ?? null,
+          errorCode,
+        ],
+      ),
+    );
+    return rows.length === 1;
+  }
+}
