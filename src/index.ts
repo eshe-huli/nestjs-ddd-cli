@@ -267,6 +267,8 @@ program
   .option('-p, --path <path>', 'Path where the project will be created')
   .option('--skip-install', 'Skip dependency installation')
   .option('--skip-update', 'Skip CLI update check')
+  .option('--package-manager <manager>', 'Initialization package manager (npm or bun)', 'npm')
+  .option('--collection <collection>', 'Existing Nest schematic collection module or path')
   .option('--with-ddd', 'Set up DDD folder structure and install required dependencies', true)
   .action(async (projectName, options) => {
     try {

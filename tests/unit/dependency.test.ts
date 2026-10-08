@@ -34,4 +34,24 @@ describe('Dependency Utils', () => {
     expect(execution.args).not.toContain('/tmp/ddd-projects/joona-pay-cli-smoke');
     expect(execution.args).toContain('--skip-install');
   });
+
+  it('uses an explicit Bun package manager without changing the existing default', () => {
+    expect(
+      getNestProjectExecution('sample', { packageManager: 'bun', skipInstall: true }).args,
+    ).toEqual(['new', 'sample', '--skip-git', '--package-manager', 'bun', '--skip-install']);
+    expect(getNestProjectExecution('sample').args).toEqual([
+      'new',
+      'sample',
+      '--skip-git',
+      '--package-manager',
+      'npm',
+    ]);
+  });
+
+  it('forwards an explicit existing collection without changing the default selection', () => {
+    expect(
+      getNestProjectExecution('sample', { collection: '/tmp/approved/schematics' }).args,
+    ).toContain('/tmp/approved/schematics');
+    expect(getNestProjectExecution('sample').args).not.toContain('--collection');
+  });
 });
