@@ -1,0 +1,343 @@
+export interface BoundedJsonHttpOptions {
+  /** Exact origin from validated deployment configuration; no path or request data. */
+  origin: string;
+  requestHeaders?: Readonly<Record<string, string>>;
+  timeoutMs?: number;
+  maxResponseBytes?: number;
+  trustedInternalHttp?: boolean;
+  transport?: (url: string, init: RequestInit) => Promise<Response>;
+}
+
+export class BoundedJsonHttpUnavailableError extends Error {
+  constructor(
+    readonly reason: 'timeout' | 'network' | 'http' | 'invalid_response',
+    readonly status?: number,
+  ) {
+    super('Provider validation unavailable');
+    this.name = 'BoundedJsonHttpUnavailableError';
+  }
+}
+
+function bounded(
+  value: number | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const result = value ?? fallback;
+  if (!Number.isSafeInteger(result) || result < min || result > max)
+    throw new Error();
+  return result;
+}
+
+function freeze(value: unknown, depth = 0): void {
+  if (depth > 32) throw new BoundedJsonHttpUnavailableError('invalid_response');
+  if (value !== null && typeof value === 'object') {
+    for (const child of Object.values(value)) freeze(child, depth + 1);
+    Object.freeze(value);
+  }
+}
+
+function hasControls(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.charCodeAt(0);
+    return code < 32 || code === 127;
+  });
+}
+
+function pathSegments(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= 32 &&
+    value.every(
+      (segment: unknown) =>
+        typeof segment === 'string' &&
+        segment.length <= 1024 &&
+        !['.', '..'].includes(segment) &&
+        !hasControls(segment),
+    )
+  );
+}
+
+/** Minimal JSON transport. It neither authenticates a person nor grants permissions. */
+export class BoundedJsonHttpClient {
+  private readonly origin: string;
+  readonly #headers: Readonly<Record<string, string>>;
+  private readonly timeoutMs: number;
+  private readonly maxResponseBytes: number;
+  private readonly transport: (
+    url: string,
+    init: RequestInit,
+  ) => Promise<Response>;
+
+  constructor(options: BoundedJsonHttpOptions) {
+    try {
+      const url = new URL(options.origin);
+      if (
+        url.username ||
+        url.password ||
+        url.hash ||
+        url.search ||
+        url.pathname !== '/' ||
+        (url.protocol !== 'https:' &&
+          !(url.protocol === 'http:' && options.trustedInternalHttp === true))
+      )
+        throw new Error();
+      this.origin = url.origin;
+      const headers = new Headers({ accept: 'application/json' });
+      for (const [key, value] of Object.entries(options.requestHeaders ?? {})) {
+        if (['accept', 'content-type'].includes(key.toLowerCase()))
+          throw new Error();
+        headers.set(key, value);
+      }
+      this.#headers = Object.freeze(Object.fromEntries(headers.entries()));
+      this.timeoutMs = bounded(options.timeoutMs, 3000, 10, 30000);
+      this.maxResponseBytes = bounded(
+        options.maxResponseBytes,
+        65536,
+        128,
+        1048576,
+      );
+      this.transport = options.transport ?? ((url, init) => fetch(url, init));
+    } catch {
+      throw new Error('Invalid provider HTTP configuration');
+    }
+  }
+
+  get(
+    pathSegments: readonly string[],
+    query: Readonly<Record<string, string>> = {},
+  ): Promise<unknown> {
+    return this.execute('GET', pathSegments, query);
+  }
+
+  postForm(
+    pathSegments: readonly string[],
+    form: Readonly<Record<string, string>>,
+  ): Promise<unknown> {
+    if (Object.values(form).some((value) => typeof value !== 'string'))
+      throw new Error('Invalid provider request configuration');
+    const body = new URLSearchParams(form).toString();
+    if (new TextEncoder().encode(body).byteLength > 262144)
+      throw new Error('Invalid provider request configuration');
+    return this.execute(
+      'POST',
+      pathSegments,
+      {},
+      body,
+      'application/x-www-form-urlencoded',
+    );
+  }
+
+  postJson(
+    pathSegments: readonly string[],
+    payload: unknown,
+  ): Promise<unknown> {
+    return this.json('POST', pathSegments, payload);
+  }
+
+  patchJson(
+    pathSegments: readonly string[],
+    payload: unknown,
+  ): Promise<unknown> {
+    return this.json('PATCH', pathSegments, payload);
+  }
+
+  putJson(
+    pathSegments: readonly string[],
+    payload: unknown,
+    query: Readonly<Record<string, string>> = {},
+  ): Promise<unknown> {
+    return this.json('PUT', pathSegments, payload, query);
+  }
+
+  private json(
+    method: 'POST' | 'PATCH' | 'PUT',
+    pathSegments: readonly string[],
+    payload: unknown,
+    query: Readonly<Record<string, string>> = {},
+  ): Promise<unknown> {
+    let nodes = 0;
+    const seen = new Set<object>();
+    const visit = (value: unknown, depth: number): void => {
+      if (++nodes > 10000 || depth > 32) throw new Error();
+      if (
+        value === null ||
+        typeof value === 'string' ||
+        typeof value === 'boolean'
+      )
+        return;
+      if (typeof value === 'number' && Number.isFinite(value)) return;
+      if (typeof value !== 'object' || !value || seen.has(value))
+        throw new Error();
+      seen.add(value);
+      if (Array.isArray(value)) {
+        if (Object.getPrototypeOf(value) !== Array.prototype) throw new Error();
+        for (let i = 0; i < value.length; i++) {
+          const descriptor = Object.getOwnPropertyDescriptor(value, String(i));
+          if (!descriptor || !('value' in descriptor)) throw new Error();
+          visit(descriptor.value, depth + 1);
+        }
+        if (Object.getOwnPropertyNames(value).length !== value.length + 1)
+          throw new Error();
+      } else {
+        const prototype: unknown = Object.getPrototypeOf(value);
+        if (prototype !== Object.prototype && prototype !== null)
+          throw new Error();
+        for (const descriptor of Object.values(
+          Object.getOwnPropertyDescriptors(value),
+        )) {
+          if (!descriptor.enumerable || !('value' in descriptor))
+            throw new Error();
+          visit(descriptor.value, depth + 1);
+        }
+      }
+      if (Object.getOwnPropertySymbols(value).length) throw new Error();
+      seen.delete(value);
+    };
+    try {
+      visit(payload, 0);
+      const body = JSON.stringify(payload);
+      if (new TextEncoder().encode(body).byteLength > 262144) throw new Error();
+      return this.execute(method, pathSegments, query, body, 'application/json');
+    } catch {
+      throw new Error('Invalid provider request configuration');
+    }
+  }
+
+  private async execute(
+    method: 'GET' | 'POST' | 'PATCH' | 'PUT',
+    segments: readonly string[],
+    query: Readonly<Record<string, string>>,
+    body?: string,
+    contentType?: string,
+  ): Promise<unknown> {
+    if (!pathSegments(segments)) {
+      throw new Error('Invalid provider request configuration');
+    }
+    const entries = Object.entries(query);
+    if (
+      entries.length > 32 ||
+      entries.some(
+        ([key, value]) =>
+          !key ||
+          key.length > 128 ||
+          typeof value !== 'string' ||
+          value.length > 2048 ||
+          hasControls(key + value),
+      )
+    ) {
+      throw new Error('Invalid provider request configuration');
+    }
+    let url: URL;
+    try {
+      url = new URL(
+        `${this.origin}/${segments.map((segment) => encodeURIComponent(segment)).join('/')}`,
+      );
+      for (const [key, value] of entries) url.searchParams.set(key, value);
+      if (url.origin !== this.origin || url.href.length > 8192)
+        throw new Error();
+    } catch {
+      throw new Error('Invalid provider request configuration');
+    }
+    const abort = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        abort.abort();
+        reject(new BoundedJsonHttpUnavailableError('timeout'));
+      }, this.timeoutMs);
+    });
+    try {
+      return await Promise.race([
+        this.request(url.href, method, body, abort.signal, contentType),
+        timeout,
+      ]);
+    } catch (error) {
+      if (error instanceof BoundedJsonHttpUnavailableError) throw error;
+      throw new BoundedJsonHttpUnavailableError('network');
+    } finally {
+      clearTimeout(timer);
+      abort.abort();
+    }
+  }
+
+  private async request(
+    url: string,
+    method: 'GET' | 'POST' | 'PATCH' | 'PUT',
+    body: string | undefined,
+    signal: AbortSignal,
+    contentType?: string,
+  ): Promise<unknown> {
+    const response = await this.transport(url, {
+      method,
+      body,
+      headers:
+        method !== 'GET'
+          ? {
+              ...this.#headers,
+              'content-type':
+                contentType ?? 'application/x-www-form-urlencoded',
+            }
+          : { ...this.#headers },
+      redirect: 'error',
+      cache: 'no-store',
+      signal,
+    });
+    if (!response.ok || response.redirected) {
+      void response.body?.cancel().catch(() => undefined);
+      throw new BoundedJsonHttpUnavailableError('http', response.status);
+    }
+    if (signal.aborted) {
+      void response.body?.cancel().catch(() => undefined);
+      throw new BoundedJsonHttpUnavailableError('timeout');
+    }
+    const length = response.headers.get('content-length');
+    if (
+      length !== null &&
+      (!/^\d+$/.test(length) || Number(length) > this.maxResponseBytes)
+    ) {
+      void response.body?.cancel().catch(() => undefined);
+      throw new BoundedJsonHttpUnavailableError('invalid_response');
+    }
+    if (!response.body)
+      throw new BoundedJsonHttpUnavailableError('invalid_response');
+    const reader = response.body.getReader();
+    const cancel = () => {
+      void reader.cancel().catch(() => undefined);
+    };
+    signal.addEventListener('abort', cancel, { once: true });
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > this.maxResponseBytes)
+          throw new BoundedJsonHttpUnavailableError('invalid_response');
+        chunks.push(value);
+      }
+      const bytes = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      try {
+        const parsed: unknown = JSON.parse(
+          new TextDecoder('utf-8', { fatal: true }).decode(bytes),
+        );
+        freeze(parsed);
+        return parsed;
+      } catch (error) {
+        if (error instanceof BoundedJsonHttpUnavailableError) throw error;
+        throw new BoundedJsonHttpUnavailableError('invalid_response');
+      }
+    } finally {
+      signal.removeEventListener('abort', cancel);
+      void reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
+  }
+}

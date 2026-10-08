@@ -1,0 +1,411 @@
+import {
+  BoundedJsonHttpClient,
+  BoundedJsonHttpOptions,
+  BoundedJsonHttpUnavailableError,
+} from './bounded-json-http.client';
+describe('Bounded provider JSON HTTP', () => {
+  const create = (options: Partial<BoundedJsonHttpOptions> = {}) =>
+    new BoundedJsonHttpClient({
+      origin: 'https://provider.example.test',
+      transport: () =>
+        Promise.resolve(new Response(JSON.stringify({ active: true }))),
+      ...options,
+    });
+  it('GETs encoded segments on the configured origin with no bearer/body and explicit query', async () => {
+    const transport = jest.fn((_url: string, _init: RequestInit) => {
+      void _url;
+      void _init;
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            id: 'uuid',
+            active: true,
+            expires_at: 'date',
+            identity: { id: 'identity-uuid' },
+          }),
+        ),
+      );
+    });
+    const client = create({ transport });
+    expect(
+      await client.get(
+        ['admin', 'sessions', 'uuid?redirect=https://evil.example/'],
+        {
+          expand: 'identity',
+        },
+      ),
+    ).toMatchObject({ id: 'uuid', active: true });
+    const requestCall = transport.mock.calls[0];
+    if (!requestCall) throw new Error('Missing request');
+    const [url, request] = requestCall;
+    expect(url).toBe(
+      'https://provider.example.test/admin/sessions/uuid%3Fredirect%3Dhttps%3A%2F%2Fevil.example%2F?expand=identity',
+    );
+    expect(request).toMatchObject({
+      method: 'GET',
+      redirect: 'error',
+      cache: 'no-store',
+    });
+    expect(request.body).toBeUndefined();
+    expect(request.headers).not.toHaveProperty('authorization');
+  });
+  it('snapshots trusted origin/headers and performs each GET again', async () => {
+    let calls = 0;
+    const requestHeaders = { authorization: 'PRIVATE_PROVIDER_HEADER' };
+    const options = {
+      origin: 'https://provider.example.test',
+      requestHeaders,
+      transport: jest.fn((_url: string, _init: RequestInit) => {
+        void _url;
+        void _init;
+        return Promise.resolve(
+          new Response(JSON.stringify({ calls: ++calls })),
+        );
+      }),
+    };
+    const client = create(options);
+    options.origin = 'https://evil.example';
+    requestHeaders.authorization = 'changed';
+    const first = await client.get(['admin', 'identities', 'uuid']);
+    const second = await client.get(['admin', 'identities', 'uuid']);
+    expect(first).toEqual({ calls: 1 });
+    expect(second).toEqual({ calls: 2 });
+    expect(options.transport.mock.calls).toHaveLength(2);
+    expect(options.transport.mock.calls[0]?.[0]).toBe(
+      'https://provider.example.test/admin/identities/uuid',
+    );
+    expect(options.transport.mock.calls[0]?.[1].headers).toMatchObject({
+      authorization: 'PRIVATE_PROVIDER_HEADER',
+    });
+  });
+  it.each([
+    'http://provider.example.test',
+    'https://user:SECRET@provider.example.test',
+    'https://provider.example.test/admin',
+    'https://provider.example.test?SECRET',
+    'https://provider.example.test/#SECRET',
+  ])('rejects unsafe origin %s without echoing config secrets', (origin) => {
+    expect(() => create({ origin })).toThrow(
+      'Invalid provider HTTP configuration',
+    );
+  });
+  it('permits only explicit trusted private HTTP and still encodes all dynamic segments', async () => {
+    await expect(
+      create({
+        origin: 'http://kratos-admin.ory-staging.svc.cluster.local:4434',
+        trustedInternalHttp: true,
+      }).get(['admin', 'sessions', 'uuid']),
+    ).resolves.toEqual({ active: true });
+  });
+  it.each([
+    { segments: ['..'] },
+    { segments: ['.'] },
+    { segments: ['admin', '\nSECRET'] },
+    { segments: Array.from({ length: 33 }, () => 'x') },
+  ])('rejects invalid paths before transport', async ({ segments }) => {
+    const transport = jest.fn(() => Promise.resolve(new Response('{}')));
+    await expect(create({ transport }).get(segments)).rejects.toThrow(
+      'Invalid provider request configuration',
+    );
+    expect(transport).not.toHaveBeenCalled();
+  });
+  it('preserves only safe HTTP status for consumer-owned missing/session/error policy', async () => {
+    for (const status of [401, 404, 503]) {
+      const error = await create({
+        transport: () =>
+          Promise.resolve(new Response('PRIVATE_PROVIDER_BODY', { status })),
+      })
+        .get(['admin', 'sessions', 'uuid'])
+        .catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(BoundedJsonHttpUnavailableError);
+      expect(error).toMatchObject({
+        reason: 'http',
+        status,
+        message: 'Provider validation unavailable',
+      });
+      expect(String(error)).not.toContain('PRIVATE');
+    }
+  });
+  it('bounds GET bytes, UTF8/JSON decoding and hanging response streams', async () => {
+    for (const transport of [
+      () => Promise.resolve(new Response('x'.repeat(129))),
+      () => Promise.resolve(new Response('PRIVATE_NOT_JSON')),
+      () => Promise.resolve(new Response(new Uint8Array([0xff]))),
+    ]) {
+      await expect(
+        create({ maxResponseBytes: 128, transport }).get(['admin']),
+      ).rejects.toMatchObject({ reason: 'invalid_response' });
+    }
+    await expect(
+      create({
+        timeoutMs: 10,
+        transport: () =>
+          Promise.resolve(new Response(new ReadableStream<Uint8Array>())),
+      }).get(['admin']),
+    ).rejects.toMatchObject({ reason: 'timeout' });
+  });
+  it('does not turn arbitrary JSON into a session or permission grant', async () => {
+    const result = await create({
+      transport: () =>
+        Promise.resolve(
+          new Response(JSON.stringify({ provider_extra: { editable: true } })),
+        ),
+    }).get(['resource']);
+    expect(result).toEqual({ provider_extra: { editable: true } });
+    expect(Object.isFrozen(result)).toBe(true);
+  });
+
+  it('POSTs bounded snapshotted JSON without changing form semantics or exposing headers', async () => {
+    const transport = jest.fn((_url: string, _init: RequestInit) => {
+      void _url;
+      void _init;
+      return Promise.resolve(new Response('{}'));
+    });
+    const client = create({
+      requestHeaders: { authorization: 'PRIVATE' },
+      transport,
+    });
+    const payload = { nested: { message: 'original' } };
+    const request = client.postJson(['messages'], payload);
+    payload.nested.message = 'changed';
+    await request;
+    await client.postForm(['token'], { grant_type: 'client_credentials' });
+    expect(transport.mock.calls[0]?.[1]).toMatchObject({
+      body: '{"nested":{"message":"original"}}',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(transport.mock.calls[1]?.[1]).toMatchObject({
+      body: 'grant_type=client_credentials',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    });
+    expect(JSON.stringify(client)).not.toContain('PRIVATE');
+  });
+
+  it('rejects invalid, cyclic, deep and oversized UTF8 JSON before any send', () => {
+    const transport = jest.fn(() => Promise.resolve(new Response('{}')));
+    const client = create({ transport });
+    const cyclic: { child?: unknown } = {};
+    cyclic.child = cyclic;
+    let deep: unknown = 'value';
+    for (let i = 0; i < 34; i++) deep = { child: deep };
+    const accessor = Object.defineProperty({}, 'secret', {
+      enumerable: true,
+      get: () => {
+        throw new Error('PRIVATE');
+      },
+    });
+    for (const payload of [
+      undefined,
+      NaN,
+      Infinity,
+      new Date(),
+      cyclic,
+      deep,
+      accessor,
+      { value: 'é'.repeat(140000) },
+      Array.from({ length: 10001 }, () => 1),
+      { toJSON: () => 'PRIVATE' },
+    ]) {
+      expect(() => client.postJson(['messages'], payload)).toThrow(
+        'Invalid provider request configuration',
+      );
+    }
+    expect(transport).not.toHaveBeenCalled();
+  });
+  it('PATCHes only one bounded JSON snapshot using the configured origin and headers', async () => {
+    const transport = jest.fn((_url: string, _init: RequestInit) => {
+      void _url;
+      void _init;
+      return Promise.resolve(new Response('{}'));
+    });
+    const client = create({
+      requestHeaders: { authorization: 'PRIVATE' },
+      transport,
+    });
+    const payload = { preferredName: 'original' };
+    const request = client.patchJson(['sessions', 'me', 'profile'], payload);
+    payload.preferredName = 'changed';
+    await request;
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(transport.mock.calls[0]?.[1]).toMatchObject({
+      method: 'PATCH',
+      body: '{"preferredName":"original"}',
+      redirect: 'error',
+      headers: { authorization: 'PRIVATE', 'content-type': 'application/json' },
+    });
+    expect(JSON.stringify(client)).not.toContain('PRIVATE');
+    expect(() => client.patchJson(['sessions'], undefined)).toThrow(
+      'Invalid provider request configuration',
+    );
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+  it('holds a failed PATCH without retry or raw provider response disclosure', async () => {
+    const transport = jest.fn(() =>
+      Promise.resolve(new Response('PRIVATE-PAYLOAD', { status: 503 })),
+    );
+    const client = create({ transport });
+    await expect(
+      client.patchJson(['sessions', 'me', 'profile'], {
+        preferredName: 'safe',
+      }),
+    ).rejects.toMatchObject({ reason: 'http', status: 503 });
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it('PUTs one immutable JSON decision with an encoded bounded challenge query', async () => {
+    const transport = jest.fn((_url: string, _init: RequestInit) => {
+      void _url;
+      void _init;
+      return Promise.resolve(
+        new Response('{"redirect_to":"https://provider.example.test/oauth2/auth"}'),
+      );
+    });
+    const requestHeaders = { authorization: 'PRIVATE' };
+    const options = { origin: 'https://provider.example.test', requestHeaders, transport };
+    const client = create(options);
+    options.origin = 'https://evil.example';
+    requestHeaders.authorization = 'changed';
+    const payload = { subject: 'identity', context: { session: 'original' } };
+    const query = { login_challenge: 'challenge&redirect=https://evil.example/#fragment' };
+    const request = client.putJson(
+      ['admin', 'oauth2', 'auth', 'requests', 'login', 'accept'],
+      payload,
+      query,
+    );
+    payload.context.session = 'changed';
+    query.login_challenge = 'changed';
+    const response = await request;
+    expect(response).toEqual({ redirect_to: 'https://provider.example.test/oauth2/auth' });
+    expect(Object.isFrozen(response)).toBe(true);
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(transport.mock.calls[0]?.[0]).toBe(
+      'https://provider.example.test/admin/oauth2/auth/requests/login/accept?login_challenge=challenge%26redirect%3Dhttps%3A%2F%2Fevil.example%2F%23fragment',
+    );
+    expect(transport.mock.calls[0]?.[1]).toMatchObject({
+      method: 'PUT',
+      body: '{"subject":"identity","context":{"session":"original"}}',
+      redirect: 'error',
+      cache: 'no-store',
+      headers: {
+        accept: 'application/json',
+        authorization: 'PRIVATE',
+        'content-type': 'application/json',
+      },
+    });
+    expect(transport.mock.calls[0]?.[1].signal?.aborted).toBe(true);
+    expect(JSON.stringify(client)).not.toContain('PRIVATE');
+    await client.putJson(['decisions'], { accepted: false });
+    expect(transport.mock.calls[1]?.[0]).toBe('https://provider.example.test/decisions');
+  });
+
+  it('rejects unsafe PUT paths and challenge queries before dispatch', async () => {
+    const transport = jest.fn(() => Promise.resolve(new Response('{}')));
+    const client = create({ transport });
+    const invalidRequests = [
+      { segments: ['..'], query: {} },
+      { segments: ['\nPRIVATE'], query: {} },
+      { segments: ['decision'], query: { '': 'value' } },
+      { segments: ['decision'], query: { challenge: '\nPRIVATE' } },
+      { segments: ['decision'], query: { challenge: 'x'.repeat(2049) } },
+      {
+        segments: ['decision'],
+        query: Object.fromEntries(
+          Array.from({ length: 33 }, (_, index) => [`key${index}`, 'value']),
+        ),
+      },
+    ];
+    for (const { segments, query } of invalidRequests) {
+      await expect(client.putJson(segments, { safe: true }, query)).rejects.toThrow(
+        'Invalid provider request configuration',
+      );
+    }
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsafe PUT JSON without invoking accessors or sending a partial decision', () => {
+    const transport = jest.fn(() => Promise.resolve(new Response('{}')));
+    const client = create({ transport });
+    const getter = jest.fn(() => 'PRIVATE');
+    const accessor = Object.defineProperty({}, 'secret', { enumerable: true, get: getter });
+    const cyclic: { child?: unknown } = {};
+    cyclic.child = cyclic;
+    let deep: unknown = 'value';
+    for (let i = 0; i < 34; i++) deep = { child: deep };
+    for (const payload of [
+      undefined,
+      NaN,
+      new Date(),
+      cyclic,
+      deep,
+      accessor,
+      { message: 'é'.repeat(140000) },
+    ]) {
+      expect(() => client.putJson(['decisions'], payload, { challenge: 'safe' })).toThrow(
+        'Invalid provider request configuration',
+      );
+    }
+    expect(getter).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it.each([401, 404, 410, 503])(
+    'holds failed PUT status %s without retry or provider disclosure',
+    async (status) => {
+      const transport = jest.fn(() => Promise.resolve(new Response('PRIVATE-BODY', { status })));
+      const error: unknown = await create({ transport })
+        .putJson(['decision'], { accepted: true })
+        .catch((error: unknown) => error);
+      expect(error).toMatchObject({
+        reason: 'http',
+        status,
+        message: 'Provider validation unavailable',
+      });
+      expect(String(error)).not.toContain('PRIVATE');
+      expect(transport).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('rejects PUT redirects and malformed or oversized response data without retries', async () => {
+    for (const response of [
+      new Response('PRIVATE', { status: 302, headers: { location: 'https://evil.example' } }),
+      new Response('PRIVATE-NOT-JSON'),
+      new Response(new Uint8Array([0xff])),
+      new Response('x'.repeat(129)),
+      new Response('{}', { headers: { 'content-length': '129' } }),
+    ]) {
+      const transport = jest.fn(() => Promise.resolve(response));
+      await expect(
+        create({ transport, maxResponseBytes: 128 }).putJson(['decision'], {}),
+      ).rejects.toBeInstanceOf(BoundedJsonHttpUnavailableError);
+      expect(transport).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('bounds the whole PUT transport and stream deadline even when the provider ignores abort', async () => {
+    for (const result of [
+      () => new Promise<Response>(() => undefined),
+      () => Promise.resolve(new Response(new ReadableStream<Uint8Array>())),
+    ]) {
+      const transport = jest.fn((_url: string, _init: RequestInit) => {
+        void _url;
+        void _init;
+        return result();
+      });
+      await expect(
+        create({ transport, timeoutMs: 10 }).putJson(['decision'], {}),
+      ).rejects.toMatchObject({ reason: 'timeout' });
+      expect(transport).toHaveBeenCalledTimes(1);
+      expect(transport.mock.calls[0]?.[1].signal?.aborted).toBe(true);
+    }
+  });
+
+  it('sanitizes a PUT network failure and never retries the uncertain decision', async () => {
+    const transport = jest.fn(() => Promise.reject(new Error('PRIVATE-HEADER-BODY')));
+    const error: unknown = await create({ transport })
+      .putJson(['decision'], {})
+      .catch((error: unknown) => error);
+    expect(error).toMatchObject({ reason: 'network', message: 'Provider validation unavailable' });
+    expect(String(error)).not.toContain('PRIVATE');
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+});

@@ -22,7 +22,12 @@ import { applyPlatformParcAuthorizationRecipe } from './recipes/platform-parc-au
 import { applyBanklinkConnectorContractRecipe } from './recipes/banklink-connector-contract.recipe';
 import { applyOidcDashboardRecipe } from './recipes/oidc-dashboard.recipe';
 import { applyOidcResourceServerRecipe } from './recipes/oidc-resource-server.recipe';
+import { applyOAuth2ClientCredentialsRecipe } from './recipes/oauth2-client-credentials.recipe';
+import { applyOidcBffSessionRecipe } from './recipes/oidc-bff-session.recipe';
+import { applyOAuth2TokenIntrospectionRecipe } from './recipes/oauth2-token-introspection.recipe';
 import { applyExternalProjectionWorkerRecipe } from './recipes/external-projection-worker.recipe';
+import { applyJestCommonJsCompatibilityRecipe } from './recipes/jest-cjs-compat.recipe';
+import { applyBoundedJsonHttpRecipe } from './recipes/bounded-json-http.recipe';
 
 export interface RecipeOptions {
   path?: string;
@@ -43,12 +48,17 @@ async function applyDryRunRecipe(
         migrationTimestamp: options.migrationTimestamp,
       }),
     'oidc-resource-server': () => applyOidcResourceServerRecipe(basePath, true),
+    'oauth2-client-credentials': () => applyOAuth2ClientCredentialsRecipe(basePath, true),
+    'oidc-bff-session': () => applyOidcBffSessionRecipe(basePath, true),
+    'oauth2-token-introspection': () => applyOAuth2TokenIntrospectionRecipe(basePath, true),
     'kafka-consumer': () => applyKafkaConsumerRecipe(basePath, true),
+    'jest-cjs-compat': () => applyJestCommonJsCompatibilityRecipe(basePath, true),
+    'bounded-json-http': () => applyBoundedJsonHttpRecipe(basePath, true),
   };
   const handler = handlers[recipeName];
   if (!handler) {
     throw new Error(
-      'Dry-run is currently supported only by external-projection-worker, oidc-resource-server, and kafka-consumer',
+      'Dry-run is currently supported only by external-projection-worker, oidc-resource-server, oauth2-token-introspection, oauth2-client-credentials, oidc-bff-session, kafka-consumer, jest-cjs-compat, and bounded-json-http',
     );
   }
   await handler();
@@ -67,6 +77,40 @@ async function installRecipeDependencies(
 }
 
 const AVAILABLE_RECIPES = {
+  'bounded-json-http': {
+    name: 'Bounded JSON HTTP transport',
+    description:
+      'Framework-independent fixed-origin transport without Nest dependencies or admission policy',
+    dependencies: [],
+    devDependencies: [],
+  },
+  'jest-cjs-compat': {
+    name: 'NestJS Jest CommonJS compatibility',
+    description:
+      'Transform ESM-only Nest configuration through Jest without changing production TypeScript',
+    dependencies: [],
+    devDependencies: [],
+  },
+  'oauth2-client-credentials': {
+    name: 'OAuth2 client credentials',
+    description:
+      'Bounded grant acquisition with single-flight cache and consumer-owned send policy',
+    dependencies: [],
+    devDependencies: [],
+  },
+  'oidc-bff-session': {
+    name: 'Confidential OIDC BFF session',
+    description:
+      'Framework-independent verified OIDC, opaque Lua sessions and durable token retirement',
+    dependencies: [],
+    devDependencies: [],
+  },
+  'oauth2-token-introspection': {
+    name: 'OAuth2 token introspection',
+    description: 'Bounded RFC7662 evidence transport with consumer-owned principal validation',
+    dependencies: [],
+    devDependencies: [],
+  },
   'oidc-resource-server': {
     name: 'Dependency-free OIDC resource-server JWT verification',
     description:
@@ -367,6 +411,11 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
     'banklink-connector-contract': applyBanklinkConnectorContractRecipe,
     'oidc-dashboard': applyOidcDashboardRecipe,
     'oidc-resource-server': applyOidcResourceServerRecipe,
+    'jest-cjs-compat': applyJestCommonJsCompatibilityRecipe,
+    'oauth2-client-credentials': applyOAuth2ClientCredentialsRecipe,
+    'oauth2-token-introspection': applyOAuth2TokenIntrospectionRecipe,
+    'oidc-bff-session': applyOidcBffSessionRecipe,
+    'bounded-json-http': applyBoundedJsonHttpRecipe,
     'external-projection-worker': (target: string) =>
       applyExternalProjectionWorkerRecipe(target, {
         migrationTimestamp: options.migrationTimestamp,
@@ -3321,6 +3370,7 @@ export const loggerConfig: Params = {
     redact: {
       paths: [
         "req.headers.authorization",
+        "req.headers['x-internal-api-key']",
         "req.headers.cookie",
         "res.headers['set-cookie']",
         "body.password",

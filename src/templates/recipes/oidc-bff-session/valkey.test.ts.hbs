@@ -1,0 +1,158 @@
+import { expect, test } from 'bun:test';
+import {
+  createValkeySessionCommands,
+  SessionStorageUnavailableError,
+  type SessionConnection,
+} from './valkey-session-store';
+
+function connection(overrides: Partial<SessionConnection> = {}): SessionConnection {
+  return {
+    isOpen: true,
+    isReady: true,
+    on: () => {},
+    connect: () => Promise.resolve(),
+    destroy: () => {},
+    withAbortSignal: () => ({ eval: () => Promise.resolve('synthetic-result') }),
+    ...overrides,
+  };
+}
+const config = { url: 'redis://synthetic.private.test:6379', trustedInternalPlaintext: true };
+test('shares one single-flight connection, executes bounded commands, and cannot reopen after close', async () => {
+  let created = 0,
+    destroyed = 0;
+  const commands = createValkeySessionCommands(config, {
+    createConnection: () => {
+      created++;
+      return connection({
+        destroy: () => {
+          destroyed++;
+        },
+      });
+    },
+  });
+  expect(
+    await Promise.all(
+      Array.from({ length: 4 }, () => commands.eval('return 1', { keys: [], arguments: [] })),
+    ),
+  ).toEqual(Array(4).fill('synthetic-result'));
+  expect(created).toBe(1);
+  commands.close();
+  expect(destroyed).toBe(1);
+  await expect(commands.eval('return 1', { keys: [], arguments: [] })).rejects.toBeInstanceOf(
+    SessionStorageUnavailableError,
+  );
+});
+test('requires TLS unless the owner explicitly enables trusted internal plaintext', () => {
+  for (const url of [
+    'redis://private.test:6379',
+    'https://foreign.test',
+    'rediss://private.test/0?password=secret',
+    'rediss://private.test/not-a-db',
+  ]) {
+    expect(() => createValkeySessionCommands({ url })).toThrow('configuration');
+  }
+  expect(() => createValkeySessionCommands({ url: 'rediss://private.test:6379/0' })).not.toThrow();
+});
+test('bounds ignored-abort connection and command work, without exposing raw secret-bearing failures', async () => {
+  const slowConnect = createValkeySessionCommands(
+    { ...config, commandTimeoutMs: 20 },
+    {
+      createConnection: () => connection({ connect: () => new Promise(() => {}) }),
+    },
+  );
+  await expect(slowConnect.eval('return 1', { keys: [], arguments: [] })).rejects.toThrow(
+    'BFF session storage is unavailable',
+  );
+  slowConnect.close();
+  const slowCommand = createValkeySessionCommands(
+    { ...config, commandTimeoutMs: 20 },
+    {
+      createConnection: () =>
+        connection({ withAbortSignal: () => ({ eval: () => new Promise(() => {}) }) }),
+    },
+  );
+  await expect(slowCommand.eval('return 1', { keys: [], arguments: [] })).rejects.toThrow(
+    'BFF session storage is unavailable',
+  );
+  slowCommand.close();
+  const failure = createValkeySessionCommands(config, {
+    createConnection: () =>
+      connection({ connect: () => Promise.reject(new Error('secret redis://credential')) }),
+  });
+  await expect(failure.eval('return 1', { keys: [], arguments: [] })).rejects.toThrow(
+    'BFF session storage is unavailable',
+  );
+  failure.close();
+});
+test('never executes a command after its connecting deadline already expired', async () => {
+  let release: (() => void) | undefined,
+    executions = 0;
+  const commands = createValkeySessionCommands(
+    { ...config, commandTimeoutMs: 20 },
+    {
+      createConnection: () =>
+        connection({
+          connect: () =>
+            new Promise<void>((resolve) => {
+              release = resolve;
+            }),
+          withAbortSignal: () => ({
+            eval: () => {
+              executions++;
+              return Promise.resolve(null);
+            },
+          }),
+        }),
+    },
+  );
+  await expect(commands.eval('return 1', { keys: [], arguments: [] })).rejects.toBeInstanceOf(
+    SessionStorageUnavailableError,
+  );
+  release?.();
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(executions).toBe(0);
+  commands.close();
+});
+test('rejects overlarge command input before connecting', async () => {
+  let creates = 0;
+  const commands = createValkeySessionCommands(config, {
+    createConnection: () => {
+      creates++;
+      return connection();
+    },
+  });
+  await expect(
+    commands.eval('x'.repeat(16385), { keys: [], arguments: [] }),
+  ).rejects.toBeInstanceOf(SessionStorageUnavailableError);
+  expect(creates).toBe(0);
+  commands.close();
+});
+
+test('snapshots caller-owned command arrays before awaiting connection', async () => {
+  let release: (() => void) | undefined;
+  let seen: { keys: string[]; arguments: string[] } | undefined;
+  const commands = createValkeySessionCommands(config, {
+    createConnection: () =>
+      connection({
+        connect: () =>
+          new Promise<void>((resolve) => {
+            release = resolve;
+          }),
+        withAbortSignal: () => ({
+          eval: (_script, command) => {
+            seen = command;
+            return Promise.resolve(1);
+          },
+        }),
+      }),
+  });
+  const input = { keys: ['original-key'], arguments: ['original-argument'] };
+  const pending = commands.eval('return 1', input);
+  input.keys[0] = 'changed-key';
+  input.arguments[0] = 'changed-argument';
+  release?.();
+  await pending;
+  expect(seen).toEqual({ keys: ['original-key'], arguments: ['original-argument'] });
+  commands.close();
+});

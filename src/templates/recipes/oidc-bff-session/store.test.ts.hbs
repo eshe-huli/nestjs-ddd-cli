@@ -1,0 +1,87 @@
+import { expect, test } from 'bun:test';
+import { OpaqueSessionStore } from './opaque-session-store';
+
+test('invalid handles and return paths never touch storage', async () => {
+  let accesses = 0;
+  const store = new OpaqueSessionStore(
+    {
+      eval: async () => {
+        accesses++;
+        return null;
+      },
+    },
+    'synthetic-client',
+  );
+  expect(await store.read('raw.access.token', 'a'.repeat(43))).toBeNull();
+  expect(
+    await store.takeLogin('invalid', 'a'.repeat(43), 'b'.repeat(43), 'c'.repeat(43)),
+  ).toBeNull();
+  for (const next of ['https://foreign.test', '//foreign.test', '/\\foreign', '/bad\npath']) {
+    await expect(store.beginLogin({ next })).rejects.toThrow('Invalid return path');
+  }
+  expect(accesses).toBe(0);
+});
+test('settings are immutable, bounded and preserve custody beyond the configured provider cutoff', async () => {
+  for (const settings of [
+    { tokenRetentionSeconds: 86400 },
+    { maxProviderRefreshSeconds: 90000 },
+    { loginSeconds: 901 },
+    { leaseSeconds: 0 },
+    { sessionSeconds: 3601 },
+    { retrySeconds: 3601 },
+  ]) {
+    expect(
+      () =>
+        new OpaqueSessionStore(
+          { eval: () => Promise.resolve(null) },
+          'client',
+          undefined,
+          settings,
+        ),
+    ).toThrow('duration configuration');
+  }
+  const settings = { tokenRetentionSeconds: 100000 };
+  let argumentsSeen: string[] = [];
+  const store = new OpaqueSessionStore(
+    {
+      eval: (_script, command) => {
+        argumentsSeen = command.arguments;
+        return Promise.resolve(null);
+      },
+    },
+    'synthetic-client',
+    () => 1000,
+    settings,
+  );
+  settings.tokenRetentionSeconds = 1;
+  await store.beginLogin({ next: '/' });
+  expect(argumentsSeen[7]).toBe('100000');
+});
+test('retirement requires at least one safe credential, while access admission requires an unexpired access token', async () => {
+  const store = new OpaqueSessionStore(
+    { eval: () => Promise.resolve(null) },
+    'synthetic-client',
+    () => 1000,
+  );
+  for (const tokens of [
+    { expiresAt: 1 },
+    { accessToken: 'bad\ntoken', expiresAt: 1 },
+    { refreshToken: 'r'.repeat(16385), expiresAt: 1 },
+  ]) {
+    await expect(store.queueRevocation(tokens)).rejects.toThrow('retirement record');
+  }
+  await expect(store.queueRevocation({ accessToken: 'access', expiresAt: 1 }, 601)).rejects.toThrow(
+    'retirement record',
+  );
+  const pending = {
+    browser: 'a'.repeat(64),
+    generation: 'b'.repeat(43),
+    state: 'c'.repeat(43),
+    verifier: 'd'.repeat(43),
+    nonce: 'e'.repeat(43),
+    next: '/',
+    startedAt: 1000,
+  };
+  expect(await store.completeLogin(pending, { accessToken: 'access', expiresAt: 1000 })).toBeNull();
+  expect(await store.completeLogin(pending, { accessToken: 'access', expiresAt: 4601 })).toBeNull();
+});

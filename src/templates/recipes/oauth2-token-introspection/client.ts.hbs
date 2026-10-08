@@ -1,0 +1,241 @@
+import {
+  BoundedJsonHttpClient,
+  BoundedJsonHttpUnavailableError,
+} from './bounded-json-http.client';
+
+export const OAUTH2_TOKEN_INTROSPECTION_OPTIONS = Symbol(
+  'OAUTH2_TOKEN_INTROSPECTION_OPTIONS',
+);
+
+/** Supply only from validated deployment configuration, never request input. */
+export interface OAuth2TokenIntrospectionOptions {
+  introspectionUrl: string;
+  requestHeaders?: Readonly<Record<string, string>>;
+  timeoutMs?: number;
+  maxResponseBytes?: number;
+  maxTokenBytes?: number;
+  /** Explicit opt-in for a verified private HTTP endpoint (for example K3s service DNS). */
+  trustedInternalHttp?: boolean;
+  /** Provider-neutral Fetch seam; must honor the supplied URL, signal and redirect policy. */
+  transport?: (url: string, init: RequestInit) => Promise<Response>;
+}
+
+/** Evidence, never an authorization grant. Optional RFC7662 claims remain optional. */
+export interface OAuth2TokenEvidence {
+  readonly active: true;
+  readonly issuer?: string;
+  readonly subject?: string;
+  readonly clientId?: string;
+  readonly audiences: readonly string[];
+  readonly scopes: readonly string[];
+  readonly expiresAt?: number;
+  readonly issuedAt?: number;
+  readonly notBefore?: number;
+  readonly tokenType?: string;
+  readonly tokenUse?: string;
+  readonly extensions: Readonly<Record<string, unknown>>;
+  readonly claims: Readonly<Record<string, unknown>>;
+}
+
+/** The consumer owns provider profile, session, canonical identity and domain admission. */
+export interface OAuth2TokenValidationPolicy<Principal> {
+  validate(evidence: OAuth2TokenEvidence): Principal | Promise<Principal>;
+}
+
+export class InvalidOAuth2TokenError extends Error {
+  constructor(
+    readonly reason: 'invalid_token' | 'inactive_token' | 'policy_rejected',
+  ) {
+    super('Access token rejected');
+    this.name = 'InvalidOAuth2TokenError';
+  }
+}
+
+export class OAuth2IntrospectionUnavailableError extends Error {
+  constructor(
+    readonly reason:
+      'timeout' | 'network' | 'http' | 'invalid_response' | 'policy_failure',
+  ) {
+    super('Token validation unavailable');
+    this.name = 'OAuth2IntrospectionUnavailableError';
+  }
+}
+
+function bounded(
+  value: number | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const result = value ?? fallback;
+  if (!Number.isSafeInteger(result) || result < min || result > max) {
+    throw new Error('Invalid introspection configuration');
+  }
+  return result;
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasControls(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.charCodeAt(0);
+    return code < 32 || code === 127;
+  });
+}
+
+function stringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item: unknown) =>
+        typeof item === 'string' && item.length > 0 && !hasControls(item),
+    )
+  );
+}
+
+function freeze(value: unknown, depth = 0): void {
+  if (depth > 32)
+    throw new OAuth2IntrospectionUnavailableError('invalid_response');
+  if (value !== null && typeof value === 'object') {
+    for (const child of Object.values(value)) freeze(child, depth + 1);
+    Object.freeze(value);
+  }
+}
+
+function optionalString(
+  claims: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = claims[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length === 0 || hasControls(value)) {
+    throw new OAuth2IntrospectionUnavailableError('invalid_response');
+  }
+  return value;
+}
+
+function optionalTime(
+  claims: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = claims[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new OAuth2IntrospectionUnavailableError('invalid_response');
+  }
+  return value;
+}
+
+function evidence(claims: unknown): OAuth2TokenEvidence {
+  if (!record(claims) || typeof claims['active'] !== 'boolean') {
+    throw new OAuth2IntrospectionUnavailableError('invalid_response');
+  }
+  if (!claims['active']) throw new InvalidOAuth2TokenError('inactive_token');
+  const aud = claims['aud'];
+  const audiences =
+    typeof aud === 'string' ? [aud] : aud === undefined ? [] : aud;
+  if (!stringArray(audiences)) {
+    throw new OAuth2IntrospectionUnavailableError('invalid_response');
+  }
+  const scope = claims['scope'];
+  if (
+    scope !== undefined &&
+    (typeof scope !== 'string' || hasControls(scope))
+  ) {
+    throw new OAuth2IntrospectionUnavailableError('invalid_response');
+  }
+  const extensions = claims['ext'];
+  if (extensions !== undefined && !record(extensions)) {
+    throw new OAuth2IntrospectionUnavailableError('invalid_response');
+  }
+  const result: OAuth2TokenEvidence = {
+    active: true,
+    issuer: optionalString(claims, 'iss'),
+    subject: optionalString(claims, 'sub'),
+    clientId: optionalString(claims, 'client_id'),
+    audiences: Object.freeze([...audiences]),
+    scopes: Object.freeze(
+      scope === undefined ? [] : [...new Set(scope.split(' ').filter(Boolean))],
+    ),
+    expiresAt: optionalTime(claims, 'exp'),
+    issuedAt: optionalTime(claims, 'iat'),
+    notBefore: optionalTime(claims, 'nbf'),
+    tokenType: optionalString(claims, 'token_type'),
+    tokenUse: optionalString(claims, 'token_use'),
+    extensions: extensions ?? {},
+    claims,
+  };
+  freeze(result);
+  return result;
+}
+
+export class OAuth2TokenIntrospectionClient {
+  private readonly http: BoundedJsonHttpClient;
+  private readonly pathSegments: readonly string[];
+  private readonly maxTokenBytes: number;
+
+  constructor(options: OAuth2TokenIntrospectionOptions) {
+    try {
+      const url = new URL(options.introspectionUrl);
+      if (url.username || url.password || url.hash || url.search)
+        throw new Error();
+      this.pathSegments = Object.freeze(
+        url.pathname
+          .slice(1)
+          .split('/')
+          .map((segment) => decodeURIComponent(segment)),
+      );
+      this.maxTokenBytes = bounded(options.maxTokenBytes, 16384, 1, 65536);
+      this.http = new BoundedJsonHttpClient({ ...options, origin: url.origin });
+    } catch {
+      throw new Error('Invalid introspection configuration');
+    }
+  }
+
+  async introspect(token: string): Promise<OAuth2TokenEvidence> {
+    if (
+      typeof token !== 'string' ||
+      token.length === 0 ||
+      token.length > this.maxTokenBytes ||
+      /[^\x21-\x7e]/.test(token)
+    ) {
+      throw new InvalidOAuth2TokenError('invalid_token');
+    }
+    try {
+      return evidence(
+        await this.http.postForm(this.pathSegments, {
+          token,
+          token_type_hint: 'access_token',
+        }),
+      );
+    } catch (error) {
+      if (
+        error instanceof InvalidOAuth2TokenError ||
+        error instanceof OAuth2IntrospectionUnavailableError
+      )
+        throw error;
+      if (error instanceof BoundedJsonHttpUnavailableError)
+        throw new OAuth2IntrospectionUnavailableError(error.reason);
+      throw new OAuth2IntrospectionUnavailableError('network');
+    }
+  }
+
+  async validate<Principal>(
+    token: string,
+    policy: OAuth2TokenValidationPolicy<Principal>,
+  ): Promise<Principal> {
+    const verifiedEvidence = await this.introspect(token);
+    try {
+      return await policy.validate(verifiedEvidence);
+    } catch (error) {
+      if (
+        error instanceof InvalidOAuth2TokenError ||
+        error instanceof OAuth2IntrospectionUnavailableError
+      )
+        throw error;
+      throw new OAuth2IntrospectionUnavailableError('policy_failure');
+    }
+  }
+}

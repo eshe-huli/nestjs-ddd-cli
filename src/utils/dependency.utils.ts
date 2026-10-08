@@ -2,6 +2,7 @@ import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs-extra';
 import * as path from 'path';
+import { tmpdir } from 'node:os';
 import chalk from 'chalk';
 
 const execAsync = promisify(exec);
@@ -129,10 +130,22 @@ export async function installNestJSCli(): Promise<void> {
 
 export function getNestProjectExecution(
   projectName: string,
-  options: { directory?: string; skipInstall?: boolean } = {},
+  options: {
+    directory?: string;
+    skipInstall?: boolean;
+    packageManager?: 'npm' | 'bun';
+    collection?: string;
+  } = {},
 ): { args: string[]; cwd: string } {
-  const args = ['new', projectName, '--skip-git', '--package-manager', 'npm'];
+  const args = [
+    'new',
+    projectName,
+    '--skip-git',
+    '--package-manager',
+    options.packageManager ?? 'npm',
+  ];
   let cwd = process.cwd();
+  if (options.collection) args.push('--collection', options.collection);
 
   if (options.directory) {
     const targetDirectory = path.resolve(options.directory);
@@ -140,7 +153,7 @@ export function getNestProjectExecution(
     args.push('--directory', path.basename(targetDirectory));
   }
 
-  if (options.skipInstall) {
+  if (options.skipInstall || options.packageManager === 'bun') {
     args.push('--skip-install');
   }
 
@@ -150,12 +163,34 @@ export function getNestProjectExecution(
 /**
  * Create a new NestJS project
  */
-export async function createNestJSProject(projectName: string, options: any = {}): Promise<void> {
+export async function createNestJSProject(
+  projectName: string,
+  options: {
+    directory?: string;
+    skipInstall?: boolean;
+    packageManager?: 'npm' | 'bun';
+    collection?: string;
+  } = {},
+): Promise<void> {
   try {
-    // Check if @nestjs/cli is installed
-    const isInstalled = await isNestJSCliInstalled();
-    if (!isInstalled) {
-      await installNestJSCli();
+    let bunNest: string | undefined;
+    if (options.packageManager === 'bun') {
+      for (const directory of (process.env['PATH'] ?? '').split(path.delimiter)) {
+        if (!directory) continue;
+        const executable = path.join(directory, 'nest');
+        try {
+          await fs.access(executable, fs.constants.X_OK);
+          bunNest = await fs.realpath(executable);
+          break;
+        } catch {
+          /* Inspect next existing executable; never install globally. */
+        }
+      }
+      if (!bunNest) throw new Error('Bun init requires an existing Nest CLI executable');
+    } else {
+      // Existing defaults remain intact; explicit Bun skips npm probes/installation.
+      const isInstalled = await isNestJSCliInstalled();
+      if (!isInstalled) await installNestJSCli();
     }
 
     console.log(chalk.blue(`Creating new NestJS project: ${projectName}...`));
@@ -167,7 +202,43 @@ export async function createNestJSProject(projectName: string, options: any = {}
     }
 
     // Avoid shell parsing of user-provided project names and paths.
-    await execFileAsync('nest', args, { cwd });
+    if (bunNest) {
+      // Nest's schematics runner hardcodes `node`. The private invocation shim
+      // keeps those children on Bun without changing global PATH or installs.
+      const runtimeDirectory = await fs.mkdtemp(path.join(tmpdir(), 'ddd-bun-init-'));
+      try {
+        let bunRuntime: string | undefined;
+        for (const directory of (process.env['PATH'] ?? '').split(path.delimiter)) {
+          if (!directory) continue;
+          try {
+            const candidate = path.join(directory, 'bun');
+            await fs.access(candidate, fs.constants.X_OK);
+            bunRuntime = await fs.realpath(candidate);
+            break;
+          } catch {
+            /* No global installation. */
+          }
+        }
+        if (!bunRuntime) throw new Error('Bun init requires an existing Bun executable');
+        await fs.symlink(bunRuntime, path.join(runtimeDirectory, 'node'));
+        await execFileAsync('bun', [bunNest, ...args], {
+          cwd,
+          env: {
+            ...process.env,
+            PATH: `${runtimeDirectory}${path.delimiter}${process.env['PATH'] ?? ''}`,
+          },
+        });
+      } finally {
+        await fs.remove(runtimeDirectory);
+      }
+    } else {
+      await execFileAsync('nest', args, { cwd });
+    }
+    if (options.packageManager === 'bun' && !options.skipInstall) {
+      await execFileAsync('bun', ['install'], {
+        cwd: options.directory ? path.resolve(options.directory) : path.resolve(cwd, projectName),
+      });
+    }
     console.log(chalk.green(`✅ NestJS project ${projectName} created successfully!`));
   } catch (error) {
     throw new Error(`Failed to create NestJS project: ${(error as Error).message}`);
@@ -181,13 +252,20 @@ export async function installDependencies(
   projectPath: string,
   dependencies: string[],
   dev = false,
+  packageManager: 'npm' | 'bun' = 'npm',
 ): Promise<void> {
   try {
     const flag = dev ? '--save-dev' : '--save';
     console.log(
       chalk.blue(`Installing ${dev ? 'dev ' : ''}dependencies: ${dependencies.join(', ')}...`),
     );
-    await execAsync(`npm install ${flag} ${dependencies.join(' ')}`, { cwd: projectPath });
+    if (packageManager === 'bun') {
+      await execFileAsync('bun', ['add', ...(dev ? ['--dev'] : []), ...dependencies], {
+        cwd: projectPath,
+      });
+    } else {
+      await execAsync(`npm install ${flag} ${dependencies.join(' ')}`, { cwd: projectPath });
+    }
     console.log(chalk.green('✅ Dependencies installed successfully!'));
   } catch (error) {
     throw new Error(`Failed to install dependencies: ${(error as Error).message}`);

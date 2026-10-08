@@ -16,6 +16,8 @@ export interface InitProjectOptions {
   skipInstall?: boolean;
   skipUpdate?: boolean;
   withDdd?: boolean;
+  packageManager?: 'npm' | 'bun';
+  collection?: string;
 }
 
 export function resolveProjectDirectory(projectName: string, parentPath = process.cwd()): string {
@@ -24,6 +26,9 @@ export function resolveProjectDirectory(projectName: string, parentPath = proces
 
 export async function initProject(projectName: string, options: InitProjectOptions) {
   try {
+    if (!['npm', 'bun'].includes(options.packageManager ?? 'npm')) {
+      throw new Error('Initialization package manager must be npm or bun');
+    }
     // First, check for CLI updates if not skipped
     if (!options.skipUpdate) {
       const { needsUpdate, latestVersion, currentVersion } = await checkForCliUpdate();
@@ -58,6 +63,8 @@ export async function initProject(projectName: string, options: InitProjectOptio
     await createNestJSProject(projectName, {
       directory: projectDir,
       skipInstall: options.skipInstall,
+      packageManager: options.packageManager,
+      collection: options.collection,
     });
 
     // If withDdd option is enabled, install DDD-related dependencies
@@ -69,7 +76,7 @@ export async function initProject(projectName: string, options: InitProjectOptio
         'class-transformer',
       ];
       if (!options.skipInstall) {
-        await installDependencies(projectDir, dependencies);
+        await installDependencies(projectDir, dependencies, false, options.packageManager);
       }
 
       // Create DDD folder structure
@@ -97,7 +104,9 @@ export async function initProject(projectName: string, options: InitProjectOptio
     console.log(chalk.green(`\n✅ Project ${projectName} initialized successfully!`));
     console.log(chalk.blue(`\nNext steps:`));
     console.log(chalk.blue(`  1. cd ${projectDir}`));
-    console.log(chalk.blue(`  2. npm run start:dev`));
+    console.log(
+      chalk.blue(`  2. ${options.packageManager === 'bun' ? 'bun' : 'npm'} run start:dev`),
+    );
 
     if (options.withDdd) {
       console.log(chalk.blue(`\nTo generate DDD components, use:`));
@@ -141,8 +150,8 @@ async function updateTsConfig(projectDir: string) {
     // Add path aliases
     tsconfig.compilerOptions = tsconfig.compilerOptions || {};
     tsconfig.compilerOptions.paths = {
-      '@modules/*': ['src/modules/*'],
-      '@shared/*': ['src/shared/*'],
+      '@modules/*': ['./src/modules/*'],
+      '@shared/*': ['./src/shared/*'],
       ...(tsconfig.compilerOptions.paths || {}),
     };
 

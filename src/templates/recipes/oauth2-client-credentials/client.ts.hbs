@@ -1,0 +1,210 @@
+import {
+  BoundedJsonHttpClient,
+  BoundedJsonHttpUnavailableError,
+} from '../oauth2-token-introspection/bounded-json-http.client';
+
+export const OAUTH2_CLIENT_CREDENTIALS_OPTIONS = Symbol(
+  'OAUTH2_CLIENT_CREDENTIALS_OPTIONS',
+);
+
+export interface OAuth2ClientCredentialsOptions {
+  tokenUrl: string;
+  clientId: string;
+  clientSecret: string;
+  scopes?: readonly string[];
+  timeoutMs?: number;
+  maxResponseBytes?: number;
+  maxTokenBytes?: number;
+  renewalMarginMs?: number;
+  /** Explicit compatibility for providers documenting decimal-string lifetimes. */
+  allowStringExpiresIn?: boolean;
+  transport?: (url: string, init: RequestInit) => Promise<Response>;
+  clock?: () => number;
+}
+
+export class OAuth2ClientCredentialsUnavailableError extends Error {
+  constructor(
+    readonly reason: 'timeout' | 'network' | 'http' | 'invalid_response',
+    readonly status?: number,
+  ) {
+    super('Provider credentials unavailable');
+    this.name = 'OAuth2ClientCredentialsUnavailableError';
+  }
+}
+
+function bounded(
+  value: number | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const result = value ?? fallback;
+  if (!Number.isSafeInteger(result) || result < min || result > max)
+    throw new Error();
+  return result;
+}
+
+function formComponent(value: string): string {
+  return new URLSearchParams({ v: value }).toString().slice(2);
+}
+
+function isScopeList(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= 32 &&
+    value.every(
+      (scope: unknown) =>
+        typeof scope === 'string' &&
+        scope.length > 0 &&
+        scope.length <= 200 &&
+        ![...scope].some(
+          (c) =>
+            c.charCodeAt(0) < 33 ||
+            c.charCodeAt(0) > 126 ||
+            c === '"' ||
+            c === '\\',
+        ),
+    )
+  );
+}
+
+/** Grant acquisition only. Consumers own authorization and provider side effects. */
+export class OAuth2ClientCredentialsClient {
+  readonly #http: BoundedJsonHttpClient;
+  readonly #segments: readonly string[];
+  readonly #form: Readonly<Record<string, string>>;
+  readonly #clock: () => number;
+  readonly #margin: number;
+  readonly #maxTokenBytes: number;
+  readonly #allowStringExpiry: boolean;
+  #cached?: { token: string; refreshAt: number };
+  #inFlight?: Promise<string>;
+
+  constructor(options: OAuth2ClientCredentialsOptions) {
+    try {
+      const url = new URL(options.tokenUrl);
+      if (
+        url.href !== options.tokenUrl ||
+        url.href.length > 8192 ||
+        url.protocol !== 'https:' ||
+        url.username ||
+        url.password ||
+        url.hash ||
+        url.search ||
+        url.pathname === '/'
+      )
+        throw new Error();
+      for (const value of [options.clientId, options.clientSecret]) {
+        if (typeof value !== 'string' || !value.length || value.length > 4096)
+          throw new Error();
+      }
+      const scopes = options.scopes ?? [];
+      if (!isScopeList(scopes) || new Set(scopes).size !== scopes.length)
+        throw new Error();
+      if (
+        options.allowStringExpiresIn !== undefined &&
+        typeof options.allowStringExpiresIn !== 'boolean'
+      )
+        throw new Error();
+      this.#segments = Object.freeze(
+        url.pathname
+          .slice(1)
+          .split('/')
+          .map((segment) => decodeURIComponent(segment)),
+      );
+      if (
+        this.#segments.some(
+          (segment) => !segment || ['.', '..'].includes(segment),
+        )
+      )
+        throw new Error();
+      this.#http = new BoundedJsonHttpClient({
+        origin: url.origin,
+        requestHeaders: {
+          authorization: `Basic ${Buffer.from(`${formComponent(options.clientId)}:${formComponent(options.clientSecret)}`).toString('base64')}`,
+        },
+        timeoutMs: options.timeoutMs,
+        maxResponseBytes: options.maxResponseBytes,
+        transport: options.transport,
+      });
+      this.#form = Object.freeze({
+        grant_type: 'client_credentials',
+        ...(scopes.length ? { scope: scopes.join(' ') } : {}),
+      });
+      this.#clock = options.clock ?? (() => Math.floor(performance.now()));
+      if (typeof this.#clock !== 'function') throw new Error();
+      this.#margin = bounded(options.renewalMarginMs, 30000, 0, 60000);
+      this.#maxTokenBytes = bounded(options.maxTokenBytes, 16384, 1, 65536);
+      this.#allowStringExpiry = options.allowStringExpiresIn === true;
+    } catch {
+      throw new Error('Invalid provider credential configuration');
+    }
+  }
+
+  getAccessToken(): Promise<string> {
+    const now = this.#clock();
+    if (!Number.isSafeInteger(now) || now < 0)
+      return Promise.reject(
+        new OAuth2ClientCredentialsUnavailableError('invalid_response'),
+      );
+    if (this.#cached && now < this.#cached.refreshAt)
+      return Promise.resolve(this.#cached.token);
+    this.#cached = undefined;
+    this.#inFlight ??= this.acquire(now).finally(() => {
+      this.#inFlight = undefined;
+    });
+    return this.#inFlight;
+  }
+
+  /** A late rejection of token A must not evict a newer token B. No retry occurs. */
+  invalidate(rejectedToken: string): void {
+    if (this.#cached?.token === rejectedToken) this.#cached = undefined;
+  }
+
+  private async acquire(startedAt: number): Promise<string> {
+    try {
+      const result = await this.#http.postForm(this.#segments, this.#form);
+      if (!result || typeof result !== 'object' || Array.isArray(result))
+        throw new OAuth2ClientCredentialsUnavailableError('invalid_response');
+      const body = result as Record<string, unknown>;
+      const token = body['access_token'];
+      const tokenType = body['token_type'];
+      const lifetime = body['expires_in'];
+      const seconds =
+        this.#allowStringExpiry &&
+        typeof lifetime === 'string' &&
+        /^[1-9][0-9]{0,4}$/.test(lifetime)
+          ? Number(lifetime)
+          : lifetime;
+      if (
+        typeof token !== 'string' ||
+        !token.length ||
+        new TextEncoder().encode(token).byteLength > this.#maxTokenBytes ||
+        [...token].some((c) => c.charCodeAt(0) < 33 || c.charCodeAt(0) > 126) ||
+        typeof tokenType !== 'string' ||
+        tokenType.toLowerCase() !== 'bearer' ||
+        typeof seconds !== 'number' ||
+        !Number.isSafeInteger(seconds) ||
+        seconds < 1 ||
+        seconds > 86400
+      )
+        throw new OAuth2ClientCredentialsUnavailableError('invalid_response');
+      const ttl = seconds * 1000;
+      const refreshAt =
+        startedAt + ttl - Math.min(this.#margin, Math.floor(ttl / 10));
+      const now = this.#clock();
+      if (!Number.isSafeInteger(now) || now < startedAt || now >= refreshAt)
+        throw new OAuth2ClientCredentialsUnavailableError('invalid_response');
+      this.#cached = { token, refreshAt };
+      return token;
+    } catch (error) {
+      if (error instanceof OAuth2ClientCredentialsUnavailableError) throw error;
+      if (error instanceof BoundedJsonHttpUnavailableError)
+        throw new OAuth2ClientCredentialsUnavailableError(
+          error.reason,
+          error.status,
+        );
+      throw new OAuth2ClientCredentialsUnavailableError('network');
+    }
+  }
+}

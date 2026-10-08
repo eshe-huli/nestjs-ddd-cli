@@ -1,0 +1,58 @@
+import {
+  DynamicModule,
+  FactoryProvider,
+  Module,
+  ModuleMetadata,
+} from '@nestjs/common';
+import {
+  OAUTH2_CLIENT_CREDENTIALS_OPTIONS,
+  OAuth2ClientCredentialsClient,
+  OAuth2ClientCredentialsOptions,
+} from './oauth2-client-credentials.client';
+
+export interface OAuth2ClientCredentialsModuleAsyncOptions extends Pick<
+  ModuleMetadata,
+  'imports'
+> {
+  inject?: FactoryProvider<OAuth2ClientCredentialsOptions>['inject'];
+  useFactory: FactoryProvider<OAuth2ClientCredentialsOptions>['useFactory'];
+}
+
+const clientProvider: FactoryProvider<OAuth2ClientCredentialsClient> = {
+  provide: OAuth2ClientCredentialsClient,
+  inject: [OAUTH2_CLIENT_CREDENTIALS_OPTIONS],
+  useFactory: (options: OAuth2ClientCredentialsOptions) =>
+    new OAuth2ClientCredentialsClient(options),
+};
+
+@Module({})
+export class OAuth2ClientCredentialsModule {
+  static register(options: OAuth2ClientCredentialsOptions): DynamicModule {
+    return {
+      module: OAuth2ClientCredentialsModule,
+      providers: [
+        { provide: OAUTH2_CLIENT_CREDENTIALS_OPTIONS, useValue: options },
+        clientProvider,
+      ],
+      exports: [OAuth2ClientCredentialsClient],
+    };
+  }
+
+  static registerAsync(
+    options: OAuth2ClientCredentialsModuleAsyncOptions,
+  ): DynamicModule {
+    return {
+      module: OAuth2ClientCredentialsModule,
+      imports: options.imports ?? [],
+      providers: [
+        {
+          provide: OAUTH2_CLIENT_CREDENTIALS_OPTIONS,
+          inject: options.inject ?? [],
+          useFactory: options.useFactory,
+        },
+        clientProvider,
+      ],
+      exports: [OAuth2ClientCredentialsClient],
+    };
+  }
+}

@@ -1,0 +1,549 @@
+import { createHash, randomBytes } from 'node:crypto';
+
+const HANDLE = /^[A-Za-z0-9_-]{43}$/;
+const SESSION_HANDLE = /^v3\.([A-Za-z0-9_-]{43})$/;
+export const SESSION_SECONDS = 3300;
+export const LOGIN_SECONDS = 600;
+const GENERATION_SECONDS = 31_536_000;
+// Conservative 25-hour retirement default; validate against the provider refresh cutoff.
+export const TOKEN_RETENTION_SECONDS = 90_000;
+export type OpaqueSessionSettings = Readonly<{
+  sessionSeconds: number;
+  loginSeconds: number;
+  generationSeconds: number;
+  tokenRetentionSeconds: number;
+  maxProviderRefreshSeconds: number;
+  maxProviderAccessSeconds: number;
+  leaseSeconds: number;
+  retrySeconds: number;
+}>;
+function sessionSettings(input: Partial<OpaqueSessionSettings>): OpaqueSessionSettings {
+  const settings = Object.freeze({
+    sessionSeconds: SESSION_SECONDS,
+    loginSeconds: LOGIN_SECONDS,
+    generationSeconds: GENERATION_SECONDS,
+    tokenRetentionSeconds: TOKEN_RETENTION_SECONDS,
+    maxProviderRefreshSeconds: 86400,
+    maxProviderAccessSeconds: 3600,
+    leaseSeconds: 30,
+    retrySeconds: 60,
+    ...input,
+  });
+  const maximum: OpaqueSessionSettings = {
+    sessionSeconds: 86400,
+    loginSeconds: 900,
+    generationSeconds: 31536000,
+    tokenRetentionSeconds: 7776000,
+    maxProviderRefreshSeconds: 7775999,
+    maxProviderAccessSeconds: 86400,
+    leaseSeconds: 300,
+    retrySeconds: 3600,
+  };
+  if (
+    Object.entries(settings).some(
+      ([name, value]) =>
+        !Number.isSafeInteger(value) ||
+        value < 1 ||
+        value > maximum[name as keyof OpaqueSessionSettings],
+    ) ||
+    settings.tokenRetentionSeconds <= settings.maxProviderRefreshSeconds ||
+    settings.tokenRetentionSeconds <= settings.maxProviderAccessSeconds ||
+    settings.sessionSeconds > settings.maxProviderAccessSeconds ||
+    settings.leaseSeconds >= settings.tokenRetentionSeconds
+  ) {
+    throw new Error('Invalid BFF session duration configuration');
+  }
+  return settings;
+}
+export type RetirementTokens = { accessToken?: string; refreshToken?: string; expiresAt: number };
+export type RevocationClaim = { ticket: string; lease: string; tokens: RetirementTokens };
+
+export type TokenPair = {
+  accessToken: string;
+  refreshToken?: string;
+  expiresAt: number;
+};
+export type PendingLogin = {
+  browser: string;
+  generation: string;
+  state: string;
+  verifier: string;
+  nonce: string;
+  next: string;
+  startedAt: number;
+};
+export type SessionCommands = {
+  eval(script: string, options: { keys: string[]; arguments: string[] }): Promise<unknown>;
+};
+
+const BEGIN = `
+local generation = redis.call('GET', KEYS[1])
+if not generation then
+  generation = ARGV[1]
+  redis.call('SET', KEYS[1], generation, 'EX', ARGV[2])
+end
+if ARGV[5] == 'fresh' then
+  local oldkey = redis.call('GET', KEYS[3])
+  local oldraw = oldkey and redis.call('GET', oldkey)
+  if oldraw then
+    redis.call('SET', ARGV[9] .. ARGV[6], oldraw, 'EX', ARGV[8])
+    redis.call('ZADD', KEYS[4], ARGV[7], ARGV[6])
+    redis.call('DEL', oldkey)
+  end
+  redis.call('DEL', KEYS[3])
+  generation = ARGV[1]
+  redis.call('SET', KEYS[1], generation, 'EX', ARGV[2])
+end
+if generation ~= ARGV[1] then return false end
+if not redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[4], 'NX') then return false end
+return generation`;
+const TAKE = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return false end
+local ok, pending = pcall(cjson.decode, raw)
+if not ok then redis.call('DEL', KEYS[1]); return false end
+if pending.browser ~= ARGV[1] or pending.generation ~= ARGV[2] or pending.state ~= ARGV[3] then return false end
+redis.call('DEL', KEYS[1])
+if redis.call('GET', KEYS[2]) ~= pending.generation then return false end
+if not redis.call('SET', KEYS[3], raw, 'EX', ARGV[4], 'NX') then return false end
+return raw`;
+const COMPLETE = `
+if redis.call('GET', KEYS[3]) ~= ARGV[4] then return false end
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return false end
+if ARGV[9] ~= '' then
+  if redis.call('EXISTS', KEYS[7]) == 1 then return false end
+  local staged = redis.call('GET', KEYS[6])
+  if not staged then return false end
+  local ok, prior = pcall(cjson.decode, staged)
+  local newok, candidate = pcall(cjson.decode, ARGV[2])
+  if not ok or not newok or prior.tokens.accessToken ~= candidate.tokens.accessToken or prior.tokens.refreshToken ~= candidate.tokens.refreshToken then return false end
+end
+if redis.call('EXISTS', KEYS[2]) == 1 then return false end
+local oldkey = redis.call('GET', KEYS[4])
+local oldraw = oldkey and redis.call('GET', oldkey)
+if oldraw then
+  redis.call('SET', ARGV[8] .. ARGV[7], oldraw, 'EX', ARGV[6])
+  redis.call('ZADD', KEYS[5], ARGV[5], ARGV[7])
+  redis.call('DEL', oldkey)
+end
+redis.call('DEL', KEYS[3])
+redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[6])
+redis.call('SET', KEYS[4], KEYS[2], 'EX', ARGV[6])
+if ARGV[9] ~= '' then
+  redis.call('DEL', KEYS[6])
+  redis.call('ZREM', KEYS[5], ARGV[9])
+end
+return 'OK'`;
+const READ = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return false end
+local ok, session = pcall(cjson.decode, raw)
+if not ok then redis.call('DEL', KEYS[1]); return false end
+if session.generation ~= ARGV[1] then return false end
+if redis.call('GET', ARGV[2] .. session.browser) ~= session.generation then return false end
+return raw`;
+const LOGOUT = `
+redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+local current = redis.call('GET', KEYS[4])
+local sessionkey = current or KEYS[2]
+local raw = redis.call('GET', sessionkey)
+local pendingRaw = redis.call('GET', KEYS[3])
+if pendingRaw then
+  local pendingOk, pending = pcall(cjson.decode, pendingRaw)
+  if pendingOk and pending.browser == ARGV[3] then redis.call('DEL', KEYS[3]) end
+end
+if not raw then return false end
+local ok, session = pcall(cjson.decode, raw)
+if not ok or session.browser ~= ARGV[3] then return false end
+redis.call('SET', ARGV[7] .. ARGV[4], raw, 'EX', ARGV[6])
+redis.call('ZADD', KEYS[5], ARGV[5], ARGV[4])
+redis.call('DEL', sessionkey, KEYS[4])
+return raw`;
+const ENQUEUE = `
+if not redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2], 'NX') then return false end
+redis.call('ZADD', KEYS[2], ARGV[3], ARGV[4])
+return 'OK'`;
+const CLAIM = `
+local candidates
+if ARGV[5] ~= '' then candidates = {ARGV[5]}
+else candidates = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, 3) end
+for _, ticket in ipairs(candidates) do
+  if redis.call('ZSCORE', KEYS[1], ticket) then
+    local raw = redis.call('GET', ARGV[3] .. ticket)
+    if not raw then redis.call('ZREM', KEYS[1], ticket)
+    elseif redis.call('SET', ARGV[4] .. ticket, ARGV[2], 'EX', ARGV[6], 'NX') then
+      redis.call('SET', ARGV[7] .. ticket, '1', 'EX', ARGV[8])
+      redis.call('ZADD', KEYS[1], tonumber(ARGV[1]) + tonumber(ARGV[6]), ticket)
+      return {ticket, raw}
+    end
+  end
+end
+return false`;
+const SETTLE = `
+if redis.call('GET', KEYS[3]) ~= ARGV[1] then return false end
+if ARGV[3] == 'complete' then
+  redis.call('DEL', KEYS[2], KEYS[3], KEYS[4])
+  redis.call('ZREM', KEYS[1], ARGV[2])
+else
+  redis.call('DEL', KEYS[3])
+  redis.call('ZADD', KEYS[1], ARGV[4], ARGV[2])
+end
+return 'OK'`;
+
+function handle(): string {
+  return randomBytes(32).toString('base64url');
+}
+function hash(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+function record(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== 'string' || value.length > 40_000) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+function validTokens(value: unknown, now = 0): value is TokenPair {
+  if (!value || typeof value !== 'object') return false;
+  const tokens = value as TokenPair;
+  return (
+    typeof tokens.accessToken === 'string' &&
+    tokens.accessToken.length > 0 &&
+    tokens.accessToken.length <= 16_384 &&
+    !/[^\x21-\x7e]/.test(tokens.accessToken) &&
+    (tokens.refreshToken === undefined ||
+      (typeof tokens.refreshToken === 'string' &&
+        tokens.refreshToken.length > 0 &&
+        tokens.refreshToken.length <= 16_384 &&
+        !/[^\x21-\x7e]/.test(tokens.refreshToken))) &&
+    Number.isSafeInteger(tokens.expiresAt) &&
+    tokens.expiresAt > now
+  );
+}
+function validRetirement(value: unknown): value is RetirementTokens {
+  if (!value || typeof value !== 'object') return false;
+  const tokens = value as RetirementTokens;
+  const token = (item: unknown) =>
+    item === undefined ||
+    (typeof item === 'string' &&
+      item.length > 0 &&
+      item.length <= 16_384 &&
+      !/[^\x21-\x7e]/.test(item));
+  return (
+    token(tokens.accessToken) &&
+    token(tokens.refreshToken) &&
+    (tokens.accessToken !== undefined || tokens.refreshToken !== undefined) &&
+    Number.isSafeInteger(tokens.expiresAt) &&
+    tokens.expiresAt > 0
+  );
+}
+
+/** All tokens and pending PKCE secrets stay in the server store. No local fallback. */
+export class OpaqueSessionStore {
+  private readonly prefix: string;
+  private readonly settings: Readonly<OpaqueSessionSettings>;
+  constructor(
+    private readonly commands: SessionCommands,
+    clientId: string,
+    private readonly now: () => number = () => Math.floor(Date.now() / 1000),
+    settings: Partial<OpaqueSessionSettings> = {},
+  ) {
+    this.settings = sessionSettings(settings);
+    if (!clientId.trim() || clientId.length > 256) throw new Error('Invalid BFF client namespace');
+    // A stable client hash also keeps all Lua keys in one Redis Cluster slot.
+    this.prefix = `oidc:bff:{${hash(clientId)}}:`;
+  }
+  private key(kind: string, id: string): string {
+    return `${this.prefix}${kind}:${hash(id)}`;
+  }
+  private queueKey(ticket: string): string {
+    return `${this.prefix}revocation:${ticket}`;
+  }
+
+  async beginLogin(input: {
+    browser?: string;
+    generation?: string;
+    next: string;
+    fresh?: boolean;
+  }): Promise<{
+    browser: string;
+    generation: string;
+    pendingHandle: string;
+    pending: PendingLogin;
+  } | null> {
+    if (
+      !input.next.startsWith('/') ||
+      input.next.startsWith('//') ||
+      input.next.includes('\\') ||
+      /[\x00-\x1f\x7f]/.test(input.next) ||
+      input.next.length > 2048
+    )
+      throw new Error('Invalid return path');
+    const browser = input.browser && HANDLE.test(input.browser) ? input.browser : handle();
+    const generation =
+      !input.fresh && input.generation && HANDLE.test(input.generation)
+        ? input.generation
+        : handle();
+    const pendingHandle = handle();
+    const pending: PendingLogin = {
+      browser: hash(browser),
+      generation,
+      state: handle(),
+      verifier: handle(),
+      nonce: handle(),
+      next: input.next,
+      startedAt: this.now(),
+    };
+    const result = await this.commands.eval(BEGIN, {
+      keys: [
+        this.key('browser', browser),
+        this.key('pending', pendingHandle),
+        this.key('current', browser),
+        `${this.prefix}revocations`,
+      ],
+      arguments: [
+        generation,
+        String(this.settings.generationSeconds),
+        JSON.stringify(pending),
+        String(this.settings.loginSeconds),
+        input.fresh ? 'fresh' : 'retain',
+        handle(),
+        String(this.now()),
+        String(this.settings.tokenRetentionSeconds),
+        `${this.prefix}revocation:`,
+      ],
+    });
+    return result === generation ? { browser, generation, pendingHandle, pending } : null;
+  }
+
+  async takeLogin(
+    pendingHandle: string | undefined,
+    browser: string | undefined,
+    generation: string | undefined,
+    state: string | null,
+  ): Promise<PendingLogin | null> {
+    if (
+      !pendingHandle ||
+      !HANDLE.test(pendingHandle) ||
+      !browser ||
+      !HANDLE.test(browser) ||
+      !generation ||
+      !HANDLE.test(generation) ||
+      !state ||
+      !HANDLE.test(state)
+    )
+      return null;
+    const parsed = record(
+      await this.commands.eval(TAKE, {
+        keys: [
+          this.key('pending', pendingHandle),
+          this.key('browser', browser),
+          this.key('claim', state),
+        ],
+        arguments: [hash(browser), generation, state, String(this.settings.loginSeconds)],
+      }),
+    );
+    if (
+      !parsed ||
+      parsed['browser'] !== hash(browser) ||
+      parsed['generation'] !== generation ||
+      parsed['state'] !== state ||
+      typeof parsed['verifier'] !== 'string' ||
+      !HANDLE.test(parsed['verifier']) ||
+      typeof parsed['nonce'] !== 'string' ||
+      !HANDLE.test(parsed['nonce']) ||
+      typeof parsed['next'] !== 'string' ||
+      typeof parsed['startedAt'] !== 'number' ||
+      parsed['startedAt'] > this.now() ||
+      this.now() - parsed['startedAt'] >= this.settings.loginSeconds
+    )
+      return null;
+    return parsed as PendingLogin;
+  }
+
+  async completeLogin(
+    pending: PendingLogin,
+    tokens: TokenPair,
+    stagedTicket?: string,
+  ): Promise<string | null> {
+    const now = this.now();
+    if (
+      !validTokens(tokens, now) ||
+      tokens.expiresAt > now + this.settings.maxProviderAccessSeconds ||
+      !/^[a-f0-9]{64}$/.test(pending.browser) ||
+      !HANDLE.test(pending.generation) ||
+      !HANDLE.test(pending.state) ||
+      !Number.isSafeInteger(pending.startedAt) ||
+      pending.startedAt > now ||
+      now - pending.startedAt >= this.settings.loginSeconds ||
+      (stagedTicket !== undefined && !HANDLE.test(stagedTicket))
+    )
+      return null;
+    const sid = `v3.${handle()}`;
+    const result = await this.commands.eval(COMPLETE, {
+      keys: [
+        `${this.prefix}browser:${pending.browser}`,
+        this.key('session', sid),
+        this.key('claim', pending.state),
+        `${this.prefix}current:${pending.browser}`,
+        `${this.prefix}revocations`,
+        this.queueKey(stagedTicket ?? 'invalid'),
+        `${this.prefix}retiring:${stagedTicket ?? 'invalid'}`,
+      ],
+      arguments: [
+        pending.generation,
+        JSON.stringify({
+          browser: pending.browser,
+          generation: pending.generation,
+          activeUntil: Math.min(now + this.settings.sessionSeconds, tokens.expiresAt),
+          tokens,
+        }),
+        String(Math.min(this.settings.sessionSeconds, tokens.expiresAt - now)),
+        JSON.stringify(pending),
+        String(now),
+        String(this.settings.tokenRetentionSeconds),
+        handle(),
+        `${this.prefix}revocation:`,
+        stagedTicket ?? '',
+      ],
+    });
+    return result === 'OK' ? sid : null;
+  }
+
+  async read(sid: string | undefined, generation: string | undefined): Promise<TokenPair | null> {
+    if (!sid || !SESSION_HANDLE.test(sid) || !generation || !HANDLE.test(generation)) return null;
+    const parsed = record(
+      await this.commands.eval(READ, {
+        keys: [this.key('session', sid)],
+        arguments: [generation, `${this.prefix}browser:`],
+      }),
+    );
+    return parsed &&
+      typeof parsed['activeUntil'] === 'number' &&
+      parsed['activeUntil'] > this.now() &&
+      validTokens(parsed['tokens'], this.now())
+      ? parsed['tokens']
+      : null;
+  }
+
+  async logout(
+    browser: string | undefined,
+    sid?: string,
+    pendingHandle?: string,
+  ): Promise<{
+    generation: string;
+    tokens: TokenPair | null;
+    revocationTicket: string | null;
+  } | null> {
+    if (!browser || !HANDLE.test(browser)) return null;
+    const generation = handle();
+    const ticket = handle();
+    const parsed = record(
+      await this.commands.eval(LOGOUT, {
+        keys: [
+          this.key('browser', browser),
+          this.key('session', sid && SESSION_HANDLE.test(sid) ? sid : 'invalid'),
+          this.key(
+            'pending',
+            pendingHandle && HANDLE.test(pendingHandle) ? pendingHandle : 'invalid',
+          ),
+          this.key('current', browser),
+          `${this.prefix}revocations`,
+        ],
+        arguments: [
+          generation,
+          String(this.settings.generationSeconds),
+          hash(browser),
+          ticket,
+          String(this.now()),
+          String(this.settings.tokenRetentionSeconds),
+          `${this.prefix}revocation:`,
+        ],
+      }),
+    );
+    const tokens = parsed && validTokens(parsed['tokens']) ? parsed['tokens'] : null;
+    return { generation, tokens, revocationTicket: tokens ? ticket : null };
+  }
+
+  /** Stage immediately after token minting; session commit transfers custody atomically. */
+  async queueRevocation(tokens: RetirementTokens, delaySeconds = 0): Promise<string> {
+    if (
+      !validRetirement(tokens) ||
+      !Number.isSafeInteger(delaySeconds) ||
+      delaySeconds < 0 ||
+      delaySeconds > this.settings.loginSeconds
+    ) {
+      throw new Error('Invalid token retirement record');
+    }
+    const ticket = handle();
+    const result = await this.commands.eval(ENQUEUE, {
+      keys: [this.queueKey(ticket), `${this.prefix}revocations`],
+      arguments: [
+        JSON.stringify({ tokens }),
+        String(this.settings.tokenRetentionSeconds),
+        String(this.now() + delaySeconds),
+        ticket,
+      ],
+    });
+    if (result !== 'OK') throw new Error('BFF token retirement is unavailable');
+    return ticket;
+  }
+
+  async claimRevocation(ticket?: string): Promise<RevocationClaim | null> {
+    if (ticket !== undefined && !HANDLE.test(ticket)) return null;
+    const lease = handle();
+    const result = await this.commands.eval(CLAIM, {
+      keys: [`${this.prefix}revocations`],
+      arguments: [
+        String(this.now()),
+        lease,
+        `${this.prefix}revocation:`,
+        `${this.prefix}revocation-lease:`,
+        ticket ?? '',
+        String(this.settings.leaseSeconds),
+        `${this.prefix}retiring:`,
+        String(this.settings.tokenRetentionSeconds),
+      ],
+    });
+    if (!Array.isArray(result) || typeof result[0] !== 'string' || !HANDLE.test(result[0]))
+      return null;
+    const parsed = record(result[1]);
+    if (!parsed || !validRetirement(parsed['tokens']))
+      throw new Error('Invalid BFF token retirement record');
+    return { ticket: result[0], lease, tokens: parsed['tokens'] };
+  }
+
+  async revocationPending(ticket: string): Promise<boolean> {
+    if (!HANDLE.test(ticket)) return false;
+    return (
+      (await this.commands.eval("return redis.call('EXISTS', KEYS[1])", {
+        keys: [this.queueKey(ticket)],
+        arguments: [],
+      })) === 1
+    );
+  }
+
+  async settleRevocation(claim: RevocationClaim, complete: boolean): Promise<boolean> {
+    if (!HANDLE.test(claim.ticket) || !HANDLE.test(claim.lease)) return false;
+    return (
+      (await this.commands.eval(SETTLE, {
+        keys: [
+          `${this.prefix}revocations`,
+          this.queueKey(claim.ticket),
+          `${this.prefix}revocation-lease:${claim.ticket}`,
+          `${this.prefix}retiring:${claim.ticket}`,
+        ],
+        arguments: [
+          claim.lease,
+          claim.ticket,
+          complete ? 'complete' : 'retry',
+          String(this.now() + this.settings.retrySeconds),
+        ],
+      })) === 'OK'
+    );
+  }
+}

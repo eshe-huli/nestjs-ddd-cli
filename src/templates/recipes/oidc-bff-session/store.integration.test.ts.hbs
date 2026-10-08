@@ -1,0 +1,480 @@
+import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { createClient } from '@redis/client';
+import { createValkeySessionCommands } from './valkey-session-store';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  OpaqueSessionStore,
+  SESSION_SECONDS,
+  TOKEN_RETENTION_SECONDS,
+  type PendingLogin,
+} from './opaque-session-store';
+
+const address = process.env.OIDC_BFF_TEST_VALKEY_URL;
+const integration = address ? test : test.skip;
+const client = createClient({
+  url: address ?? 'redis://127.0.0.1:16380',
+  disableOfflineQueue: true,
+  socket: { connectTimeout: 1000, reconnectStrategy: false },
+});
+client.on('error', () => {});
+beforeAll(async () => {
+  if (address) await client.connect();
+});
+afterAll(() => {
+  if (client.isOpen) client.destroy();
+});
+const commands = {
+  eval: (script: string, options: { keys: string[]; arguments: string[] }) =>
+    client.withAbortSignal(AbortSignal.timeout(1000)).eval(script, options),
+};
+function fixture() {
+  return new OpaqueSessionStore(commands, `synthetic-${randomUUID()}`);
+}
+function pair() {
+  return {
+    accessToken: 'synthetic_opaque_access',
+    refreshToken: 'synthetic_opaque_refresh',
+    expiresAt: Math.floor(Date.now() / 1000) + 3600,
+  };
+}
+async function login(store: OpaqueSessionStore) {
+  const start = (await store.beginLogin({ next: '/board' }))!;
+  const pending = (await store.takeLogin(
+    start.pendingHandle,
+    start.browser,
+    start.generation,
+    start.pending.state,
+  ))!;
+  const sid = (await store.completeLogin(pending, pair()))!;
+  return { ...start, pending, sid };
+}
+
+integration('opaque cookies hold neither access/refresh tokens nor PKCE verifier', async () => {
+  const store = fixture();
+  const flow = await login(store);
+  expect(flow.sid).toMatch(/^v3\.[A-Za-z0-9_-]{43}$/);
+  expect(flow.pendingHandle).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  const cookies = [flow.sid, flow.pendingHandle, flow.browser, flow.generation].join(';');
+  for (const secret of [
+    pair().accessToken,
+    pair().refreshToken,
+    flow.pending.verifier,
+    flow.pending.nonce,
+  ]) {
+    expect(cookies).not.toContain(secret);
+  }
+  expect((await store.read(flow.sid, flow.generation))?.accessToken).toBe(pair().accessToken);
+});
+
+integration('pending state has one concurrent consumer and one completion', async () => {
+  const store = fixture();
+  const start = (await store.beginLogin({ next: '/' }))!;
+  const replies = await Promise.all(
+    Array.from({ length: 8 }, () =>
+      store.takeLogin(start.pendingHandle, start.browser, start.generation, start.pending.state),
+    ),
+  );
+  const claimed = replies.filter((value): value is PendingLogin => value !== null);
+  expect(claimed).toHaveLength(1);
+  const completions = await Promise.all(
+    Array.from({ length: 8 }, () => store.completeLogin(claimed[0], pair())),
+  );
+  expect(completions.filter(Boolean)).toHaveLength(1);
+  expect(await store.completeLogin(start.pending, pair())).toBeNull();
+});
+
+integration(
+  'wrong browser, state, generation and client cannot consume pending login',
+  async () => {
+    const store = fixture();
+    const foreign = fixture();
+    const start = (await store.beginLogin({ next: '/' }))!;
+    const wrong = 'a'.repeat(43);
+    expect(
+      await store.takeLogin(start.pendingHandle, wrong, start.generation, start.pending.state),
+    ).toBeNull();
+    expect(
+      await store.takeLogin(start.pendingHandle, start.browser, wrong, start.pending.state),
+    ).toBeNull();
+    expect(
+      await store.takeLogin(start.pendingHandle, start.browser, start.generation, wrong),
+    ).toBeNull();
+    expect(
+      await foreign.takeLogin(
+        start.pendingHandle,
+        start.browser,
+        start.generation,
+        start.pending.state,
+      ),
+    ).toBeNull();
+    expect(
+      await store.takeLogin(
+        start.pendingHandle,
+        start.browser,
+        start.generation,
+        start.pending.state,
+      ),
+    ).not.toBeNull();
+  },
+);
+
+integration(
+  'logout invalidates both pending callbacks and callbacks already exchanging a code',
+  async () => {
+    const store = fixture();
+    const start = (await store.beginLogin({ next: '/' }))!;
+    const pending = (await store.takeLogin(
+      start.pendingHandle,
+      start.browser,
+      start.generation,
+      start.pending.state,
+    ))!;
+    const logout = (await store.logout(start.browser, undefined, start.pendingHandle))!;
+    expect(logout.generation).not.toBe(start.generation);
+    expect(await store.completeLogin(pending, pair())).toBeNull();
+    expect(
+      await store.takeLogin(
+        start.pendingHandle,
+        start.browser,
+        start.generation,
+        start.pending.state,
+      ),
+    ).toBeNull();
+    expect(
+      await store.beginLogin({ browser: start.browser, generation: start.generation, next: '/' }),
+    ).toBeNull();
+    expect(
+      await store.beginLogin({ browser: start.browser, generation: logout.generation, next: '/' }),
+    ).not.toBeNull();
+  },
+);
+
+integration(
+  'a delayed callback cookie cannot revive any old browser session after logout',
+  async () => {
+    const store = fixture();
+    const first = await login(store);
+    const second = (await store.beginLogin({
+      browser: first.browser,
+      generation: first.generation,
+      next: '/',
+    }))!;
+    const pending = (await store.takeLogin(
+      second.pendingHandle,
+      first.browser,
+      first.generation,
+      second.pending.state,
+    ))!;
+    const delayedSid = (await store.completeLogin(pending, pair()))!;
+    const logout = (await store.logout(first.browser, first.sid))!;
+    expect(logout.tokens?.refreshToken).toBe(pair().refreshToken);
+    expect(await store.read(first.sid, first.generation)).toBeNull();
+    expect(await store.read(delayedSid, first.generation)).toBeNull();
+    expect(await store.read(delayedSid, logout.generation)).toBeNull();
+  },
+);
+
+integration('Three application logout generations remain independent', async () => {
+  const first = fixture(),
+    second = fixture(),
+    third = fixture();
+  const a = await login(first),
+    b = await login(second),
+    c = await login(third);
+  expect(await second.read(a.sid, a.generation)).toBeNull();
+  expect(await first.read(b.sid, b.generation)).toBeNull();
+  await first.logout(a.browser, a.sid, a.pendingHandle);
+  expect(await first.read(a.sid, a.generation)).toBeNull();
+  expect((await second.read(b.sid, b.generation))?.accessToken).toBe(pair().accessToken);
+  expect((await third.read(c.sid, c.generation))?.accessToken).toBe(pair().accessToken);
+});
+
+integration(
+  'a fresh account switch supersedes earlier callbacks and accepts a stale cookie generation safely',
+  async () => {
+    const store = fixture();
+    const first = await login(store);
+    const older = (await store.beginLogin({
+      browser: first.browser,
+      generation: first.generation,
+      next: '/board',
+    }))!;
+    const claimed = (await store.takeLogin(
+      older.pendingHandle,
+      older.browser,
+      older.generation,
+      older.pending.state,
+    ))!;
+    const fresh = (await store.beginLogin({
+      browser: first.browser,
+      generation: first.generation,
+      next: '/account',
+      fresh: true,
+    }))!;
+    expect(fresh.generation).not.toBe(first.generation);
+    expect(await store.read(first.sid, first.generation)).toBeNull();
+    expect(await store.completeLogin(claimed, pair())).toBeNull();
+    const pending = (await store.takeLogin(
+      fresh.pendingHandle,
+      fresh.browser,
+      fresh.generation,
+      fresh.pending.state,
+    ))!;
+    const sid = (await store.completeLogin(pending, pair()))!;
+    expect((await store.read(sid, fresh.generation))?.accessToken).toBe(pair().accessToken);
+    // A delayed old Set-Cookie can cause a retry, but cannot restore an old actor.
+    expect(await store.read(sid, first.generation)).toBeNull();
+    expect(
+      await store.beginLogin({
+        browser: first.browser,
+        generation: first.generation,
+        next: '/',
+        fresh: true,
+      }),
+    ).not.toBeNull();
+  },
+);
+
+integration('another BFF instance can read a session with bounded absolute expiry', async () => {
+  const id = `synthetic-${randomUUID()}`;
+  const store = new OpaqueSessionStore(commands, id);
+  const flow = await login(store);
+  const restarted = new OpaqueSessionStore(commands, id);
+  expect((await restarted.read(flow.sid, flow.generation))?.accessToken).toBe(pair().accessToken);
+  const keys = await client.keys(
+    `oidc:bff:{${createHash('sha256').update(id).digest('hex')}}:session:*`,
+  );
+  const ttls = await Promise.all(keys.map((key) => client.ttl(key)));
+  expect(ttls.every((ttl) => ttl > 0 && ttl <= TOKEN_RETENTION_SECONDS)).toBe(true);
+  const logicalExpiry = new OpaqueSessionStore(
+    commands,
+    id,
+    () => Math.floor(Date.now() / 1000) + SESSION_SECONDS,
+  );
+  expect(await logicalExpiry.read(flow.sid, flow.generation)).toBeNull();
+  const expired = new OpaqueSessionStore(commands, id, () => pair().expiresAt + 1);
+  expect(await expired.read(flow.sid, flow.generation)).toBeNull();
+});
+
+integration(
+  'logout atomically retains own tokens for restart-safe revocation without clearing sibling applications',
+  async () => {
+    const id = `synthetic-${randomUUID()}`;
+    const store = new OpaqueSessionStore(commands, id);
+    const siblingStore = fixture();
+    const firstFlow = await login(store),
+      sibling = await login(siblingStore);
+    const retired = (await store.logout(firstFlow.browser, firstFlow.sid))!;
+    expect(retired.revocationTicket).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(await store.read(firstFlow.sid, firstFlow.generation)).toBeNull();
+    expect(await siblingStore.claimRevocation(retired.revocationTicket!)).toBeNull();
+    expect(await siblingStore.read(sibling.sid, sibling.generation)).not.toBeNull();
+    const restarted = new OpaqueSessionStore(commands, id);
+    const claims = await Promise.all(
+      Array.from({ length: 6 }, () => restarted.claimRevocation(retired.revocationTicket!)),
+    );
+    const claim = claims.find(Boolean)!;
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    expect(claim.tokens).toEqual(pair());
+    expect(await restarted.settleRevocation({ ...claim, lease: 'a'.repeat(43) }, true)).toBe(false);
+    expect(await restarted.settleRevocation(claim, false)).toBe(true);
+    expect(await restarted.claimRevocation()).toBeNull();
+    const retry = (await restarted.claimRevocation(retired.revocationTicket!))!;
+    expect(await restarted.settleRevocation(retry, true)).toBe(true);
+    expect(await restarted.claimRevocation(retired.revocationTicket!)).toBeNull();
+  },
+);
+
+integration(
+  'minted tokens transfer to a session atomically only after exact pending and pair binding',
+  async () => {
+    const store = fixture();
+    const start = (await store.beginLogin({ next: '/', fresh: true }))!;
+    const pending = (await store.takeLogin(
+      start.pendingHandle,
+      start.browser,
+      start.generation,
+      start.pending.state,
+    ))!;
+    const ticket = await store.queueRevocation(pair(), 600);
+    expect(await store.claimRevocation()).toBeNull();
+    expect(
+      await store.completeLogin(pending, { ...pair(), accessToken: 'wrong-minted-pair' }, ticket),
+    ).toBeNull();
+    const sid = (await store.completeLogin(pending, pair(), ticket))!;
+    expect(await store.read(sid, start.generation)).not.toBeNull();
+    expect(await store.claimRevocation(ticket)).toBeNull();
+    const fresh = (await store.beginLogin({
+      browser: start.browser,
+      generation: start.generation,
+      next: '/',
+      fresh: true,
+    }))!;
+    expect(await store.read(sid, start.generation)).toBeNull();
+    const retirement = (await store.claimRevocation())!;
+    expect(retirement.tokens).toEqual(pair());
+    expect(await store.settleRevocation(retirement, true)).toBe(true);
+    expect(fresh.generation).not.toBe(start.generation);
+  },
+);
+
+integration('an expired browser session retains refresh custody until its own logout', async () => {
+  const id = `synthetic-${randomUUID()}`;
+  const store = new OpaqueSessionStore(commands, id);
+  const flow = await login(store);
+  const later = new OpaqueSessionStore(commands, id, () => pair().expiresAt + 1);
+  expect(await later.read(flow.sid, flow.generation)).toBeNull();
+  const retired = (await later.logout(flow.browser, flow.sid))!;
+  const claim = (await later.claimRevocation(retired.revocationTicket!))!;
+  expect(claim.tokens.refreshToken).toBe(pair().refreshToken);
+  expect(await later.settleRevocation(claim, true)).toBe(true);
+});
+
+integration('storage outages fail closed and do not manufacture an anonymous session', async () => {
+  const store = new OpaqueSessionStore(
+    {
+      eval: async () => {
+        throw new Error('synthetic unavailable');
+      },
+    },
+    'outage',
+  );
+  await expect(store.beginLogin({ next: '/' })).rejects.toThrow('synthetic unavailable');
+  await expect(store.read(`v3.${'a'.repeat(43)}`, 'b'.repeat(43))).rejects.toThrow(
+    'synthetic unavailable',
+  );
+});
+
+test('malformed handles and external return paths are rejected without storage access', async () => {
+  let accesses = 0;
+  const store = new OpaqueSessionStore(
+    {
+      eval: async () => {
+        accesses++;
+        return null;
+      },
+    },
+    'safe-input',
+  );
+  expect(await store.read('signed.access.token', 'a'.repeat(43))).toBeNull();
+  expect(
+    await store.takeLogin('invalid', 'a'.repeat(43), 'b'.repeat(43), 'c'.repeat(43)),
+  ).toBeNull();
+  for (const next of ['https://foreign.test', '//foreign.test', '/\\foreign', '/bad\npath']) {
+    await expect(store.beginLogin({ next })).rejects.toThrow('Invalid return path');
+  }
+  expect(accesses).toBe(0);
+});
+
+integration(
+  'expired leases are reclaimable after restart while stale owners cannot acknowledge successors',
+  async () => {
+    const id = `synthetic-${randomUUID()}`;
+    const store = new OpaqueSessionStore(commands, id, undefined, {
+      leaseSeconds: 1,
+      retrySeconds: 1,
+    });
+    const ticket = await store.queueRevocation({
+      refreshToken: 'synthetic-refresh-only',
+      expiresAt: 1,
+    });
+    const first = (await store.claimRevocation(ticket))!;
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const restarted = new OpaqueSessionStore(commands, id, undefined, {
+      leaseSeconds: 1,
+      retrySeconds: 1,
+    });
+    const successor = (await restarted.claimRevocation(ticket))!;
+    expect(successor.lease).not.toBe(first.lease);
+    expect(await store.settleRevocation(first, true)).toBe(false);
+    expect(await restarted.revocationPending(ticket)).toBe(true);
+    expect(await restarted.settleRevocation(successor, true)).toBe(true);
+    expect(await restarted.revocationPending(ticket)).toBe(false);
+  },
+);
+
+integration(
+  'access-only retirement is durable and cannot manufacture an authenticated login',
+  async () => {
+    const store = fixture();
+    const ticket = await store.queueRevocation({
+      accessToken: 'synthetic-access-only',
+      expiresAt: 1,
+    });
+    const claim = (await store.claimRevocation(ticket))!;
+    expect(claim.tokens.refreshToken).toBeUndefined();
+    expect(claim.tokens.accessToken).toBe('synthetic-access-only');
+    expect(await store.settleRevocation(claim, true)).toBe(true);
+  },
+);
+
+integration(
+  'the bounded Valkey adapter preserves real Lua custody across a new connection owner',
+  async () => {
+    const namespace = `synthetic-adapter-${randomUUID()}`;
+    const first = createValkeySessionCommands({ url: address!, trustedInternalPlaintext: true });
+    const second = createValkeySessionCommands({ url: address!, trustedInternalPlaintext: true });
+    try {
+      const initial = new OpaqueSessionStore(first, namespace);
+      const ticket = await initial.queueRevocation({
+        refreshToken: 'synthetic_refresh_only',
+        expiresAt: 1,
+      });
+      first.close();
+      const restarted = new OpaqueSessionStore(second, namespace);
+      const claim = await restarted.claimRevocation(ticket);
+      expect(claim?.tokens.refreshToken).toBe('synthetic_refresh_only');
+      expect(claim?.tokens.accessToken).toBeUndefined();
+      expect(await restarted.settleRevocation(claim!, true)).toBe(true);
+      expect(await restarted.revocationPending(ticket)).toBe(false);
+    } finally {
+      first.close();
+      second.close();
+    }
+  },
+);
+
+integration(
+  'session admission refuses a staged pair while a revocation worker owns its lease',
+  async () => {
+    const store = fixture();
+    const start = (await store.beginLogin({ next: '/', fresh: true }))!;
+    const pending = (await store.takeLogin(
+      start.pendingHandle,
+      start.browser,
+      start.generation,
+      start.pending.state,
+    ))!;
+    const tokens = pair();
+    const ticket = await store.queueRevocation(tokens, 600);
+    const claim = (await store.claimRevocation(ticket))!;
+    expect(await store.completeLogin(pending, tokens, ticket)).toBeNull();
+    expect(await store.revocationPending(ticket)).toBe(true);
+    expect(await store.settleRevocation(claim, false)).toBe(true);
+    expect(await store.completeLogin(pending, tokens, ticket)).toBeNull();
+    const retry = (await store.claimRevocation(ticket))!;
+    expect(await store.settleRevocation(retry, true)).toBe(true);
+    expect(await store.completeLogin(pending, tokens, ticket)).toBeNull();
+  },
+);
+
+integration('expired retirement leases cannot restore session admissibility', async () => {
+  const namespace = `synthetic-fencing-${randomUUID()}`;
+  const store = new OpaqueSessionStore(commands, namespace, undefined, { leaseSeconds: 1 });
+  const start = (await store.beginLogin({ next: '/', fresh: true }))!;
+  const pending = (await store.takeLogin(
+    start.pendingHandle,
+    start.browser,
+    start.generation,
+    start.pending.state,
+  ))!;
+  const tokens = pair();
+  const ticket = await store.queueRevocation(tokens, 600);
+  const claim = (await store.claimRevocation(ticket))!;
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  expect(await store.completeLogin(pending, tokens, ticket)).toBeNull();
+  const nextClaim = (await store.claimRevocation(ticket))!;
+  expect(nextClaim.lease).not.toBe(claim.lease);
+  expect(await store.settleRevocation(claim, true)).toBe(false);
+  expect(await store.settleRevocation(nextClaim, true)).toBe(true);
+});

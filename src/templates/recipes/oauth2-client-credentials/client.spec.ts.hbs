@@ -1,0 +1,234 @@
+import {
+  OAuth2ClientCredentialsClient,
+  OAuth2ClientCredentialsOptions,
+  OAuth2ClientCredentialsUnavailableError,
+} from './oauth2-client-credentials.client';
+import { OAuth2ClientCredentialsModule } from './oauth2-client-credentials.module';
+
+describe('OAuth2 client credentials', () => {
+  const response = (changes: Record<string, unknown> = {}) =>
+    new Response(
+      JSON.stringify({
+        access_token: 'PRIVATE_TOKEN',
+        token_type: 'Bearer',
+        expires_in: 3600,
+        ...changes,
+      }),
+    );
+  const create = (options: Partial<OAuth2ClientCredentialsOptions> = {}) =>
+    new OAuth2ClientCredentialsClient({
+      tokenUrl: 'https://provider.example.test/oauth/v3/token',
+      clientId: 'PRIVATE_ID',
+      clientSecret: 'PRIVATE_SECRET',
+      transport: () => Promise.resolve(response()),
+      ...options,
+    });
+
+  it('uses form encoded Basic components and a fixed form grant with snapshotted scopes', async () => {
+    const transport = jest.fn((_url: string, _init: RequestInit) => {
+      void _url;
+      void _init;
+      return Promise.resolve(response());
+    });
+    const scopes = ['messages.send'];
+    const client = create({
+      clientId: 'client:with space',
+      clientSecret: 'secret+value',
+      scopes,
+      transport,
+    });
+    scopes.push('admin');
+    expect(await client.getAccessToken()).toBe('PRIVATE_TOKEN');
+    const call = transport.mock.calls[0];
+    if (!call) throw new Error('Missing provider request');
+    expect(call[0]).toBe('https://provider.example.test/oauth/v3/token');
+    expect(call[1]).toMatchObject({
+      method: 'POST',
+      redirect: 'error',
+      cache: 'no-store',
+      body: 'grant_type=client_credentials&scope=messages.send',
+    });
+    expect(call[1].headers).toMatchObject({
+      authorization: `Basic ${Buffer.from('client%3Awith+space:secret%2Bvalue').toString('base64')}`,
+      'content-type': 'application/x-www-form-urlencoded',
+    });
+    expect(JSON.stringify(client)).toBe('{}');
+  });
+
+  it('shares concurrent acquisition then caches the same current token', async () => {
+    let release: ((value: Response) => void) | undefined;
+    const transport = jest.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const client = create({ transport });
+    const results = Array.from({ length: 20 }, () => client.getAccessToken());
+    expect(transport).toHaveBeenCalledTimes(1);
+    if (!release) throw new Error('Missing grant');
+    release(response());
+    expect(await Promise.all(results)).toEqual(
+      Array.from({ length: 20 }, () => 'PRIVATE_TOKEN'),
+    );
+    expect(await client.getAccessToken()).toBe('PRIVATE_TOKEN');
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it('renews at request-start expiry with a conservative lifetime margin', async () => {
+    let now = 1000;
+    let count = 0;
+    const transport = jest.fn(() =>
+      Promise.resolve(
+        response({ access_token: `token${++count}`, expires_in: 10 }),
+      ),
+    );
+    const client = create({ clock: () => now, transport });
+    expect(await client.getAccessToken()).toBe('token1');
+    now = 9999;
+    expect(await client.getAccessToken()).toBe('token1');
+    now = 10000;
+    expect(await client.getAccessToken()).toBe('token2');
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
+
+  it('compare-token invalidation preserves a newer cache and never resends anything', async () => {
+    let count = 0;
+    const transport = jest.fn(() =>
+      Promise.resolve(response({ access_token: `token${++count}` })),
+    );
+    const client = create({ transport });
+    const old = await client.getAccessToken();
+    client.invalidate(old);
+    const current = await client.getAccessToken();
+    client.invalidate(old);
+    expect(await client.getAccessToken()).toBe(current);
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears failed single-flight state, rejects stale cache and does not implicitly retry', async () => {
+    let now = 1000;
+    const transport = jest
+      .fn()
+      .mockImplementationOnce(() =>
+        Promise.resolve(response({ expires_in: 1 })),
+      )
+      .mockImplementationOnce(() =>
+        Promise.resolve(new Response('PRIVATE_RESPONSE', { status: 503 })),
+      )
+      .mockImplementationOnce(() => Promise.resolve(response()));
+    const client = create({ transport, clock: () => now });
+    await client.getAccessToken();
+    now = 2000;
+    const error = await client
+      .getAccessToken()
+      .catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(OAuth2ClientCredentialsUnavailableError);
+    expect(error).toMatchObject({
+      message: 'Provider credentials unavailable',
+      reason: 'http',
+      status: 503,
+    });
+    expect(String(error)).not.toContain('PRIVATE');
+    expect(transport).toHaveBeenCalledTimes(2);
+    expect(await client.getAccessToken()).toBe('PRIVATE_TOKEN');
+    expect(transport).toHaveBeenCalledTimes(3);
+  });
+
+  it('requires explicit decimal-string expiry compatibility', async () => {
+    const transport = () => Promise.resolve(response({ expires_in: '3600' }));
+    await expect(create({ transport }).getAccessToken()).rejects.toMatchObject({
+      reason: 'invalid_response',
+    });
+    expect(
+      await create({ transport, allowStringExpiresIn: true }).getAccessToken(),
+    ).toBe('PRIVATE_TOKEN');
+  });
+
+  it.each([
+    { access_token: '' },
+    { access_token: 'PRIVATE\nTOKEN' },
+    { access_token: 'x'.repeat(17000) },
+    { token_type: 'MAC' },
+    { expires_in: undefined },
+    { expires_in: 0 },
+    { expires_in: -1 },
+    { expires_in: 90000 },
+    { expires_in: 1.5 },
+    { expires_in: '3600.0' },
+  ])('rejects invalid provider token contracts safely', async (changes) => {
+    await expect(
+      create({
+        transport: () => Promise.resolve(response(changes)),
+      }).getAccessToken(),
+    ).rejects.toMatchObject({
+      message: 'Provider credentials unavailable',
+      reason: 'invalid_response',
+    });
+  });
+
+  it('rejects tokens which expired during acquisition and invalid clock evidence', async () => {
+    let now = 1000;
+    await expect(
+      create({
+        clock: () => now,
+        transport: () => {
+          now = 5000;
+          return Promise.resolve(response({ expires_in: 1 }));
+        },
+      }).getAccessToken(),
+    ).rejects.toMatchObject({ reason: 'invalid_response' });
+    await expect(
+      create({ clock: () => NaN }).getAccessToken(),
+    ).rejects.toMatchObject({ reason: 'invalid_response' });
+  });
+
+  it.each([
+    { tokenUrl: 'http://provider.example.test/token' },
+    { tokenUrl: 'https://PRIVATE@provider.example.test/token' },
+    { tokenUrl: 'https://provider.example.test/token?PRIVATE' },
+    { tokenUrl: 'https://provider.example.test/' },
+    { tokenUrl: 'https://provider.example.test/%2E%2E/token' },
+    { clientId: '' },
+    { clientSecret: '' },
+    { scopes: ['scope with space'] },
+    { scopes: ['x', 'x'] },
+    { renewalMarginMs: 60001 },
+  ])('rejects unsafe configuration without exposing values', (options) => {
+    expect(() => create(options)).toThrow(
+      'Invalid provider credential configuration',
+    );
+  });
+
+  it('bounds grant network/stream timeouts and sanitizes unexpected transport failures', async () => {
+    await expect(
+      create({
+        timeoutMs: 10,
+        transport: () => new Promise<Response>(() => undefined),
+      }).getAccessToken(),
+    ).rejects.toMatchObject({ reason: 'timeout' });
+    await expect(
+      create({
+        transport: () => Promise.reject(new Error('PRIVATE_CREDENTIALS')),
+      }).getAccessToken(),
+    ).rejects.toMatchObject({
+      message: 'Provider credentials unavailable',
+      reason: 'network',
+    });
+  });
+
+  it('exports one owning sync/async Nest provider without app wiring', () => {
+    const options = {
+      tokenUrl: 'https://provider.example.test/token',
+      clientId: 'id',
+      clientSecret: 'secret',
+    };
+    expect(OAuth2ClientCredentialsModule.register(options).exports).toEqual([
+      OAuth2ClientCredentialsClient,
+    ]);
+    expect(
+      OAuth2ClientCredentialsModule.registerAsync({ useFactory: () => options })
+        .exports,
+    ).toEqual([OAuth2ClientCredentialsClient]);
+  });
+});

@@ -1,0 +1,350 @@
+import {
+  InvalidOAuth2TokenError,
+  OAuth2IntrospectionUnavailableError,
+  OAuth2TokenIntrospectionClient,
+  OAuth2TokenIntrospectionOptions,
+} from './oauth2-token-introspection.client';
+import { OAuth2TokenIntrospectionModule } from './oauth2-token-introspection.module';
+import { createServer } from 'node:http';
+describe('OAuth2 token introspection', () => {
+  const original = 'ory_at_test_opaque';
+  const claims = {
+    active: true,
+    iss: 'https://accounts.example.test/',
+    sub: 'external-subject',
+    client_id: 'web-client',
+    aud: ['identity-api'],
+    scope: 'openid identity:read',
+    exp: 2000000000,
+    iat: 1900000000,
+    nbf: 1900000000,
+    token_type: 'Bearer',
+    token_use: 'access_token',
+    ext: { binding: { session: 'server-set-session' } },
+  };
+  const response = (body: unknown = claims) =>
+    new Response(JSON.stringify(body), { status: 200 });
+  const create = (options: Partial<OAuth2TokenIntrospectionOptions> = {}) =>
+    new OAuth2TokenIntrospectionClient({
+      introspectionUrl: 'https://provider.example.test/admin/oauth2/introspect',
+      transport: () => Promise.resolve(response()),
+      ...options,
+    });
+  it('uses the default transport against a real HTTP endpoint with form-only credentials', async () => {
+    let received = '';
+    let requestPath = '';
+    const server = createServer((request, outgoing) => {
+      requestPath = request.url ?? '';
+      expect(request.method).toBe('POST');
+      expect(request.headers['content-type']).toBe(
+        'application/x-www-form-urlencoded',
+      );
+      request.on('data', (chunk: Buffer) => {
+        received += chunk.toString();
+      });
+      request.on('end', () => {
+        outgoing.setHeader('Content-Type', 'application/json');
+        outgoing.end(JSON.stringify(claims));
+      });
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    const address = server.address();
+    if (!address || typeof address === 'string')
+      throw new Error('Missing test endpoint');
+    try {
+      const client = create({
+        introspectionUrl: `http://127.0.0.1:${address.port}/introspect`,
+        trustedInternalHttp: true,
+        transport: undefined,
+      });
+      await expect(client.introspect(original)).resolves.toMatchObject({
+        subject: claims.sub,
+      });
+      expect(requestPath).toBe('/introspect');
+      expect(new URLSearchParams(received).get('token')).toBe(original);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+  it('preserves provider evidence without inventing principal or grant claims', async () => {
+    const result = await create().introspect(original);
+    expect(result).toMatchObject({
+      issuer: claims.iss,
+      subject: claims.sub,
+      clientId: claims.client_id,
+      audiences: claims.aud,
+      scopes: ['openid', 'identity:read'],
+      expiresAt: claims.exp,
+      tokenUse: 'access_token',
+      extensions: claims.ext,
+    });
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.extensions['binding'])).toBe(true);
+    expect(result.claims['grant_type']).toBeUndefined();
+  });
+  it('accepts minimal RFC7662 evidence while leaving mandatory claims to consumer policy', async () => {
+    expect(
+      await create({
+        transport: () => Promise.resolve(response({ active: true })),
+      }).introspect(original),
+    ).toMatchObject({ audiences: [], scopes: [] });
+    await expect(
+      create().validate(original, {
+        validate: () => {
+          throw new InvalidOAuth2TokenError('policy_rejected');
+        },
+      }),
+    ).rejects.toMatchObject({ reason: 'policy_rejected' });
+  });
+  it('applies consumer policy before returning its principal', async () => {
+    const principal = await create().validate(original, {
+      validate: (evidence) => {
+        if (
+          evidence.issuer !== claims.iss ||
+          evidence.clientId !== 'web-client' ||
+          evidence.tokenUse !== 'access_token'
+        )
+          throw new InvalidOAuth2TokenError('policy_rejected');
+        return { kind: 'consumer-defined', subject: evidence.subject };
+      },
+    });
+    expect(principal).toEqual({
+      kind: 'consumer-defined',
+      subject: claims.sub,
+    });
+  });
+  it('does not use token_type_hint as proof of access-token kind', async () => {
+    const client = create({
+      transport: () =>
+        Promise.resolve(response({ ...claims, token_use: 'refresh_token' })),
+    });
+    await expect(
+      client.validate(original, {
+        validate: (evidence) => {
+          if (evidence.tokenUse !== 'access_token')
+            throw new InvalidOAuth2TokenError('policy_rejected');
+          return evidence;
+        },
+      }),
+    ).rejects.toMatchObject({ reason: 'policy_rejected' });
+  });
+  it('makes a new call every time so an active token can become revoked', async () => {
+    let calls = 0;
+    const client = create({
+      transport: () =>
+        Promise.resolve(response(++calls === 1 ? claims : { active: false })),
+    });
+    await client.introspect(original);
+    await expect(client.introspect(original)).rejects.toMatchObject({
+      reason: 'inactive_token',
+    });
+    expect(calls).toBe(2);
+  });
+  it('snapshots endpoint and secret headers, sends form only and disables redirects/cache', async () => {
+    const headers = { authorization: 'Basic PRIVATE_HEADER' };
+    const transport = jest.fn((_url: string, _init: RequestInit) => {
+      void _url;
+      void _init;
+      return Promise.resolve(response());
+    });
+    const options = {
+      introspectionUrl: 'https://provider.example.test/admin/oauth2/introspect',
+      requestHeaders: headers,
+      transport,
+    };
+    const client = create(options);
+    headers.authorization = 'changed';
+    options.introspectionUrl = 'https://untrusted.example.test/';
+    await client.introspect(original);
+    const requestCall = transport.mock.calls[0];
+    if (!requestCall) throw new Error('Missing request');
+    const [url, request] = requestCall;
+    expect(url).toBe('https://provider.example.test/admin/oauth2/introspect');
+    expect(request).toMatchObject({
+      method: 'POST',
+      redirect: 'error',
+      cache: 'no-store',
+      headers: { authorization: 'Basic PRIVATE_HEADER' },
+    });
+    expect(new URLSearchParams(request.body as string).get('token')).toBe(
+      original,
+    );
+    expect(
+      new URLSearchParams(request.body as string).get('token_type_hint'),
+    ).toBe('access_token');
+  });
+  it.each([
+    'http://provider.example.test/',
+    'https://user:SECRET@provider.example.test/',
+    'https://provider.example.test/#SECRET',
+    'https://provider.example.test/?SECRET',
+    'file:///SECRET',
+  ])(
+    'rejects unsafe endpoint %s with a sanitized configuration error',
+    (introspectionUrl) => {
+      expect(() => create({ introspectionUrl })).toThrow(
+        'Invalid introspection configuration',
+      );
+    },
+  );
+  it('allows explicit trusted private HTTP without weakening HTTPS defaults', async () => {
+    await expect(
+      create({
+        introspectionUrl:
+          'http://hydra-admin.ory-staging.svc.cluster.local:4445/admin/oauth2/introspect',
+        trustedInternalHttp: true,
+      }).introspect(original),
+    ).resolves.toMatchObject({ active: true });
+  });
+  it.each(['', 'Bearer token', 'token\n', 'é', 'x'.repeat(16385)])(
+    'rejects malformed/bounded tokens without making a request',
+    async (token) => {
+      const transport = jest.fn(() => Promise.resolve(response()));
+      await expect(
+        create({ transport }).introspect(token),
+      ).rejects.toMatchObject({
+        reason: 'invalid_token',
+      });
+      expect(transport).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    {},
+    [],
+    { active: 'true' },
+    { active: true, exp: '2000000000' },
+    { active: true, aud: [42] },
+    { active: true, ext: [] },
+    { active: true, sub: '' },
+    { active: true, scope: 'read\twrite' },
+  ])('fails closed on malformed provider evidence %j', async (body) => {
+    await expect(
+      create({ transport: () => Promise.resolve(response(body)) }).introspect(
+        original,
+      ),
+    ).rejects.toMatchObject({ reason: 'invalid_response' });
+  });
+  it('accepts string audiences and empty scopes', async () => {
+    expect(
+      await create({
+        transport: () =>
+          Promise.resolve(response({ active: true, aud: 'api', scope: '' })),
+      }).introspect(original),
+    ).toMatchObject({ audiences: ['api'], scopes: [] });
+  });
+  it('bounds claimed length and streamed bytes independently', async () => {
+    for (const transport of [
+      () =>
+        Promise.resolve(
+          new Response('{}', { headers: { 'content-length': '1000000' } }),
+        ),
+      () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ active: true, extra: 'x'.repeat(1000) }),
+          ),
+        ),
+    ]) {
+      await expect(
+        create({ maxResponseBytes: 128, transport }).introspect(original),
+      ).rejects.toMatchObject({ reason: 'invalid_response' });
+    }
+  });
+  it('bounds nested extension depth and rejects invalid JSON', async () => {
+    let nested: unknown = 'leaf';
+    for (let i = 0; i < 35; i++) nested = { child: nested };
+    await expect(
+      create({
+        transport: () =>
+          Promise.resolve(response({ active: true, ext: { nested } })),
+      }).introspect(original),
+    ).rejects.toMatchObject({ reason: 'invalid_response' });
+    await expect(
+      create({
+        transport: () => Promise.resolve(new Response('PRIVATE_PROVIDER_BODY')),
+      }).introspect(original),
+    ).rejects.toMatchObject({ reason: 'invalid_response' });
+  });
+  it('separates HTTP/provider failure from inactive credentials without leaking response bodies', async () => {
+    const error = await create({
+      transport: () =>
+        Promise.resolve(new Response('PRIVATE_PROVIDER_BODY', { status: 401 })),
+    })
+      .introspect(original)
+      .catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(OAuth2IntrospectionUnavailableError);
+    expect(error).toMatchObject({
+      reason: 'http',
+      message: 'Token validation unavailable',
+    });
+    expect(String(error)).not.toContain('PRIVATE');
+  });
+  it('sanitizes transport and unexpected consumer policy errors', async () => {
+    for (const invoke of [
+      () =>
+        create({
+          transport: () => {
+            throw new Error('PRIVATE_HEADER');
+          },
+        }).introspect(original),
+      () =>
+        create().validate(original, {
+          validate: () => {
+            throw new Error('PRIVATE_IDENTITY');
+          },
+        }),
+    ]) {
+      const error = await invoke().catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(OAuth2IntrospectionUnavailableError);
+      expect(String(error)).not.toContain('PRIVATE');
+    }
+  });
+  it('bounds a transport that ignores AbortSignal', async () => {
+    await expect(
+      create({
+        timeoutMs: 10,
+        transport: () =>
+          Promise.resolve(new Promise<Response>(() => undefined)),
+      }).introspect(original),
+    ).rejects.toMatchObject({ reason: 'timeout' });
+  });
+  it('bounds a hanging response stream and cancels it', async () => {
+    const cancel = jest.fn();
+    const stream = new ReadableStream<Uint8Array>({ cancel });
+    await expect(
+      create({
+        timeoutMs: 10,
+        transport: () => Promise.resolve(new Response(stream)),
+      }).introspect(original),
+    ).rejects.toMatchObject({ reason: 'timeout' });
+    expect(cancel).toHaveBeenCalled();
+  });
+  it('composes async registration through the owning module without provider redeclaration', () => {
+    const configToken = Symbol('config');
+    const useFactory = () =>
+      Promise.resolve({
+        introspectionUrl: 'https://provider.example.test/introspect',
+      });
+    const module = OAuth2TokenIntrospectionModule.registerAsync({
+      inject: [configToken],
+      useFactory,
+    });
+    expect(module.exports).toEqual([OAuth2TokenIntrospectionClient]);
+    expect(module.providers).toHaveLength(2);
+    expect(module.providers?.[0]).toMatchObject({
+      inject: [configToken],
+      useFactory,
+    });
+    expect(module.providers?.[1]).toMatchObject({
+      provide: OAuth2TokenIntrospectionClient,
+    });
+    expect(
+      OAuth2TokenIntrospectionModule.register({
+        introspectionUrl: 'https://provider.example.test/introspect',
+      }).exports,
+    ).toEqual(module.exports);
+  });
+});

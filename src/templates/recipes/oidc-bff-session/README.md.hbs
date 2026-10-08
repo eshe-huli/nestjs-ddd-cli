@@ -1,0 +1,96 @@
+# Confidential OIDC BFF sessions
+
+Run `ddd recipe oidc-bff-session --path <app> --dry-run` before applying the same
+command without `--dry-run`. Generated files live in `src/shared/oidc-bff`.
+Generation preflights every target, rejects symlinks/different owner content,
+preserves identical reruns and rolls back only unchanged files it created.
+No module, route, cookie, environment variable, business policy, package manifest,
+lockfile or provider configuration is changed automatically.
+
+Consumer runtime requirements: Node 20+ or Bun, `jose@6.2.12` and
+`@redis/client@6.3.0`. Add these through the app's approved dependency workflow;
+on the local Bun host use `bun add --exact jose@6.2.12 @redis/client@6.3.0`.
+Preserve an existing CI/container package-manager contract and its lockfile.
+
+`createOidcBffClient` takes immutable explicit issuer, client ID/secret, exact
+HTTPS callback, configured scopes, five same-origin HTTPS metadata endpoints
+(discovery, authorization, token, revocation, JWKS), and optional configured
+authorization parameters. Reserved OIDC/PKCE/state parameters cannot be
+overridden. The consumer owns any provider-specific audience parameter and
+exact issuer/path policy. Only `client_secret_basic`, code/S256 and RS256 signed
+ID tokens are supported. Required scopes include `openid` and `offline_access`;
+authenticated output requires a complete access/refresh token pair.
+
+Supply the existing server-owned pending record to `beginAuthorization` and
+`exchangeAuthorizationCode`; the client does not create a second pending record.
+Fresh authentication is required. It verifies signed issuer, subject, client
+audience, authorized party, nonce, expiration, issued time and authentication
+time after pending start, with bounded clock tolerance. Optional signed
+access/code hashes must match. Requested prompt alone does not prove fresh
+authentication; the provider integration must actually perform it.
+
+Discovery must match every configured endpoint exactly. No redirect, retry,
+fallback or positive-validation cache exists. A total operation deadline covers
+discovery, token exchange, token custody hook, streamed JWKS, verification and
+best-effort rejected-token cleanup. Responses are capped at 64 KiB; safe token
+fields at 16 KiB; public RSA JWKS at 16 keys and bounded moduli. Errors have fixed
+messages and never include provider bodies, credentials or raw exceptions.
+
+The async `onTokenPairIssued` hook stages every independently bounded safe
+credential before scope/type/expiry/ID-token admission policy, including
+access-only or refresh-only responses. At least one safe credential is needed.
+Malformed expiry uses `maxAccessTokenSeconds` only as a retirement hint; this
+fallback is never admitted as a verified token set. Persist the retirement
+record before proceeding. Persistence failure rejects sign-in and attempts
+immediate revocation. A wholly malformed/oversize response cannot safely
+disclose token material; it is rejected without session admission.
+
+`OpaqueSessionStore` accepts injected `SessionCommands`, a trusted stable client
+namespace, optional clock (integer seconds) and immutable duration settings.
+Browser cookies contain only random handles; pending PKCE and token material
+remain server-side. Client-hashed Redis Cluster slots isolate keys. Lua owns
+one-time pending claim/completion, browser/generation/client binding, fresh
+account switch, current-session index, logout, staged exact-pair transfer and
+durable revocation enqueue/lease/ack/retry. Only successful exact pending and
+pair commit removes the staged ticket. Once any worker claims retirement, a
+durable non-admissible marker prevents later session commit through retries or
+expired leases; only completed retirement removes that marker. Expired access retains refresh custody.
+Restart uses the same backend/client namespace; there is no local fallback.
+
+Defaults: session 3300s, pending 600s, browser generation 1 year, provider access
+maximum 3600s, provider refresh maximum 86400s, token custody 90000s, lease 30s,
+retry 60s. These are conservative documented defaults, not discovery facts.
+The owner must configure provider lifetime bounds explicitly and keep custody
+strictly longer than both provider maxima. Options are bounded and cannot
+reduce custody below those bounds. Retirement expiry hints are not session
+admission. Do not expire the whole token row with browser access expiry.
+
+`createValkeySessionCommands` takes an explicit trusted URL, timeout and optional
+test connection seam. TLS (`rediss`) is default; plaintext requires an explicit
+trusted-internal opt-in. Connect and command share a bounded deadline, disable
+offline queues/reconnects, and share one connection attempt. No command runs
+after its connection deadline. `close` permanently retires this command owner.
+No URL/token logging occurs. The Redis library owns RESP framing; this adapter
+bounds deadlines/queued commands and request arguments, and the store validates
+returned records. It does not claim streamed HTTP-style response byte control.
+
+Each app still owns configuration, cookie flags, same-origin guards, Next
+server-only marker, authorization wrappers, locale/navigation and durable worker
+scheduling. Each request must perform current provider and canonical domain
+admission. Provider traits, JWT subject or an existing browser session are not
+business permissions. Per-app token retirement leaves shared provider SSO;
+global logout requires its explicitly owned provider operation.
+
+Run generated unit cases with `bun test src/shared/oidc-bff`. Actual Lua proof
+additionally requires `OIDC_BFF_TEST_VALKEY_URL` pointing to a disposable Redis
+database with a separately authorized profile. Tests use random client
+namespaces and never flush, stop or alter the server. Unit/source evidence is
+separate from CI, deployed provider behavior, browser and authorized actor proof.
+
+Storage custody: key hashing and Redis Cluster hash tags do not encrypt the JSON
+values. Access/refresh credentials and PKCE material are plaintext within the
+server store. Production activation requires authenticated app-scoped Redis
+ACLs, verified private/TLS transport, and verified encryption/access controls
+for persistent storage and backups. An unauthenticated shared Redis instance is
+not a suitable production deployment. This recipe does not provision or prove
+those operator controls.
