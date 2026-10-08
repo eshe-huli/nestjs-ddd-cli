@@ -157,7 +157,8 @@ export class BoundedJsonHttpClient {
         if (Object.getOwnPropertyNames(value).length !== value.length + 1)
           throw new Error();
       } else {
-        if (![Object.prototype, null].includes(Object.getPrototypeOf(value)))
+        const prototype: unknown = Object.getPrototypeOf(value);
+        if (prototype !== Object.prototype && prototype !== null)
           throw new Error();
         for (const descriptor of Object.values(
           Object.getOwnPropertyDescriptors(value),
