@@ -11,8 +11,8 @@ generator, dispatcher, package-version, tag or publication change.
 | R1 | Declare the existing Node>=18 contract as a major relative to published3.2.2 Node>=14 | Verified published commit/tag and actual merge analyzer before/after |
 | R2 | Breaking bang/footer always takes major precedence while ordinary release semantics stay intact | Real installed analyzer39 cases + portable Jest wrapper |
 | R3 | Existing named conventionalcommits preset must be installed | Exact dev-only9.1.0, verified registry integrity and Bun lock |
-| R4 | Existing npm CI lock provenance must come from the actual manager without local npm | Independent Node24 lock-metadata job, artifact not yet produced/consumed |
-| R5 | No publication/token access or unreviewed commit/push | Root review required; registry publication remains held |
+| R4 | Existing npm CI lock provenance must come from the actual manager without local npm | Independent Node24 lock-metadata job37814789276 succeeded; only necessary emitted additions consumed |
+| R5 | No publication/token access or unreviewed commit/push | Root reviewed source and authorized draft PR10/artifact integration; registry publication remains held |
 
 ## Reproduced baseline
 
@@ -76,12 +76,28 @@ setup-node actions to run
 `npm install --package-lock-only --ignore-scripts --no-audit --no-fund` remotely,
 then upload only `package-lock.json`. Existing test/build/publish job bodies,
 package managers, release credentials and branch conditions are unchanged.
-The npm lock is deliberately still untouched: until root publishes the draft,
-reviews that manager-emitted artifact and consumes its narrow delta, existing
-`npm ci` test jobs may fail the manifest/lock mismatch. Do not label that
-intermediate state as green release CI.
+Root reviewed the source candidate and authorized normal commit/push plus draft
+[PR10](https://github.com/eshe-huli/nestjs-ddd-cli/pull/10). Its initial head is
+`c88807764f245ca4b6dcd54e56f0337339d7a57e`. Actual CI37814789276 produced the
+`npm-lock-metadata` artifact successfully. Node18/22/24 install steps failed
+with EUSAGE because the old npm lock did not yet include the preset; Node20 was
+cancelled by matrix fail-fast. The publisher was skipped by its existing branch
+condition. No tests were suppressed or release credentials accessed.
+
+The downloaded artifact SHA256 is
+`884f6434689615078c02560f95c3ef4f79d96e4e9e552b89224e4972a1db13e1`.
+Structural review checked every one of the1026 preexisting package records:
+versions, resolved URLs, integrity, dependency/optional-dependency maps and
+engine declarations are unchanged; no package was removed. The only new
+package is the approved preset9.1.0. Only the exact manager-emitted root dev
+dependency and its package record were consumed. Unrelated peer-flag removals
+and key-order normalization in the artifact were deliberately excluded. The
+lockfile now adds14 lines with no preexisting record changes. This consumes
+actual npm metadata rather than deriving npm fields from Bun or running npm
+locally. Exact-head Node matrix proof remains pending after this lock commit.
 
 Root reports the prior main publication failed npm verifyConditions with
 EINVALIDNPMTOKEN/401 before analysis; no token was read and no publication/rerun
-was attempted here. Source review, artifact generation/consumption, exact-head
-Node CI and a valid securely supplied registry token remain separate gates.
+was attempted here. Source review and artifact generation/consumption are
+complete; exact-head Node CI and a valid securely supplied registry token remain
+separate gates. The PR stays draft and unmerged.
