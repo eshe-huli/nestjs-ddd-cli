@@ -361,6 +361,16 @@ program
   .option('--no-compose', 'Skip docker-compose.yml generation')
   .option('--ci <type>', 'CI/CD pipeline type (github, gitlab, none)', 'github')
   .option('--kubernetes', 'Generate Kubernetes manifests', false)
+  .option('--visibility <visibility>', 'Service visibility (public, private)', 'public')
+  .option('--state <state>', 'Deployment state (active, held)', 'active')
+  .option('--service-name <name>', 'Kubernetes DNS label', 'nestjs-app')
+  .option('--port <port>', 'Application port', '3000')
+  .option('--package-manager <manager>', 'Dependency manager (npm, bun)', 'npm')
+  .option('--probe-path <path>', 'HTTP probe path (defaults to /health)')
+  .option('--probe-mode <mode>', 'Probe mode (live-only, live-and-ready)', 'live-and-ready')
+  .option('--no-probe', 'Omit probes; readiness must be established before activation')
+  .option('--node-image <image>', 'Official Node20/22/24 Alpine image', 'node:20-alpine')
+  .option('--application <application>', 'Application build (nest, next-standalone)', 'nest')
   .action(async (options) => {
     try {
       await generateDeployment(options);
