@@ -1,0 +1,606 @@
+export type BoundedBinaryHttpFailure =
+  | 'timeout'
+  | 'cancelled'
+  | 'network'
+  | 'http'
+  | 'invalid_response';
+
+/** Deliberately excludes upstream URLs, headers, response bodies and causes. */
+export class BoundedBinaryHttpUnavailableError extends Error {
+  constructor(
+    public readonly reason: BoundedBinaryHttpFailure,
+    public readonly status?: number,
+  ) {
+    super('Bounded binary HTTP request unavailable');
+    this.name = 'BoundedBinaryHttpUnavailableError';
+  }
+}
+
+export type BoundedBinaryBodyFailure =
+  | 'body_limit'
+  | 'invalid_body'
+  | 'timeout'
+  | 'cancelled';
+
+export class BoundedBinaryBodyError extends Error {
+  constructor(public readonly reason: BoundedBinaryBodyFailure) {
+    super('Bounded binary body unavailable');
+    this.name = 'BoundedBinaryBodyError';
+  }
+}
+
+export interface BoundedBinaryBodyOptions {
+  maxBytes: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
+export interface BoundedBinaryHttpOptions {
+  /** Exact scheme, host and port only. Never derive from a caller URL. */
+  origin: string;
+  trustedInternalHttp?: boolean;
+  timeoutMs?: number;
+  maxRequestBytes?: number;
+  maxResponseBytes?: number;
+  requestHeaderAllowlist: readonly string[];
+  responseHeaderAllowlist: readonly string[];
+  requestHeaders?: Readonly<Record<string, string>>;
+  transport?: (url: string, init: RequestInit) => Promise<Response>;
+}
+
+export type BoundedBinaryHttpMethod = 'HEAD' | 'GET' | 'POST' | 'PATCH';
+
+export interface BoundedBinaryHttpRequest {
+  headers?: Readonly<Record<string, string>>;
+  query?: Readonly<Record<string, string>>;
+  body?: Uint8Array;
+  signal?: AbortSignal;
+}
+
+export interface BoundedBinaryHttpResponse {
+  readonly status: number;
+  /** Evidence only; Location and object headers confer no authority. */
+  readonly headers: Readonly<Record<string, string>>;
+  /** An owned snapshot, never shared with the transport or input caller. */
+  readonly body: Uint8Array;
+}
+
+const MAX_BYTES = 16 * 1024 * 1024;
+const MAX_HEADER_BYTES = 16 * 1024;
+const FORBIDDEN_HEADERS = new Set([
+  'host',
+  'connection',
+  'content-length',
+  'transfer-encoding',
+  'upgrade',
+  'trailer',
+  'te',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'forwarded',
+  'x-forwarded-host',
+  'x-forwarded-proto',
+  'x-forwarded-for',
+  'cookie',
+  'set-cookie',
+]);
+
+function integer(value: number, minimum: number, maximum: number): boolean {
+  return Number.isSafeInteger(value) && value >= minimum && value <= maximum;
+}
+
+function hasControls(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const code = character.codePointAt(0);
+    return code !== undefined && (code < 32 || code === 127);
+  });
+}
+
+function plainRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === null || prototype === Object.prototype;
+}
+
+/** Do not invoke caller accessors while validating a dictionary. */
+function entries(value: unknown): [string, string][] {
+  if (!plainRecord(value) || Object.getOwnPropertySymbols(value).length > 0) {
+    throw new Error('Invalid bounded binary HTTP dictionary');
+  }
+  const names = Object.getOwnPropertyNames(value);
+  if (names.length > 32)
+    throw new Error('Invalid bounded binary HTTP dictionary');
+  return names.map((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      !descriptor ||
+      !('value' in descriptor) ||
+      typeof descriptor.value !== 'string'
+    ) {
+      throw new Error('Invalid bounded binary HTTP dictionary');
+    }
+    return [key, descriptor.value];
+  });
+}
+
+function headerName(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= 128 &&
+    /^[a-z0-9!#$%&'*+.^_`|~-]+$/.test(value)
+  );
+}
+
+function allowlist(
+  value: readonly string[],
+  response: boolean,
+): ReadonlySet<string> {
+  if (!Array.isArray(value) || value.length > 32) {
+    throw new Error('Invalid bounded binary HTTP header allowlist');
+  }
+  const names = new Set<string>();
+  for (const name of value) {
+    if (
+      typeof name !== 'string' ||
+      !headerName(name) ||
+      names.has(name) ||
+      (response && name === 'authorization') ||
+      (FORBIDDEN_HEADERS.has(name) && !(response && name === 'content-length'))
+    ) {
+      throw new Error('Invalid bounded binary HTTP header allowlist');
+    }
+    names.add(name);
+  }
+  return names;
+}
+
+function requestHeaders(
+  value: unknown,
+  allowed: ReadonlySet<string>,
+): Readonly<Record<string, string>> {
+  const pairs = entries(value);
+  if (pairs.length > 32) throw new Error('Invalid bounded binary HTTP headers');
+  const output: Record<string, string> = Object.create(null) as Record<
+    string,
+    string
+  >;
+  let size = 0;
+  for (const [rawName, content] of pairs) {
+    if (rawName.length > 128 || content.length > 4096 || hasControls(content)) {
+      throw new Error('Invalid bounded binary HTTP headers');
+    }
+    const name = rawName.toLowerCase();
+    size += rawName.length + new TextEncoder().encode(content).byteLength;
+    if (
+      !headerName(name) ||
+      !allowed.has(name) ||
+      Object.prototype.hasOwnProperty.call(output, name) ||
+      size > MAX_HEADER_BYTES
+    ) {
+      throw new Error('Invalid bounded binary HTTP headers');
+    }
+    output[name] = content;
+  }
+  return Object.freeze(output);
+}
+
+function cancelBody(body: ReadableStream<Uint8Array> | null): void {
+  try {
+    if (body) void body.cancel().catch(() => undefined);
+  } catch {
+    // Cancellation must not replace the sanitized result or extend its deadline.
+  }
+}
+
+function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+  try {
+    void reader.cancel().catch(() => undefined);
+  } catch {
+    // A broken source cannot prevent bounded completion.
+  }
+}
+
+/**
+ * Bound an incoming stream by actual bytes, including stalled reads. It does
+ * not trust Content-Length. The returned buffer is a new owned snapshot.
+ */
+export async function readBoundedBinaryBody(
+  body: ReadableStream<Uint8Array> | null,
+  options: BoundedBinaryBodyOptions,
+): Promise<Uint8Array> {
+  const maxBytes = options.maxBytes;
+  const timeoutMs = options.timeoutMs ?? 3000;
+  const signal = options.signal;
+  if (!integer(maxBytes, 0, MAX_BYTES) || !integer(timeoutMs, 10, 30000)) {
+    throw new Error('Invalid bounded binary body options');
+  }
+  return readBinaryBodyUntil(
+    body,
+    maxBytes,
+    signal,
+    performance.now() + timeoutMs,
+  );
+}
+
+/** One absolute monotonic cutoff; private so transports cannot renew it. */
+async function readBinaryBodyUntil(
+  body: ReadableStream<Uint8Array> | null,
+  maxBytes: number,
+  signal: AbortSignal | undefined,
+  deadline: number,
+): Promise<Uint8Array> {
+  if (signal?.aborted) {
+    cancelBody(body);
+    throw new BoundedBinaryBodyError('cancelled');
+  }
+  if (performance.now() >= deadline) {
+    cancelBody(body);
+    throw new BoundedBinaryBodyError('timeout');
+  }
+  if (!body) return new Uint8Array();
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
+  try {
+    reader = body.getReader();
+  } catch {
+    throw new BoundedBinaryBodyError('invalid_body');
+  }
+  let expired = false;
+  let cancelled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  const interrupted = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => {
+        expired = true;
+        cancelReader(reader);
+        reject(new BoundedBinaryBodyError('timeout'));
+      },
+      Math.max(0, deadline - performance.now()),
+    );
+    onAbort = () => {
+      cancelled = true;
+      cancelReader(reader);
+      reject(new BoundedBinaryBodyError('cancelled'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+  });
+  try {
+    const collect = async (): Promise<Uint8Array> => {
+      // One bounded backing buffer avoids unbounded overhead from tiny chunks.
+      const output = new Uint8Array(maxBytes);
+      let length = 0;
+      for (;;) {
+        if (performance.now() >= deadline)
+          throw new BoundedBinaryBodyError('timeout');
+        const result = await reader.read();
+        if (cancelled) throw new BoundedBinaryBodyError('cancelled');
+        if (expired || performance.now() >= deadline)
+          throw new BoundedBinaryBodyError('timeout');
+        if (result.done) break;
+        if (!(result.value instanceof Uint8Array)) {
+          throw new BoundedBinaryBodyError('invalid_body');
+        }
+        const next = length + result.value.byteLength;
+        if (!Number.isSafeInteger(next) || next > maxBytes) {
+          throw new BoundedBinaryBodyError('body_limit');
+        }
+        // Copy before the source can reuse or mutate its chunk.
+        output.set(result.value, length);
+        length = next;
+      }
+      const result = output.slice(0, length);
+      if (performance.now() >= deadline)
+        throw new BoundedBinaryBodyError('timeout');
+      return result;
+    };
+    return await Promise.race([collect(), interrupted]);
+  } catch (error) {
+    if (error instanceof BoundedBinaryBodyError) throw error;
+    throw new BoundedBinaryBodyError('invalid_body');
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (onAbort) signal?.removeEventListener('abort', onAbort);
+    cancelReader(reader);
+  }
+}
+
+export class BoundedBinaryHttpClient {
+  private readonly origin: string;
+  private readonly timeoutMs: number;
+  private readonly maxRequestBytes: number;
+  private readonly maxResponseBytes: number;
+  private readonly requestAllowed: ReadonlySet<string>;
+  private readonly responseAllowed: ReadonlySet<string>;
+  private readonly configuredHeaders: Readonly<Record<string, string>>;
+  private readonly transport: (
+    url: string,
+    init: RequestInit,
+  ) => Promise<Response>;
+
+  constructor(options: BoundedBinaryHttpOptions) {
+    let url: URL;
+    try {
+      url = new URL(options.origin);
+    } catch {
+      throw new Error('Invalid bounded binary HTTP origin');
+    }
+    if (
+      url.origin !== options.origin ||
+      url.username ||
+      url.password ||
+      url.pathname !== '/' ||
+      url.search ||
+      url.hash ||
+      (url.protocol !== 'https:' &&
+        !(url.protocol === 'http:' && options.trustedInternalHttp === true))
+    ) {
+      throw new Error('Invalid bounded binary HTTP origin');
+    }
+    this.origin = options.origin;
+    this.timeoutMs = options.timeoutMs ?? 3000;
+    this.maxRequestBytes = options.maxRequestBytes ?? 1024 * 1024;
+    this.maxResponseBytes = options.maxResponseBytes ?? 1024 * 1024;
+    if (
+      !integer(this.timeoutMs, 10, 30000) ||
+      !integer(this.maxRequestBytes, 0, MAX_BYTES) ||
+      !integer(this.maxResponseBytes, 0, MAX_BYTES)
+    ) {
+      throw new Error('Invalid bounded binary HTTP bounds');
+    }
+    this.requestAllowed = allowlist(options.requestHeaderAllowlist, false);
+    this.responseAllowed = allowlist(options.responseHeaderAllowlist, true);
+    this.configuredHeaders = requestHeaders(
+      options.requestHeaders ?? {},
+      this.requestAllowed,
+    );
+    this.transport =
+      options.transport ?? ((target, init) => fetch(target, init));
+  }
+
+  /** Exactly one transport attempt. Unknown POST/PATCH outcomes stay unknown. */
+  async request(
+    method: BoundedBinaryHttpMethod,
+    pathSegments: readonly string[],
+    options: BoundedBinaryHttpRequest = {},
+  ): Promise<BoundedBinaryHttpResponse> {
+    const deadline = performance.now() + this.timeoutMs;
+    const signal = options.signal;
+    if (!['HEAD', 'GET', 'POST', 'PATCH'].includes(method)) {
+      throw new Error('Invalid bounded binary HTTP method');
+    }
+    const target = this.target(pathSegments, options.query ?? {});
+    const supplied = requestHeaders(options.headers ?? {}, this.requestAllowed);
+    const headers: Record<string, string> = { ...this.configuredHeaders };
+    for (const [name, value] of Object.entries(supplied)) {
+      // A caller cannot replace a server-configured credential or invariant.
+      if (Object.prototype.hasOwnProperty.call(headers, name)) {
+        throw new Error('Configured HTTP header override denied');
+      }
+      headers[name] = value;
+    }
+    // Recheck aggregate header bounds after merging both independently valid dictionaries.
+    requestHeaders(headers, this.requestAllowed);
+    let body: Uint8Array | undefined;
+    if (options.body !== undefined) {
+      if (
+        method === 'HEAD' ||
+        method === 'GET' ||
+        !(options.body instanceof Uint8Array) ||
+        options.body.byteLength > this.maxRequestBytes
+      ) {
+        throw new Error('Invalid bounded binary HTTP request body');
+      }
+      // This executes before the first await or asynchronous transport invocation.
+      body = new Uint8Array(options.body.byteLength);
+      body.set(options.body);
+    }
+    if (signal?.aborted)
+      throw new BoundedBinaryHttpUnavailableError('cancelled');
+    if (performance.now() >= deadline)
+      throw new BoundedBinaryHttpUnavailableError('timeout');
+    const controller = new AbortController();
+    let expired = false;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+    const interruption = (): 'timeout' | 'cancelled' | undefined => {
+      if (cancelled || signal?.aborted) return 'cancelled';
+      if (expired || performance.now() >= deadline) return 'timeout';
+      return undefined;
+    };
+    const interrupted = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () => {
+          expired = true;
+          controller.abort();
+          reject(new BoundedBinaryHttpUnavailableError('timeout'));
+        },
+        Math.max(0, deadline - performance.now()),
+      );
+      onAbort = () => {
+        cancelled = true;
+        controller.abort();
+        reject(new BoundedBinaryHttpUnavailableError('cancelled'));
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      if (signal?.aborted) onAbort();
+    });
+    const execute = async (): Promise<BoundedBinaryHttpResponse> => {
+      let response: Response;
+      try {
+        const before = interruption();
+        if (before) throw new BoundedBinaryHttpUnavailableError(before);
+        response = await this.transport(target, {
+          method,
+          headers,
+          body: body as BodyInit | undefined,
+          signal: controller.signal,
+          redirect: 'error',
+          cache: 'no-store',
+          credentials: 'omit',
+          referrerPolicy: 'no-referrer',
+        });
+      } catch {
+        const failed = interruption();
+        if (failed) throw new BoundedBinaryHttpUnavailableError(failed);
+        throw new BoundedBinaryHttpUnavailableError('network');
+      }
+      const afterTransport = interruption();
+      if (afterTransport) {
+        cancelBody(response.body);
+        throw new BoundedBinaryHttpUnavailableError(afterTransport);
+      }
+      if (!integer(response.status, 100, 599)) {
+        cancelBody(response.body);
+        throw new BoundedBinaryHttpUnavailableError('invalid_response');
+      }
+      if (response.redirected || !response.ok) {
+        cancelBody(response.body);
+        throw new BoundedBinaryHttpUnavailableError('http', response.status);
+      }
+      let selected: Readonly<Record<string, string>>;
+      try {
+        const output: Record<string, string> = Object.create(null) as Record<
+          string,
+          string
+        >;
+        let length = 0;
+        for (const name of this.responseAllowed) {
+          const value = response.headers.get(name);
+          if (value === null) continue;
+          if (value.length > 4096 || hasControls(value))
+            throw new Error('Invalid headers');
+          length += name.length + new TextEncoder().encode(value).byteLength;
+          if (length > MAX_HEADER_BYTES) {
+            throw new Error('Invalid headers');
+          }
+          output[name] = value;
+        }
+        const declared = response.headers.get('content-length');
+        if (declared !== null) {
+          if (
+            !/^\d{1,16}$/.test(declared) ||
+            !Number.isSafeInteger(Number(declared))
+          ) {
+            throw new Error('Invalid length');
+          }
+          if (method !== 'HEAD' && Number(declared) > this.maxResponseBytes) {
+            throw new Error('Invalid length');
+          }
+        }
+        selected = Object.freeze(output);
+      } catch {
+        cancelBody(response.body);
+        const failed = interruption();
+        if (failed) throw new BoundedBinaryHttpUnavailableError(failed);
+        throw new BoundedBinaryHttpUnavailableError('invalid_response');
+      }
+      const afterHeaders = interruption();
+      if (afterHeaders) {
+        cancelBody(response.body);
+        throw new BoundedBinaryHttpUnavailableError(afterHeaders);
+      }
+      if (method === 'HEAD') {
+        // An injected transport must not smuggle a body through HEAD evidence.
+        cancelBody(response.body);
+        const beforeReturn = interruption();
+        if (beforeReturn)
+          throw new BoundedBinaryHttpUnavailableError(beforeReturn);
+        return Object.freeze({
+          status: response.status,
+          headers: selected,
+          body: new Uint8Array(),
+        });
+      }
+      try {
+        const bytes = await readBinaryBodyUntil(
+          response.body,
+          this.maxResponseBytes,
+          controller.signal,
+          deadline,
+        );
+        const afterBody = interruption();
+        if (afterBody) throw new BoundedBinaryHttpUnavailableError(afterBody);
+        return Object.freeze({
+          status: response.status,
+          headers: selected,
+          body: bytes,
+        });
+      } catch (error) {
+        if (error instanceof BoundedBinaryHttpUnavailableError) throw error;
+        const failed = interruption();
+        if (failed) throw new BoundedBinaryHttpUnavailableError(failed);
+        if (
+          error instanceof BoundedBinaryBodyError &&
+          error.reason === 'timeout'
+        ) {
+          throw new BoundedBinaryHttpUnavailableError('timeout');
+        }
+        throw new BoundedBinaryHttpUnavailableError('invalid_response');
+      }
+    };
+    try {
+      return await Promise.race([execute(), interrupted]);
+    } catch (error) {
+      if (error instanceof BoundedBinaryHttpUnavailableError) throw error;
+      throw new BoundedBinaryHttpUnavailableError('invalid_response');
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      if (onAbort) signal?.removeEventListener('abort', onAbort);
+      controller.abort();
+    }
+  }
+
+  private target(
+    pathSegments: readonly string[],
+    query: Readonly<Record<string, string>>,
+  ): string {
+    if (
+      !Array.isArray(pathSegments) ||
+      pathSegments.length === 0 ||
+      pathSegments.length > 32
+    ) {
+      throw new Error('Invalid bounded binary HTTP path');
+    }
+    const encoded = pathSegments.map((segment) => {
+      if (
+        typeof segment !== 'string' ||
+        segment.length === 0 ||
+        segment.length > 1024 ||
+        segment === '.' ||
+        segment === '..' ||
+        hasControls(segment)
+      ) {
+        throw new Error('Invalid bounded binary HTTP path');
+      }
+      try {
+        return encodeURIComponent(segment);
+      } catch {
+        throw new Error('Invalid bounded binary HTTP path');
+      }
+    });
+    const url = new URL(`${this.origin}/${encoded.join('/')}`);
+    const pairs = entries(query);
+    if (pairs.length > 32) throw new Error('Invalid bounded binary HTTP query');
+    for (const [key, value] of pairs) {
+      if (
+        !key ||
+        key.length > 128 ||
+        value.length > 2048 ||
+        hasControls(key) ||
+        hasControls(value)
+      ) {
+        throw new Error('Invalid bounded binary HTTP query');
+      }
+      url.searchParams.append(key, value);
+    }
+    if (url.origin !== this.origin || url.href.length > 8192) {
+      throw new Error('Invalid bounded binary HTTP target');
+    }
+    return url.href;
+  }
+}

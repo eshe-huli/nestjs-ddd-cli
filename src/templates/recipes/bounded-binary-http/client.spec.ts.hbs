@@ -1,0 +1,680 @@
+import { createServer, Server } from 'node:http';
+import {
+  BoundedBinaryBodyError,
+  BoundedBinaryHttpClient,
+  BoundedBinaryHttpOptions,
+  BoundedBinaryHttpUnavailableError,
+  readBoundedBinaryBody,
+} from './bounded-binary-http.client';
+
+const pause = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+const bytes = (text: string): Uint8Array => new TextEncoder().encode(text);
+const decoded = (value: Uint8Array): string => new TextDecoder().decode(value);
+const defaults = (): BoundedBinaryHttpOptions => ({
+  origin: 'https://native.example',
+  timeoutMs: 1000,
+  maxRequestBytes: 128,
+  maxResponseBytes: 128,
+  requestHeaderAllowlist: ['authorization', 'content-type', 'upload-offset'],
+  responseHeaderAllowlist: [
+    'content-length',
+    'content-type',
+    'location',
+    'etag',
+  ],
+});
+
+describe('Bounded binary transport emitted contract', () => {
+  it.each([
+    'http://native.example',
+    'https://native.example/',
+    'https://native.example/path',
+    'https://user:password@native.example',
+    'https://native.example?secret=1',
+    'https://native.example#fragment',
+    'file:///secret',
+    'HTTPS://native.example',
+  ])('rejects nonexact or untrusted origin %s', (origin) => {
+    expect(
+      () => new BoundedBinaryHttpClient({ ...defaults(), origin }),
+    ).toThrow('Invalid bounded binary HTTP origin');
+  });
+
+  it('permits explicit trusted internal HTTP and snapshots configured headers', async () => {
+    const headers = { authorization: 'Bearer server-secret' };
+    const observed = jest.fn((_url: string, init: RequestInit) => {
+      expect(init.headers).toEqual({ authorization: 'Bearer server-secret' });
+      return Promise.resolve(new Response(null, { status: 204 }));
+    });
+    const client = new BoundedBinaryHttpClient({
+      ...defaults(),
+      origin: 'http://127.0.0.1:1080',
+      trustedInternalHttp: true,
+      requestHeaders: headers,
+      transport: observed,
+    });
+    headers.authorization = 'changed';
+    await client.request('POST', ['files']);
+    expect(observed).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    'host',
+    'connection',
+    'cookie',
+    'content-length',
+    'forwarded',
+    'set-cookie',
+  ])('rejects request authority or hop header %s', (name) => {
+    expect(
+      () =>
+        new BoundedBinaryHttpClient({
+          ...defaults(),
+          requestHeaderAllowlist: [name],
+        }),
+    ).toThrow('header allowlist');
+  });
+
+  it.each(['set-cookie', 'connection', 'proxy-authenticate', 'authorization'])(
+    'rejects response credential or hop header %s',
+    (name) => {
+      expect(
+        () =>
+          new BoundedBinaryHttpClient({
+            ...defaults(),
+            responseHeaderAllowlist: [name],
+          }),
+      ).toThrow('header allowlist');
+    },
+  );
+
+  it('snapshots bytes before asynchronous transport and makes one encoded POST', async () => {
+    const original = bytes('authorized');
+    let sent: Uint8Array | undefined;
+    const transport = jest.fn(async (url: string, init: RequestInit) => {
+      expect(url).toBe(
+        'https://native.example/files/object%2F%2B%3F?proof=a%2Bb',
+      );
+      expect(init).toMatchObject({
+        method: 'POST',
+        redirect: 'error',
+        cache: 'no-store',
+        credentials: 'omit',
+        referrerPolicy: 'no-referrer',
+        headers: { 'content-type': 'application/octet-stream' },
+      });
+      await pause(5);
+      sent = init.body as Uint8Array;
+      return new Response('accepted', {
+        status: 201,
+        headers: { location: '/files/native+id' },
+      });
+    });
+    const client = new BoundedBinaryHttpClient({ ...defaults(), transport });
+    const result = client.request('POST', ['files', 'object/+?'], {
+      headers: { 'Content-Type': 'application/octet-stream' },
+      query: { proof: 'a+b' },
+      body: original,
+    });
+    original.fill(120);
+    expect(decoded((await result).body)).toBe('accepted');
+    expect(sent && decoded(sent)).toBe('authorized');
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not permit a caller to replace configured credentials', async () => {
+    const transport = jest.fn(() =>
+      Promise.resolve(new Response(null, { status: 204 })),
+    );
+    const client = new BoundedBinaryHttpClient({
+      ...defaults(),
+      requestHeaders: { authorization: 'server' },
+      transport,
+    });
+    await expect(
+      client.request('GET', ['files'], {
+        headers: { Authorization: 'caller' },
+      }),
+    ).rejects.toThrow('override denied');
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it('preflights paths, query accessors, duplicate headers, controls and body caps', async () => {
+    const transport = jest.fn(() =>
+      Promise.resolve(new Response(null, { status: 204 })),
+    );
+    const client = new BoundedBinaryHttpClient({ ...defaults(), transport });
+    const accessor = jest.fn(() => 'secret');
+    const query = Object.defineProperty({}, 'key', { get: accessor });
+    await expect(client.request('GET', ['..'])).rejects.toThrow('path');
+    await expect(client.request('GET', ['x\n'])).rejects.toThrow('path');
+    await expect(client.request('GET', ['files'], { query })).rejects.toThrow(
+      'dictionary',
+    );
+    await expect(
+      client.request('GET', ['files'], {
+        headers: { 'upload-offset': '0', 'Upload-Offset': '1' },
+      }),
+    ).rejects.toThrow('headers');
+    await expect(
+      client.request('PATCH', ['files'], {
+        headers: { 'content-type': 'value\r\nsecret' },
+      }),
+    ).rejects.toThrow('headers');
+    await expect(
+      client.request('PATCH', ['files'], { body: new Uint8Array(129) }),
+    ).rejects.toThrow('request body');
+    await expect(
+      client.request('GET', ['files'], { body: bytes('x') }),
+    ).rejects.toThrow('request body');
+    expect(accessor).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it('bounds the aggregate header bytes before dispatch', async () => {
+    const names = ['a', 'b', 'c', 'd', 'e'];
+    const transport = jest.fn(() =>
+      Promise.resolve(new Response(null, { status: 204 })),
+    );
+    const client = new BoundedBinaryHttpClient({
+      ...defaults(),
+      requestHeaderAllowlist: names,
+      requestHeaders: { a: 'x'.repeat(4096), b: 'x'.repeat(4096) },
+      transport,
+    });
+    await expect(
+      client.request('POST', ['files'], {
+        headers: { c: 'x'.repeat(4096), d: 'x'.repeat(4096) },
+      }),
+    ).rejects.toThrow('headers');
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it('rejects duplicate, excessive and oversized header policies or values', async () => {
+    expect(
+      () =>
+        new BoundedBinaryHttpClient({
+          ...defaults(),
+          requestHeaderAllowlist: ['a', 'a'],
+        }),
+    ).toThrow('header allowlist');
+    expect(
+      () =>
+        new BoundedBinaryHttpClient({
+          ...defaults(),
+          responseHeaderAllowlist: Array.from(
+            { length: 33 },
+            (_value, index) => `x-${index}`,
+          ),
+        }),
+    ).toThrow('header allowlist');
+    const transport = jest.fn(() =>
+      Promise.resolve(new Response(null, { status: 204 })),
+    );
+    const client = new BoundedBinaryHttpClient({ ...defaults(), transport });
+    await expect(
+      client.request('POST', ['files'], {
+        headers: { authorization: 'x'.repeat(4097) },
+      }),
+    ).rejects.toThrow('headers');
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it('sanitizes oversized selected response headers and malformed transport responses', async () => {
+    await expect(
+      new BoundedBinaryHttpClient({
+        ...defaults(),
+        transport: () =>
+          Promise.resolve(
+            new Response('x', { headers: { etag: 'x'.repeat(4097) } }),
+          ),
+      }).request('GET', ['object']),
+    ).rejects.toMatchObject({ reason: 'invalid_response' });
+    await expect(
+      new BoundedBinaryHttpClient({
+        ...defaults(),
+        transport: () => Promise.resolve(undefined as unknown as Response),
+      }).request('GET', ['object']),
+    ).rejects.toMatchObject({ reason: 'invalid_response' });
+  });
+
+  it('returns selected frozen header evidence without following Location', async () => {
+    const transport = jest.fn(() =>
+      Promise.resolve(
+        new Response('bytes', {
+          headers: {
+            location: 'https://untrusted.example/secret',
+            etag: 'tag',
+            'x-unselected': 'discarded',
+            'set-cookie': 'secret=value',
+          },
+        }),
+      ),
+    );
+    const result = await new BoundedBinaryHttpClient({
+      ...defaults(),
+      transport,
+    }).request('GET', ['files']);
+    expect(result.headers).toEqual({
+      location: 'https://untrusted.example/secret',
+      etag: 'tag',
+    });
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.headers)).toBe(true);
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps HEAD length as metadata and cancels an injected body without reading it', async () => {
+    const cancelled = jest.fn();
+    const body = new ReadableStream<Uint8Array>({ cancel: cancelled });
+    const result = await new BoundedBinaryHttpClient({
+      ...defaults(),
+      maxResponseBytes: 0,
+      transport: () =>
+        Promise.resolve(
+          new Response(body, {
+            headers: { 'content-length': '12582912', etag: 'opaque' },
+          }),
+        ),
+    }).request('HEAD', ['object']);
+    expect(result.body.byteLength).toBe(0);
+    expect(result.headers['content-length']).toBe('12582912');
+    expect(cancelled).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['-1', 'invalid', '9007199254740992'])(
+    'rejects malformed HEAD length %s',
+    async (length) => {
+      await expect(
+        new BoundedBinaryHttpClient({
+          ...defaults(),
+          transport: () =>
+            Promise.resolve(
+              new Response(null, { headers: { 'content-length': length } }),
+            ),
+        }).request('HEAD', ['object']),
+      ).rejects.toMatchObject({ reason: 'invalid_response' });
+    },
+  );
+
+  it('rejects declared and actual response overflow and cancels streams', async () => {
+    const declaredCancel = jest.fn();
+    const declared = new BoundedBinaryHttpClient({
+      ...defaults(),
+      transport: () =>
+        Promise.resolve(
+          new Response(new ReadableStream({ cancel: declaredCancel }), {
+            headers: { 'content-length': '129' },
+          }),
+        ),
+    });
+    await expect(declared.request('GET', ['object'])).rejects.toMatchObject({
+      reason: 'invalid_response',
+    });
+    expect(declaredCancel).toHaveBeenCalled();
+    const actualCancel = jest.fn();
+    const actual = new BoundedBinaryHttpClient({
+      ...defaults(),
+      transport: () =>
+        Promise.resolve(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new Uint8Array(129));
+              },
+              cancel: actualCancel,
+            }),
+          ),
+        ),
+    });
+    await expect(actual.request('GET', ['object'])).rejects.toMatchObject({
+      reason: 'invalid_response',
+    });
+    expect(actualCancel).toHaveBeenCalled();
+  });
+
+  it('sanitizes HTTP/network failures and never retries uncertain POST or PATCH', async () => {
+    for (const method of ['POST', 'PATCH'] as const) {
+      const transport = jest.fn(() =>
+        Promise.reject(new Error('secret bearer raw URL body')),
+      );
+      const client = new BoundedBinaryHttpClient({ ...defaults(), transport });
+      const error: unknown = await client
+        .request(method, ['files'], { body: bytes('secret') })
+        .catch((failure: unknown) => failure);
+      expect(error).toBeInstanceOf(BoundedBinaryHttpUnavailableError);
+      expect(error).toMatchObject({
+        reason: 'network',
+        message: 'Bounded binary HTTP request unavailable',
+      });
+      expect(String(error)).not.toContain('secret');
+      expect(transport).toHaveBeenCalledTimes(1);
+    }
+    const cancelled = jest.fn();
+    const denied = new BoundedBinaryHttpClient({
+      ...defaults(),
+      transport: () =>
+        Promise.resolve(
+          new Response(new ReadableStream({ cancel: cancelled }), {
+            status: 503,
+          }),
+        ),
+    });
+    await expect(denied.request('POST', ['files'])).rejects.toMatchObject({
+      reason: 'http',
+      status: 503,
+    });
+    expect(cancelled).toHaveBeenCalled();
+  });
+
+  it('bounds an ignored abort and cancels a late response body', async () => {
+    const cancelled = jest.fn();
+    const transport = jest.fn(async () => {
+      await pause(70);
+      return new Response(new ReadableStream({ cancel: cancelled }));
+    });
+    const before = Date.now();
+    await expect(
+      new BoundedBinaryHttpClient({
+        ...defaults(),
+        timeoutMs: 20,
+        transport,
+      }).request('POST', ['files']),
+    ).rejects.toMatchObject({ reason: 'timeout' });
+    expect(Date.now() - before).toBeLessThan(1000);
+    await pause(90);
+    expect(cancelled).toHaveBeenCalledTimes(1);
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not renew the whole deadline after delayed transport and a timer-starving body', async () => {
+    const cancelled = jest.fn();
+    const transport = jest.fn(async () => {
+      await pause(70);
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            controller.enqueue(new Uint8Array());
+          },
+          cancel: cancelled,
+        }),
+      );
+    });
+    const before = performance.now();
+    await expect(
+      new BoundedBinaryHttpClient({
+        ...defaults(),
+        timeoutMs: 120,
+        transport,
+      }).request('GET', ['object']),
+    ).rejects.toMatchObject({ reason: 'timeout' });
+    expect(performance.now() - before).toBeLessThan(165);
+    expect(cancelled).toHaveBeenCalledTimes(1);
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it('denies a late HEAD even when synchronous transport starves its timer', async () => {
+    const transport = jest.fn(() =>
+      Promise.resolve().then(() => {
+        const until = performance.now() + 30;
+        while (performance.now() < until) {
+          /* emulate a transport ignoring abort */
+        }
+        return new Response(null, {
+          headers: { 'content-length': '12582912' },
+        });
+      }),
+    );
+    await expect(
+      new BoundedBinaryHttpClient({
+        ...defaults(),
+        timeoutMs: 10,
+        transport,
+      }).request('HEAD', ['object']),
+    ).rejects.toMatchObject({ reason: 'timeout' });
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds a stalled response read across the whole operation', async () => {
+    const cancelled = jest.fn();
+    const transport = jest.fn(async () => {
+      await pause(20);
+      return new Response(new ReadableStream({ cancel: cancelled }));
+    });
+    await expect(
+      new BoundedBinaryHttpClient({
+        ...defaults(),
+        timeoutMs: 40,
+        transport,
+      }).request('GET', ['object']),
+    ).rejects.toMatchObject({ reason: 'timeout' });
+    expect(cancelled).toHaveBeenCalled();
+  });
+
+  it('cancels before dispatch or during an ignored-abort transport', async () => {
+    const transport = jest.fn(() => new Promise<Response>(() => undefined));
+    const client = new BoundedBinaryHttpClient({ ...defaults(), transport });
+    const before = new AbortController();
+    before.abort();
+    await expect(
+      client.request('GET', ['object'], { signal: before.signal }),
+    ).rejects.toMatchObject({ reason: 'cancelled' });
+    expect(transport).not.toHaveBeenCalled();
+    const during = new AbortController();
+    const request = client.request('PATCH', ['files'], {
+      body: bytes('x'),
+      signal: during.signal,
+    });
+    during.abort();
+    await expect(request).rejects.toMatchObject({ reason: 'cancelled' });
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds incoming streams by actual bytes and snapshots reused chunks', async () => {
+    const shared = bytes('abc');
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(shared);
+      },
+      async pull(controller) {
+        await pause(10);
+        shared.fill(120);
+        controller.close();
+      },
+    });
+    expect(decoded(await readBoundedBinaryBody(source, { maxBytes: 3 }))).toBe(
+      'abc',
+    );
+    const cancelled = jest.fn();
+    await expect(
+      readBoundedBinaryBody(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(bytes('abcd'));
+          },
+          cancel: cancelled,
+        }),
+        { maxBytes: 3 },
+      ),
+    ).rejects.toMatchObject({ reason: 'body_limit' });
+    expect(cancelled).toHaveBeenCalled();
+  });
+
+  it('cancels stalled or invalid incoming streams without hanging', async () => {
+    const cancelled = jest.fn();
+    const error: unknown = await readBoundedBinaryBody(
+      new ReadableStream({ cancel: cancelled }),
+      {
+        maxBytes: 3,
+        timeoutMs: 20,
+      },
+    ).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(BoundedBinaryBodyError);
+    expect(error).toMatchObject({ reason: 'timeout' });
+    expect(cancelled).toHaveBeenCalledTimes(1);
+    const controller = new AbortController();
+    const pending = readBoundedBinaryBody(new ReadableStream(), {
+      maxBytes: 3,
+      signal: controller.signal,
+    });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ reason: 'cancelled' });
+    await expect(
+      readBoundedBinaryBody(
+        new ReadableStream({
+          start(stream) {
+            stream.error(new Error('private payload'));
+          },
+        }),
+        { maxBytes: 3 },
+      ),
+    ).rejects.toMatchObject({ reason: 'invalid_body' });
+  });
+  it('snapshots incoming limits and cancellation before asynchronous reads', async () => {
+    const options = { maxBytes: 3, timeoutMs: 1000 };
+    const pending = readBoundedBinaryBody(
+      new ReadableStream<Uint8Array>({
+        async start(controller) {
+          await pause(10);
+          controller.enqueue(bytes('four'));
+        },
+      }),
+      options,
+    );
+    options.maxBytes = 1000;
+    await expect(pending).rejects.toMatchObject({ reason: 'body_limit' });
+    const original = new AbortController();
+    const replacement = new AbortController();
+    const request = { signal: original.signal };
+    const transport = jest.fn(() => new Promise<Response>(() => undefined));
+    const result = new BoundedBinaryHttpClient({
+      ...defaults(),
+      transport,
+    }).request('GET', ['object'], request);
+    request.signal = replacement.signal;
+    original.abort();
+    await expect(result).rejects.toMatchObject({ reason: 'cancelled' });
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds an endless zero-byte stream even when microtasks starve the timer', async () => {
+    const cancelled = jest.fn();
+    const before = Date.now();
+    await expect(
+      readBoundedBinaryBody(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            controller.enqueue(new Uint8Array());
+          },
+          cancel: cancelled,
+        }),
+        { maxBytes: 0, timeoutMs: 20 },
+      ),
+    ).rejects.toMatchObject({ reason: 'timeout' });
+    expect(Date.now() - before).toBeLessThan(1000);
+    expect(cancelled).toHaveBeenCalled();
+  });
+});
+
+describe('Actual loopback HTTP transport', () => {
+  let server: Server;
+  let origin: string;
+  let attempts: Record<string, number>;
+  beforeEach(async () => {
+    attempts = {};
+    server = createServer((request, response) => {
+      const route = request.url ?? '';
+      attempts[route] = (attempts[route] ?? 0) + 1;
+      if (route === '/head') {
+        response.writeHead(200, {
+          'content-length': '12582912',
+          etag: 'native',
+        });
+        response.end();
+      } else if (route === '/redirect') {
+        response.writeHead(307, { location: '/destination' });
+        response.end();
+      } else if (route === '/stall') {
+        response.writeHead(200, { 'content-type': 'application/octet-stream' });
+        response.write('x');
+      } else if (route === '/uncertain') {
+        request.resume();
+        request.on('end', () => request.socket.destroy());
+      } else {
+        const chunks: Buffer[] = [];
+        request.on('data', (chunk: Buffer) => chunks.push(chunk));
+        request.on('end', () => {
+          response.writeHead(200, {
+            'content-type': 'application/octet-stream',
+          });
+          response.end(Buffer.concat(chunks));
+        });
+      }
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    const address = server.address();
+    if (!address || typeof address === 'string')
+      throw new Error('No loopback address');
+    origin = `http://127.0.0.1:${address.port}`;
+  });
+  afterEach(async () => {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+      server.closeAllConnections();
+    });
+  });
+  function client(timeoutMs = 500): BoundedBinaryHttpClient {
+    return new BoundedBinaryHttpClient({
+      ...defaults(),
+      origin,
+      trustedInternalHttp: true,
+      timeoutMs,
+    });
+  }
+
+  it('HEADs real metadata and PATCHes exactly the snapshotted bytes once', async () => {
+    const result = await client().request('HEAD', ['head']);
+    expect(result.headers['content-length']).toBe('12582912');
+    expect(result.body.byteLength).toBe(0);
+    expect(
+      decoded(
+        (
+          await client().request('PATCH', ['echo'], {
+            body: bytes('native bytes'),
+          })
+        ).body,
+      ),
+    ).toBe('native bytes');
+    expect(attempts).toEqual({ '/head': 1, '/echo': 1 });
+  });
+
+  it('rejects an actual redirect without following the target', async () => {
+    await expect(
+      client().request('POST', ['redirect'], { body: bytes('secret') }),
+    ).rejects.toBeInstanceOf(BoundedBinaryHttpUnavailableError);
+    expect(attempts['/redirect']).toBe(1);
+    expect(attempts['/destination']).toBeUndefined();
+  });
+
+  it('cancels actual stalled HTTP body reads within the deadline', async () => {
+    await expect(client(30).request('GET', ['stall'])).rejects.toMatchObject({
+      reason: 'timeout',
+    });
+    expect(attempts['/stall']).toBe(1);
+  });
+
+  it.each(['POST', 'PATCH'] as const)(
+    'does not redrive a real uncertain %s',
+    async (method) => {
+      await expect(
+        client().request(method, ['uncertain'], {
+          body: bytes('maybe accepted'),
+        }),
+      ).rejects.toMatchObject({ reason: 'network' });
+      expect(attempts['/uncertain']).toBe(1);
+    },
+  );
+});
