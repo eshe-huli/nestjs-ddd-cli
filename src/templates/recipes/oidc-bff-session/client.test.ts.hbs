@@ -515,6 +515,7 @@ describe('durable minted-token handoff', () => {
       },
       handle: ({ url }) => {
         if (url.endsWith('jwks.json')) events.push('jwks');
+        return undefined;
       },
     });
     await expect(client.exchangeAuthorizationCode(exchange)).rejects.toMatchObject({

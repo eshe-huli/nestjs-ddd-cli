@@ -15,3 +15,28 @@ Remote supported proof: homelab job laptop-test-a9b15e00f089 on k3s-03, source S
 Established typecheck/build and emitted strict compilation pass. Changed generator files and all emitted TypeScript/specs pass explicit lint/Prettier with zero warnings. Existing repository-wide lint:strict returns zero errors with baseline warnings; optional whole-project typecheck:strict retains extensive pre-existing index-signature errors outside this slice. Full Bun/Jest uses globalsCleanup=off for native Stream/Jest30 incompatibility and read-only NODE_PATH installed Nest peer roots for the isolated store; no test omissions, dependency copies or consumer patches. CI keeps npm ci/scripts, Node18/20/22/24 and release workflow; only Bun1.4 test runtime is added for emitted verification.
 
 Next permitted action: root review and local coherent source commit, then generated consumption with Next server-only wrappers and per-app domain admission. No push, package publication, CI/deployment or real actor proof is established by this checkpoint. Existing Husky npx hook is not used on the local Bun-only host; the equivalent required checks above ran directly through Bun before the source commit.
+
+## Strict consumer-spec and existing logging emission follow-up
+
+Two independently scoped source reviews produced this additive follow-up. The
+BFF test callback now explicitly returns undefined, satisfying the emitted
+fixture's response type under the complete Next consumer strict programs. No
+runtime behavior, dependency, dispatcher or release workflow changes. Both
+commerce consumer programs compile their generated specs; the separately owned
+actual Redis profile passes 222 cases / 719 assertions with no skips.
+
+The shared logging emitter already uses node:crypto randomUUID and typed user
+narrowing. An older Clinical generated copy was stale; no new emitter or uuid
+dependency is needed. A new emitted real Nest middleware test checks generated
+request IDs, preserved request IDs, invalid user-ID rejection and concurrent
+AsyncLocalStorage separation. Clinical's actual Nest/Express type graph strictly
+compiles the consumed generated context. This does not broaden its business
+authorization.
+
+Root aggregate verification passes both focused suites / 12 cases, production
+build/typecheck, strict changed-test lint and whitespace checks. The BFF recipe
+executes actual signed OIDC and storage behavior and strictly compiles emitted
+production code. Local Bun uses the documented installed-peer NODE_PATH and
+globalsCleanup=off exceptions; established Node CI is unchanged. No optional
+global Bun types were added. Root owns publication and exact-head matrix CI;
+these receipts alone do not prove activated apps or deployed actors.
