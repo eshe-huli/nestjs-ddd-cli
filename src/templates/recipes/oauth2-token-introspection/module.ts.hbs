@@ -1,12 +1,19 @@
-import { DynamicModule, FactoryProvider, Module, ModuleMetadata } from '@nestjs/common';
+import {
+  DynamicModule,
+  FactoryProvider,
+  Module,
+  ModuleMetadata,
+} from '@nestjs/common';
 import {
   OAUTH2_TOKEN_INTROSPECTION_OPTIONS,
   OAuth2TokenIntrospectionClient,
   OAuth2TokenIntrospectionOptions,
 } from './oauth2-token-introspection.client';
 
-export interface OAuth2TokenIntrospectionModuleAsyncOptions
-  extends Pick<ModuleMetadata, 'imports'> {
+export interface OAuth2TokenIntrospectionModuleAsyncOptions extends Pick<
+  ModuleMetadata,
+  'imports'
+> {
   inject?: FactoryProvider<OAuth2TokenIntrospectionOptions>['inject'];
   useFactory: FactoryProvider<OAuth2TokenIntrospectionOptions>['useFactory'];
 }
@@ -31,7 +38,9 @@ export class OAuth2TokenIntrospectionModule {
     };
   }
 
-  static registerAsync(options: OAuth2TokenIntrospectionModuleAsyncOptions): DynamicModule {
+  static registerAsync(
+    options: OAuth2TokenIntrospectionModuleAsyncOptions,
+  ): DynamicModule {
     return {
       module: OAuth2TokenIntrospectionModule,
       imports: options.imports ?? [],

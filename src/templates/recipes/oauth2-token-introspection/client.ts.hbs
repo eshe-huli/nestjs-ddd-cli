@@ -1,4 +1,11 @@
-export const OAUTH2_TOKEN_INTROSPECTION_OPTIONS = Symbol('OAUTH2_TOKEN_INTROSPECTION_OPTIONS');
+import {
+  BoundedJsonHttpClient,
+  BoundedJsonHttpUnavailableError,
+} from './bounded-json-http.client';
+
+export const OAUTH2_TOKEN_INTROSPECTION_OPTIONS = Symbol(
+  'OAUTH2_TOKEN_INTROSPECTION_OPTIONS',
+);
 
 /** Supply only from validated deployment configuration, never request input. */
 export interface OAuth2TokenIntrospectionOptions {
@@ -36,7 +43,9 @@ export interface OAuth2TokenValidationPolicy<Principal> {
 }
 
 export class InvalidOAuth2TokenError extends Error {
-  constructor(readonly reason: 'invalid_token' | 'inactive_token' | 'policy_rejected') {
+  constructor(
+    readonly reason: 'invalid_token' | 'inactive_token' | 'policy_rejected',
+  ) {
     super('Access token rejected');
     this.name = 'InvalidOAuth2TokenError';
   }
@@ -44,14 +53,20 @@ export class InvalidOAuth2TokenError extends Error {
 
 export class OAuth2IntrospectionUnavailableError extends Error {
   constructor(
-    readonly reason: 'timeout' | 'network' | 'http' | 'invalid_response' | 'policy_failure',
+    readonly reason:
+      'timeout' | 'network' | 'http' | 'invalid_response' | 'policy_failure',
   ) {
     super('Token validation unavailable');
     this.name = 'OAuth2IntrospectionUnavailableError';
   }
 }
 
-function bounded(value: number | undefined, fallback: number, min: number, max: number): number {
+function bounded(
+  value: number | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
   const result = value ?? fallback;
   if (!Number.isSafeInteger(result) || result < min || result > max) {
     throw new Error('Invalid introspection configuration');
@@ -63,24 +78,48 @@ function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function hasControls(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.charCodeAt(0);
+    return code < 32 || code === 127;
+  });
+}
+
+function stringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item: unknown) =>
+        typeof item === 'string' && item.length > 0 && !hasControls(item),
+    )
+  );
+}
+
 function freeze(value: unknown, depth = 0): void {
-  if (depth > 32) throw new OAuth2IntrospectionUnavailableError('invalid_response');
+  if (depth > 32)
+    throw new OAuth2IntrospectionUnavailableError('invalid_response');
   if (value !== null && typeof value === 'object') {
     for (const child of Object.values(value)) freeze(child, depth + 1);
     Object.freeze(value);
   }
 }
 
-function optionalString(claims: Record<string, unknown>, key: string): string | undefined {
+function optionalString(
+  claims: Record<string, unknown>,
+  key: string,
+): string | undefined {
   const value = claims[key];
   if (value === undefined) return undefined;
-  if (typeof value !== 'string' || value.length === 0 || /[\x00-\x1f\x7f]/.test(value)) {
+  if (typeof value !== 'string' || value.length === 0 || hasControls(value)) {
     throw new OAuth2IntrospectionUnavailableError('invalid_response');
   }
   return value;
 }
 
-function optionalTime(claims: Record<string, unknown>, key: string): number | undefined {
+function optionalTime(
+  claims: Record<string, unknown>,
+  key: string,
+): number | undefined {
   const value = claims[key];
   if (value === undefined) return undefined;
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
@@ -95,20 +134,20 @@ function evidence(claims: unknown): OAuth2TokenEvidence {
   }
   if (!claims['active']) throw new InvalidOAuth2TokenError('inactive_token');
   const aud = claims['aud'];
-  const audiences = typeof aud === 'string' ? [aud] : aud === undefined ? [] : aud;
-  if (
-    !Array.isArray(audiences) ||
-    audiences.some(
-      (item) => typeof item !== 'string' || item.length === 0 || /[\x00-\x1f\x7f]/.test(item),
-    )
-  ) {
+  const audiences =
+    typeof aud === 'string' ? [aud] : aud === undefined ? [] : aud;
+  if (!stringArray(audiences)) {
     throw new OAuth2IntrospectionUnavailableError('invalid_response');
   }
   const scope = claims['scope'];
-  if (scope !== undefined && (typeof scope !== 'string' || /[\x00-\x1f\x7f]/.test(scope))) {
+  if (
+    scope !== undefined &&
+    (typeof scope !== 'string' || hasControls(scope))
+  ) {
     throw new OAuth2IntrospectionUnavailableError('invalid_response');
   }
-  if (claims['ext'] !== undefined && !record(claims['ext'])) {
+  const extensions = claims['ext'];
+  if (extensions !== undefined && !record(extensions)) {
     throw new OAuth2IntrospectionUnavailableError('invalid_response');
   }
   const result: OAuth2TokenEvidence = {
@@ -125,7 +164,7 @@ function evidence(claims: unknown): OAuth2TokenEvidence {
     notBefore: optionalTime(claims, 'nbf'),
     tokenType: optionalString(claims, 'token_type'),
     tokenUse: optionalString(claims, 'token_use'),
-    extensions: (claims['ext'] as Record<string, unknown> | undefined) ?? {},
+    extensions: extensions ?? {},
     claims,
   };
   freeze(result);
@@ -133,40 +172,23 @@ function evidence(claims: unknown): OAuth2TokenEvidence {
 }
 
 export class OAuth2TokenIntrospectionClient {
-  private readonly url: string;
-  private readonly headers: Readonly<Record<string, string>>;
-  private readonly timeoutMs: number;
-  private readonly maxResponseBytes: number;
+  private readonly http: BoundedJsonHttpClient;
+  private readonly pathSegments: readonly string[];
   private readonly maxTokenBytes: number;
-  private readonly transport: (url: string, init: RequestInit) => Promise<Response>;
 
   constructor(options: OAuth2TokenIntrospectionOptions) {
     try {
       const url = new URL(options.introspectionUrl);
-      if (
-        url.username ||
-        url.password ||
-        url.hash ||
-        url.search ||
-        (url.protocol !== 'https:' &&
-          !(url.protocol === 'http:' && options.trustedInternalHttp === true))
-      ) {
+      if (url.username || url.password || url.hash || url.search)
         throw new Error();
-      }
-      this.url = url.href;
-      const headers = new Headers({
-        accept: 'application/json',
-        'content-type': 'application/x-www-form-urlencoded',
-      });
-      for (const [key, value] of Object.entries(options.requestHeaders ?? {})) {
-        if (['accept', 'content-type'].includes(key.toLowerCase())) throw new Error();
-        headers.set(key, value);
-      }
-      this.headers = Object.freeze(Object.fromEntries(headers.entries()));
-      this.timeoutMs = bounded(options.timeoutMs, 3000, 10, 30000);
-      this.maxResponseBytes = bounded(options.maxResponseBytes, 65536, 128, 1048576);
+      this.pathSegments = Object.freeze(
+        url.pathname
+          .slice(1)
+          .split('/')
+          .map((segment) => decodeURIComponent(segment)),
+      );
       this.maxTokenBytes = bounded(options.maxTokenBytes, 16384, 1, 65536);
-      this.transport = options.transport ?? ((url, init) => fetch(url, init));
+      this.http = new BoundedJsonHttpClient({ ...options, origin: url.origin });
     } catch {
       throw new Error('Invalid introspection configuration');
     }
@@ -181,26 +203,22 @@ export class OAuth2TokenIntrospectionClient {
     ) {
       throw new InvalidOAuth2TokenError('invalid_token');
     }
-    const abort = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        abort.abort();
-        reject(new OAuth2IntrospectionUnavailableError('timeout'));
-      }, this.timeoutMs);
-    });
     try {
-      return await Promise.race([this.request(token, abort.signal), timeout]);
+      return evidence(
+        await this.http.postForm(this.pathSegments, {
+          token,
+          token_type_hint: 'access_token',
+        }),
+      );
     } catch (error) {
       if (
         error instanceof InvalidOAuth2TokenError ||
         error instanceof OAuth2IntrospectionUnavailableError
       )
         throw error;
+      if (error instanceof BoundedJsonHttpUnavailableError)
+        throw new OAuth2IntrospectionUnavailableError(error.reason);
       throw new OAuth2IntrospectionUnavailableError('network');
-    } finally {
-      clearTimeout(timer);
-      abort.abort();
     }
   }
 
@@ -218,68 +236,6 @@ export class OAuth2TokenIntrospectionClient {
       )
         throw error;
       throw new OAuth2IntrospectionUnavailableError('policy_failure');
-    }
-  }
-
-  private async request(token: string, signal: AbortSignal): Promise<OAuth2TokenEvidence> {
-    const response = await this.transport(this.url, {
-      method: 'POST',
-      headers: { ...this.headers },
-      body: new URLSearchParams({ token, token_type_hint: 'access_token' }).toString(),
-      redirect: 'error',
-      cache: 'no-store',
-      signal,
-    });
-    if (!response.ok || response.redirected) {
-      void response.body?.cancel().catch(() => undefined);
-      throw new OAuth2IntrospectionUnavailableError('http');
-    }
-    if (signal.aborted) {
-      void response.body?.cancel().catch(() => undefined);
-      throw new OAuth2IntrospectionUnavailableError('timeout');
-    }
-    const length = response.headers.get('content-length');
-    if (length !== null && (!/^\d+$/.test(length) || Number(length) > this.maxResponseBytes)) {
-      void response.body?.cancel().catch(() => undefined);
-      throw new OAuth2IntrospectionUnavailableError('invalid_response');
-    }
-    if (!response.body) throw new OAuth2IntrospectionUnavailableError('invalid_response');
-    const reader = response.body.getReader();
-    const cancel = () => {
-      void reader.cancel().catch(() => undefined);
-    };
-    signal.addEventListener('abort', cancel, { once: true });
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        size += value.byteLength;
-        if (size > this.maxResponseBytes)
-          throw new OAuth2IntrospectionUnavailableError('invalid_response');
-        chunks.push(value);
-      }
-      const bytes = new Uint8Array(size);
-      let offset = 0;
-      for (const chunk of chunks) {
-        bytes.set(chunk, offset);
-        offset += chunk.byteLength;
-      }
-      try {
-        return evidence(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
-      } catch (error) {
-        if (
-          error instanceof InvalidOAuth2TokenError ||
-          error instanceof OAuth2IntrospectionUnavailableError
-        )
-          throw error;
-        throw new OAuth2IntrospectionUnavailableError('invalid_response');
-      }
-    } finally {
-      signal.removeEventListener('abort', cancel);
-      void reader.cancel().catch(() => undefined);
-      reader.releaseLock();
     }
   }
 }

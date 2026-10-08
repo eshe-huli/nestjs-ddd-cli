@@ -154,14 +154,20 @@ describe('OAuth2 token introspection recipe', () => {
         ts.transpileModule(source, { compilerOptions }).outputText,
       );
     }
-    const specification = path.join(sourceDir, 'oauth2-token-introspection.client.spec.js');
+    const specifications = [
+      'oauth2-token-introspection.client.spec.js',
+      'bounded-json-http.client.spec.js',
+    ].map((file) => path.join(sourceDir, file));
     execFileSync(
       'bun',
       [
         require.resolve('jest/bin/jest'),
         '--runInBand',
         '--runTestsByPath',
-        specification,
+        ...specifications,
+        '--json',
+        '--outputFile',
+        path.join(target, 'consumer-proof.json'),
         '--config',
         JSON.stringify({
           rootDir: sourceDir,
@@ -173,6 +179,18 @@ describe('OAuth2 token introspection recipe', () => {
         }),
       ],
       { encoding: 'utf8', stdio: 'pipe' },
+    );
+    const proof = (await fs.readJson(path.join(target, 'consumer-proof.json'))) as {
+      success: boolean;
+      numPassedTests: number;
+      numFailedTests: number;
+      numTotalTestSuites: number;
+    };
+    expect(proof.success).toBe(true);
+    expect(proof.numFailedTests).toBe(0);
+    expect(proof.numTotalTestSuites).toBe(2);
+    process.stdout.write(
+      `Generated consumer proof: ${proof.numPassedTests} passed in ${proof.numTotalTestSuites} suites\n`,
     );
   }, 30000);
 });

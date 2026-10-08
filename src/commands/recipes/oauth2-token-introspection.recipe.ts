@@ -16,6 +16,11 @@ const files = [
     'src/shared/auth/oauth2-token-introspection/oauth2-token-introspection.module.ts',
   ],
   ['index.ts.hbs', 'src/shared/auth/oauth2-token-introspection/index.ts'],
+  ['http-client.ts.hbs', 'src/shared/auth/oauth2-token-introspection/bounded-json-http.client.ts'],
+  [
+    'http-client.spec.ts.hbs',
+    'src/shared/auth/oauth2-token-introspection/bounded-json-http.client.spec.ts',
+  ],
   ['README.md.hbs', 'docs/auth/oauth2-token-introspection.md'],
 ] as const;
 

@@ -51,6 +51,37 @@ AbortSignal and redirect policy. No retries or positive-validation cache exist.
 Every call rechecks the provider. Runtime baseline is Node 18+ or Bun with Fetch
 and Web Streams; no consumer dependency installation is needed.
 
+## Bounded provider JSON GET
+
+The barrel also exports `BoundedJsonHttpClient`, its options and
+`BoundedJsonHttpUnavailableError`. Introspection delegates to this same mechanism;
+provider adapters do not need to copy timeout, stream limits or HTTP error logic.
+Each instance has an exact trusted origin from validated deployment config, with
+no path, query, fragment or credentials. Its GET API accepts path segments and a
+bounded query record; it percent-encodes segments and rejects dot traversal.
+No call can select another origin. No bearer token or body is sent on GET.
+
+```ts
+const kratos = new BoundedJsonHttpClient({
+  origin: config.getOrThrow<string>('KRATOS_ADMIN_ORIGIN'),
+  trustedInternalHttp: true, // only for the verified private cluster endpoint
+  timeoutMs: 3000,
+});
+// The owning adapter validates sessionId/identityId as UUIDs before these calls.
+const sessionJson = await kratos.get(['admin', 'sessions', sessionId], { expand: 'identity' });
+const identityJson = await kratos.get(['admin', 'identities', identityId]);
+```
+
+Use only configured origin and fixed resource route segments, followed by encoded
+identifiers validated by the consumer. Never pass an origin from request data.
+The return type is unknown JSON; the consumer validates provider schema, active
+session/identity, expiry, assurance, binding and authorization. The mechanism
+does not infer account status from JSON. Transport errors retain safe reason and
+optional numeric HTTP status, so the adapter can distinguish a missing session
+from upstream unavailability without inspecting or logging response bodies.
+The helper also exposes bounded `postForm` for the introspection client; it
+applies the same origin, redirect, timeout, byte, nesting and no-cache rules.
+
 ## Evidence and consumer policy
 
 `introspect(originalAccessToken)` POSTs form-encoded `token` and

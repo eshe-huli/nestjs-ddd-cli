@@ -14,4 +14,6 @@ Verified 2026-10-08; accepted scope from current user authorization and root del
 | GEN-08 | DESIGN | Headless server change | UI-kit/research not applicable | Slice inventory | Implementation |
 | GEN-09 | AGENT | Isolated origin/main 0ca15f7 worktree | Generator-only ownership; preserve siblings/consumers; accepted | Root delegation | All actions |
 
+| GEN-10 | API / INTEGRATION | Kratos current session and identity reads need the same bounded mechanism | Export exact-origin encoded-path JSON GET and share POST mechanism; schemas/state/policies consumer-owned; accepted | Root explicit additive authorization | Generic transport proof |
+
 Required decisions are resolved. Homelab offload requires a Bun lockfile; inspect compatibility before offload. A missing lockfile does not authorize package-manager migration.
