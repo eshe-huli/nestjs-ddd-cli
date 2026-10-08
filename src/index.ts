@@ -370,6 +370,7 @@ program
   .option('--probe-mode <mode>', 'Probe mode (live-only, live-and-ready)', 'live-and-ready')
   .option('--no-probe', 'Omit probes; readiness must be established before activation')
   .option('--node-image <image>', 'Official Node20/22/24 Alpine image', 'node:20-alpine')
+  .option('--application <application>', 'Application build (nest, next-standalone)', 'nest')
   .action(async (options) => {
     try {
       await generateDeployment(options);

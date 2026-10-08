@@ -117,3 +117,47 @@ receipt only. Exact follow-up Node CI remains required before real service
 regeneration. Existing Docker/package/source inputs are identical, so their
 immutable build proof is retained without a redundant rebuild. Service schema,
 doctor and diff checks must be repeated after consumption; activation stays held.
+
+## Additive Next standalone source preparation
+
+The accepted MDL Accounts browser is a new Next frontend. Existing Nest output
+cannot produce its standalone runtime or native Bun source test command. Root
+extends only this generator lease with explicit `--application next-standalone`,
+requiring private/held/Bun/no-probe, current Next build/native Bun test scripts,
+and no Nest/Prisma source. Default Nest options/files remain unchanged. No existing
+workflow manager, package/lock, source application or main branch is migrated.
+
+The generated builder uses frozen container-owned hoisted dependencies and Next
+standalone build output. Runtime remains the selected official Node image with
+uid1001, fixed listener/port, no Bun, no provider environment or automatic deploy.
+Docker context excludes local `.next`, protocol/workflow/Kubernetes records and
+environment files; existing owned exclusions are validated and preserved. Source
+CI chooses the native Bun test script without Jest arguments. Shared private
+target/symlink/exclusive-create/held-state guards remain in force.
+
+Current local focused58renderer/YAML/negative/actual-CLI cases, production build,
+typecheck and strict owned lint pass. Independent source review found one context
+guard omission: an existing Docker ignore also needs node_modules excluded.
+That guard and a rejection-before-write regression now pass; no material source
+finding remains. The supported Linux profile `laptop-test-31c577b34e09` passes
+all58cases/build/type/strict owned lint, exit0/cleanup0, snapshot
+`224f54da7bef6c169f496d6b5be1af54b69666fd1f687d6f26e4cc6b05594109`.
+The initial bare test invocation11e0e44489de omitted the compiled CLI build and
+the previously documented Jest globalsCleanup option:56pass/2fail, cleanup0.
+The corrected profile builds first and retains that existing runtime option;
+no source assertion, timeout, dependency or compiler rule was weakened.
+
+Actual emitter parity checks compare every output byte with preceding598cfe8
+for default GitHub, default GitLab and both private held Accounts/Courier API
+profiles. All are identical; the two API profiles additionally match every
+checked-in generated artifact. Courier retains its existing /health/live
+liveness-only probe; Accounts remains without probes. Actual compiled CLI
+generation against the new browser's real package/lock emits eight held files:
+Docker/ignore, sourceCI/manualCD, Deployment/Service/ConfigMap and the private
+minimal environment example. Preview receipt is
+`/tmp/mdl-next-emission-receipt-20261008.json`; no app artifact is consumed yet.
+
+Exact Node matrix CI remains before consumer generation. Actual emitted frontend
+Docker/build/native HTTP proof follows consumption; the earlier API immutable
+container receipts do not cover this new frontend. Runtime readiness, custody
+and real actors remain open.

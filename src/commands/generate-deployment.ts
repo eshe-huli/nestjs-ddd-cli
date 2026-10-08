@@ -19,6 +19,7 @@ export interface DeploymentOptions {
   probeMode?: 'live-only' | 'live-and-ready';
   probe?: boolean;
   nodeImage?: string;
+  application?: 'nest' | 'next-standalone';
 }
 
 interface DeploymentProfile {
@@ -32,6 +33,7 @@ interface DeploymentProfile {
   nodeImage: string;
   hasPrisma: boolean;
   hasNestConfig: boolean;
+  application: 'nest' | 'next-standalone';
 }
 
 interface DeploymentFile {
@@ -75,6 +77,16 @@ async function resolveProfile(
   const portText = String(options.port ?? 3000);
   const nodeImage = options.nodeImage ?? 'node:20-alpine';
   const probeMode = options.probeMode ?? 'live-and-ready';
+  const application = options.application ?? 'nest';
+  if (!['nest', 'next-standalone'].includes(application)) throw new Error('Invalid application');
+  if (
+    application === 'next-standalone' &&
+    (packageManager !== 'bun' ||
+      visibility !== 'private' ||
+      state !== 'held' ||
+      options.probe !== false)
+  )
+    throw new Error('Next standalone requires an explicit private held Bun profile without probes');
   if (!['live-only', 'live-and-ready'].includes(probeMode)) throw new Error('Invalid probe mode');
   if (!['public', 'private'].includes(visibility)) throw new Error('Invalid visibility');
   if (!['active', 'held'].includes(state)) throw new Error('Invalid state');
@@ -191,6 +203,35 @@ async function resolveProfile(
     !prismaDirectory.isSymbolicLink();
   const nestConfig = await lstatOrAbsent(path.join(basePath, 'nest-cli.json'));
   const hasNestConfig = !!nestConfig?.isFile() && !nestConfig.isSymbolicLink();
+  if (application === 'next-standalone') {
+    const manifest: unknown = JSON.parse(await readOwnedFile(basePath, 'package.json'));
+    if (
+      !record(manifest) ||
+      !record(manifest['dependencies']) ||
+      typeof manifest['dependencies']['next'] !== 'string' ||
+      !record(manifest['scripts']) ||
+      typeof manifest['scripts']['test'] !== 'string' ||
+      !/^bun test(?:\s|$)/.test(manifest['scripts']['test']) ||
+      manifest['scripts']['build'] !== 'next build' ||
+      hasPrisma ||
+      hasNestConfig
+    )
+      throw new Error(
+        'Next standalone requires Next build and native Bun test scripts without Nest/Prisma',
+      );
+    const ignore = await lstatOrAbsent(path.join(basePath, '.dockerignore'));
+    if (ignore) {
+      const content = await readOwnedFile(basePath, '.dockerignore');
+      const lines = content.split(/\r?\n/).map((line) => line.trim());
+      if (
+        !['node_modules', '.next', '.env', '.env.*'].every((pattern) => lines.includes(pattern)) ||
+        lines.some((line) => line.startsWith('!') && line !== '!.env.example')
+      )
+        throw new Error(
+          'Existing Next Docker ignore must exclude node_modules, .next and environment files without other exceptions',
+        );
+    }
+  }
   return {
     visibility,
     state,
@@ -202,6 +243,7 @@ async function resolveProfile(
     nodeImage,
     hasPrisma,
     hasNestConfig,
+    application,
   };
 }
 
@@ -231,7 +273,7 @@ export async function generateDeployment(options: DeploymentOptions) {
     files.push(...(await generateCIPipeline(basePath, options.ci, profile)));
   if (options.kubernetes) files.push(...(await generateKubernetesManifests(basePath, profile)));
   files.push(
-    ...(await generateDockerIgnore(basePath)),
+    ...(await generateDockerIgnore(basePath, profile)),
     ...(await generateEnvExample(basePath, profile)),
   );
   if (
@@ -282,6 +324,37 @@ async function generateDockerfile(
   if (profile.visibility === 'public' && (await fileExists(dockerfilePath))) {
     console.log(chalk.yellow('  Dockerfile already exists. Skipping...'));
     return [];
+  }
+
+  if (profile.application === 'next-standalone') {
+    const content = `FROM ${BUN_IMAGE} AS bun-runtime
+
+FROM ${profile.nodeImage} AS builder
+COPY --from=bun-runtime /usr/local/bin/bun /usr/local/bin/bun
+WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile --linker=hoisted
+COPY . .
+RUN bun run --bun build
+
+FROM ${profile.nodeImage} AS production
+WORKDIR /app
+RUN addgroup -g 1001 -S nodejs && \\
+    adduser -S nextjs -u 1001
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV HOSTNAME=0.0.0.0
+ENV PORT=${profile.port}
+EXPOSE ${profile.port}
+USER nextjs
+HEALTHCHECK NONE
+CMD ["node", "server.js"]
+`;
+    return [{ destination: 'Dockerfile', content }];
   }
 
   const prismaCopy = profile.hasPrisma ? 'COPY prisma ./prisma\n' : '';
@@ -596,7 +669,7 @@ ${
       - name: Typecheck
         run: ${profile.packageManager === 'bun' ? 'bun run --bun' : 'npm run'} typecheck
       - name: Test source
-        run: ${profile.packageManager === 'bun' ? `bun run --bun test --testEnvironmentOptions='{"globalsCleanup":"off"}'` : 'npm test'}
+        run: ${sourceTestCommand(profile)}
       - name: Build
         run: ${profile.packageManager === 'bun' ? 'bun run --bun' : 'npm run'} build
 # Native database/restore/provider proof is separate from this source gate.
@@ -827,7 +900,7 @@ source:
     - ${profile.packageManager === 'bun' ? 'bun install --frozen-lockfile --linker=hoisted' : 'npm ci'}
     - ${profile.packageManager === 'bun' ? 'bun run --bun' : 'npm run'} lint
     - ${profile.packageManager === 'bun' ? 'bun run --bun' : 'npm run'} typecheck
-    - ${profile.packageManager === 'bun' ? `bun run --bun test --testEnvironmentOptions='{"globalsCleanup":"off"}'` : 'npm test'}
+    - ${sourceTestCommand(profile)}
     - ${profile.packageManager === 'bun' ? 'bun run --bun' : 'npm run'} build
 `;
   } else if (profile.packageManager === 'bun') {
@@ -1015,7 +1088,17 @@ spec:
   ];
 }
 
-async function generateDockerIgnore(basePath: string): Promise<DeploymentFile[]> {
+function sourceTestCommand(profile: DeploymentProfile): string {
+  if (profile.application === 'next-standalone') return 'bun run --bun test';
+  return profile.packageManager === 'bun'
+    ? `bun run --bun test --testEnvironmentOptions='{"globalsCleanup":"off"}'`
+    : 'npm test';
+}
+
+async function generateDockerIgnore(
+  basePath: string,
+  profile: DeploymentProfile,
+): Promise<DeploymentFile[]> {
   const dockerignorePath = path.join(basePath, '.dockerignore');
 
   if (await fileExists(dockerignorePath)) {
@@ -1068,7 +1151,16 @@ tmp
 temp
 `;
 
-  return [{ destination: '.dockerignore', content }];
+  return [
+    {
+      destination: '.dockerignore',
+      content:
+        content +
+        (profile.application === 'next-standalone'
+          ? '\n# Next standalone build\n.next\n.eshe\n.github\nk8s\n'
+          : ''),
+    },
+  ];
 }
 
 async function generateEnvExample(

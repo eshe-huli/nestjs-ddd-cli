@@ -409,6 +409,7 @@ included when present. Prisma copies/generation are emitted only for an owned
 | `--probe-mode live-only\|live-and-ready` | `live-and-ready` | Explicitly controls whether the same path supplies liveness only or both existing liveness/readiness probes. |
 | `--no-probe` | probes enabled | Omits Kubernetes probes and emits `HEALTHCHECK NONE`; conflicts with an explicit `--probe-path`. |
 | `--node-image` | `node:20-alpine` | Official Node20/22/24 Alpine tag, optionally pinned by a sha256 digest. Other registries, invalid digests and injected text are refused. |
+| `--application nest\|next-standalone` | `nest` | Next standalone is an additive private/held/Bun/no-probe profile. It requires `next build` and native `bun test` scripts, emits standalone/static/public copies and a nonroot Node `server.js` runtime. Nest/Prisma profiles and default outputs stay unchanged. |
 
 Options, lock metadata and the complete target plan are validated before the
 first write. Private files use exclusive creation to preserve a concurrent owner.
@@ -417,6 +418,25 @@ source lint/type/tests/build without invented database/provider configuration or
 coverage uploads. Bun/Jest uses its documented `globalsCleanup: off` environment
 compatibility option; no tests are skipped. Native database/restore/provider and
 authorized-actor proof remain separate.
+
+For a new standalone Next frontend, select the explicit application profile:
+
+```bash
+ddd deploy --path ./accounts-web --application next-standalone \
+  --visibility private --state held --service-name accounts-web --port 3000 \
+  --package-manager bun --node-image node:24-alpine \
+  --no-compose --no-probe --ci github --kubernetes
+```
+
+The frontend owns `output: "standalone"` and a `public/` directory; the actual
+container build must prove those outputs. The build installs frozen hoisted
+dependencies inside the selected Node/Bun stages and copies only traced Next
+runtime output, static assets and public files. The final runtime contains no
+Bun binary. Native Bun source CI receives no Jest-only arguments. New Next
+context rules exclude `node_modules`, `.next` and environment files; an existing owned ignore
+must retain those exact exclusions without other exceptions and is preserved.
+This profile is held source preparation and creates no public ingress, replicas,
+provider grant or database. Real readiness/origin/networking remain owner gates.
 
 Held GitHub CD has only `workflow_dispatch`, with boolean `publish: false` as the
 default. Explicit publishing produces an immutable commit tag via the existing

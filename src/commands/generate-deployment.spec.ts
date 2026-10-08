@@ -30,6 +30,25 @@ async function makeBunProject(root: string): Promise<void> {
   );
 }
 
+async function makeNextProject(root: string): Promise<void> {
+  const dependencies = { next: '16.3.3', react: '19.2.8', 'react-dom': '19.2.8' };
+  await fs.writeJson(path.join(root, 'package.json'), {
+    name: 'next-fixture',
+    scripts: { build: 'next build', test: 'bun test src test' },
+    dependencies,
+  });
+  await fs.writeJson(path.join(root, 'bun.lock'), {
+    lockfileVersion: 2,
+    workspaces: { '': { name: 'next-fixture', dependencies } },
+    packages: Object.fromEntries(
+      Object.entries(dependencies).map(([name, version]) => [
+        name,
+        [`${name}@${version}`, '', {}, 'sha512-fixture'],
+      ]),
+    ),
+  });
+}
+
 async function file(root: string, relative: string): Promise<string> {
   return fs.readFile(path.join(root, relative), 'utf8');
 }
@@ -244,6 +263,96 @@ describe('deployment profile generator', () => {
     expect(ci.docker.script[1]).toContain('if [ "$PUBLISH_IMAGE" = "true" ]');
   });
 
+  it.each(['github', 'gitlab'] as const)(
+    'emits a held Next standalone container with native Bun %s source CI',
+    async (ciType) => {
+      await makeNextProject(root);
+      await generateDeployment({
+        ...held,
+        path: root,
+        ci: ciType,
+        application: 'next-standalone',
+        serviceName: 'accounts-web',
+        port: '3000',
+      });
+      const docker = await file(root, 'Dockerfile');
+      expect(docker).toContain(`FROM ${NODE_IMAGE} AS production`);
+      expect(docker).toContain('bun install --frozen-lockfile --linker=hoisted');
+      expect(docker).toContain('COPY . .\nRUN bun run --bun build');
+      expect(docker).toContain('/app/.next/standalone ./');
+      expect(docker).toContain('/app/.next/static ./.next/static');
+      expect(docker).toContain('/app/public ./public');
+      expect(docker).toContain('ENV HOSTNAME=0.0.0.0\nENV PORT=3000');
+      expect(docker).toContain('USER nextjs\nHEALTHCHECK NONE\nCMD ["node", "server.js"]');
+      expect(docker).not.toContain('dist/main');
+      expect(docker).not.toContain('prisma');
+      expect(docker).not.toContain('npm');
+      const commands =
+        ciType === 'github'
+          ? parse(await file(root, '.github/workflows/ci.yml'))
+              .jobs.source.steps.map((step: { run?: string }) => step.run)
+              .filter(Boolean)
+          : parse(await file(root, '.gitlab-ci.yml')).source.script;
+      expect(commands).toContain('bun run --bun test');
+      expect(commands.join('\n')).not.toContain('testEnvironmentOptions');
+      const deployment = parse(await file(root, 'k8s/deployment.yaml'));
+      expect(deployment.spec.replicas).toBe(0);
+      expect(deployment.metadata.name).toBe('accounts-web');
+      expect(deployment.spec.template.spec.containers[0].ports).toEqual([{ containerPort: 3000 }]);
+      expect(await tree(root)).not.toEqual(
+        expect.arrayContaining(['k8s/ingress.yaml', 'k8s/hpa.yaml', 'docker-compose.yml']),
+      );
+      const ignore = await file(root, '.dockerignore');
+      expect(ignore).toContain('.next\n.eshe\n.github\nk8s\n');
+      expect(ignore).toContain('.env\n.env.*\n!.env.example');
+    },
+  );
+
+  it.each([
+    { visibility: 'public' },
+    { state: 'active' },
+    { packageManager: 'npm' },
+    { probe: true },
+  ] as const)('refuses unsupported Next profile before writing: %j', async (change) => {
+    await makeNextProject(root);
+    const before = await tree(root);
+    await expect(
+      generateDeployment({ ...held, path: root, application: 'next-standalone', ...change }),
+    ).rejects.toThrow('Next standalone requires');
+    expect(await tree(root)).toEqual(before);
+  });
+
+  it('refuses Nest-shaped build/test scripts for Next standalone before writing', async () => {
+    await makeBunProject(root);
+    const before = await tree(root);
+    await expect(
+      generateDeployment({ ...held, path: root, application: 'next-standalone' }),
+    ).rejects.toThrow('Next standalone requires Next build');
+    expect(await tree(root)).toEqual(before);
+  });
+
+  it.each(['.next\n', '.next\n.env\n.env.*\n', '.next\n.env\n.env.*\n!.env.production\n'])(
+    'refuses unsafe existing Next context rules without rewriting them',
+    async (ignore) => {
+      await makeNextProject(root);
+      await fs.writeFile(path.join(root, '.dockerignore'), ignore);
+      const before = await tree(root);
+      await expect(
+        generateDeployment({ ...held, path: root, application: 'next-standalone' }),
+      ).rejects.toThrow('Existing Next Docker ignore');
+      expect(await tree(root)).toEqual(before);
+      expect(await file(root, '.dockerignore')).toBe(ignore);
+    },
+  );
+
+  it('preserves approved owned Next context rules', async () => {
+    await makeNextProject(root);
+    const ignore = '.next\n.env\n.env.*\n!.env.example\nnode_modules\n';
+    await fs.writeFile(path.join(root, '.dockerignore'), ignore);
+    await generateDeployment({ ...held, path: root, application: 'next-standalone' });
+    expect(await file(root, '.dockerignore')).toBe(ignore);
+  });
+
   it.each([
     { visibility: 'external' },
     { state: 'running' },
@@ -265,6 +374,7 @@ describe('deployment profile generator', () => {
     { packageManager: 'pnpm' },
     { ci: 'guess' },
     { ci: '' },
+    { application: 'guess' },
     { state: 'held' },
     { visibility: 'private' },
   ])('rejects invalid options before creating files: %j', async (invalid) => {
