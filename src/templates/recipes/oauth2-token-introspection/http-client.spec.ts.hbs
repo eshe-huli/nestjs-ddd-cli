@@ -202,13 +202,13 @@ describe('Bounded provider JSON HTTP', () => {
 
   it('denies late headers even when synchronous response processing starves its timer', async () => {
     const response = new Response('{}');
-    const realGet = response.headers.get.bind(response.headers);
+    const realHeaders = new Headers(response.headers);
     jest.spyOn(response.headers, 'get').mockImplementation((name) => {
       const until = performance.now() + 30;
       while (performance.now() < until) {
         /* emulate delayed transport headers */
       }
-      return realGet(name);
+      return realHeaders.get(name);
     });
     const transport = jest.fn(() => Promise.resolve(response));
     await expect(

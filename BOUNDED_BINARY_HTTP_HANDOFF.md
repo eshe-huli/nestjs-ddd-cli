@@ -88,6 +88,14 @@ Focused current source passes four generator suites/41 cases, with strict emitte
 compilation and JSON 33, introspection/shared JSON 67, client-credentials/shared
 JSON 62 and binary 46 consumer cases. Established production typecheck/lint and
 independent emitted JSON type-checked ESLint pass with zero errors/warnings.
+Consumer review then found the late-header fixture's bound `Headers.get`
+lost its type under an existing consumer's `strictBindCallApply: false` flag.
+A separate fixture-only correction snapshots `new Headers(response.headers)`
+and reads that snapshot from the spy. The same timing/assertions remain.
+Both emitted helper and spec now strict-compile and pass recommended
+type-checked ESLint with that consumer flag (zero errors/warnings); the
+11-case JSON generator suite and all 33 emitted behaviors pass. Production
+helper bytes are unchanged by this correction.
 Combined current full local CLI passes 32 suites/177 cases, one existing opt-in
 init skip and two snapshots (24.964s). This includes the unchanged OIDC crypto
 fixture. Receipt: `/tmp/mdl-combined-http-full-20261008.log` on the owning host.
