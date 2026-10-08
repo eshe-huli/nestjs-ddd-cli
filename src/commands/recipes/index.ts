@@ -15,3 +15,4 @@ export * from './platform-parc-authorization.recipe';
 export * from './banklink-connector-contract.recipe';
 export * from './oidc-dashboard.recipe';
 export * from './external-projection-worker.recipe';
+export * from './jest-cjs-compat.recipe';

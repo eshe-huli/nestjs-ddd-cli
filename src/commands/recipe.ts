@@ -26,6 +26,7 @@ import { applyOAuth2ClientCredentialsRecipe } from './recipes/oauth2-client-cred
 import { applyOidcBffSessionRecipe } from './recipes/oidc-bff-session.recipe';
 import { applyOAuth2TokenIntrospectionRecipe } from './recipes/oauth2-token-introspection.recipe';
 import { applyExternalProjectionWorkerRecipe } from './recipes/external-projection-worker.recipe';
+import { applyJestCommonJsCompatibilityRecipe } from './recipes/jest-cjs-compat.recipe';
 
 export interface RecipeOptions {
   path?: string;
@@ -50,11 +51,12 @@ async function applyDryRunRecipe(
     'oidc-bff-session': () => applyOidcBffSessionRecipe(basePath, true),
     'oauth2-token-introspection': () => applyOAuth2TokenIntrospectionRecipe(basePath, true),
     'kafka-consumer': () => applyKafkaConsumerRecipe(basePath, true),
+    'jest-cjs-compat': () => applyJestCommonJsCompatibilityRecipe(basePath, true),
   };
   const handler = handlers[recipeName];
   if (!handler) {
     throw new Error(
-      'Dry-run is currently supported only by external-projection-worker, oidc-resource-server, oauth2-token-introspection, oauth2-client-credentials, oidc-bff-session, and kafka-consumer',
+      'Dry-run is currently supported only by external-projection-worker, oidc-resource-server, oauth2-token-introspection, oauth2-client-credentials, oidc-bff-session, kafka-consumer, and jest-cjs-compat',
     );
   }
   await handler();
@@ -73,6 +75,13 @@ async function installRecipeDependencies(
 }
 
 const AVAILABLE_RECIPES = {
+  'jest-cjs-compat': {
+    name: 'NestJS Jest CommonJS compatibility',
+    description:
+      'Transform ESM-only Nest configuration through Jest without changing production TypeScript',
+    dependencies: [],
+    devDependencies: [],
+  },
   'oauth2-client-credentials': {
     name: 'OAuth2 client credentials',
     description:
@@ -393,6 +402,7 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
     'banklink-connector-contract': applyBanklinkConnectorContractRecipe,
     'oidc-dashboard': applyOidcDashboardRecipe,
     'oidc-resource-server': applyOidcResourceServerRecipe,
+    'jest-cjs-compat': applyJestCommonJsCompatibilityRecipe,
     'oauth2-client-credentials': applyOAuth2ClientCredentialsRecipe,
     'oauth2-token-introspection': applyOAuth2TokenIntrospectionRecipe,
     'oidc-bff-session': applyOidcBffSessionRecipe,

@@ -204,6 +204,7 @@ ddd recipe event-backbone --install-deps
 ddd recipe oidc-dashboard --install-deps
 ddd recipe platform-service-access-request-context
 ddd recipe external-projection-worker --migration-timestamp 1790000000000 --install-deps
+ddd recipe jest-cjs-compat --path /path/to/service --dry-run
 ```
 
 | Recipe | Description |
@@ -220,6 +221,7 @@ ddd recipe external-projection-worker --migration-timestamp 1790000000000 --inst
 | `banklink-connector-contract` | BankLink NestJS control-plane and Go sidecar connector boundary contract |
 | `oidc-dashboard` | OIDC broker integration for internal dashboards and admin APIs |
 | `external-projection-worker` | Postgres-backed external projection intents with atomic enqueue, canonical idempotency, fenced leases, and bounded retry outcomes |
+| `jest-cjs-compat` | Node/Jest-only CommonJS transformation of ESM Nest configuration; production TypeScript and dependency versions stay intact |
 
 ## Generated Structure
 
