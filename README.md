@@ -56,6 +56,20 @@ default; verified private HTTP requires explicit opt-in. See the
 [generated operator guide](src/templates/recipes/oauth2-token-introspection/README.md.hbs)
 for async registration, limits, failure handling and provider compatibility.
 
+## Confidential OIDC BFF sessions
+
+```sh
+ddd recipe oidc-bff-session --path <app> --dry-run
+ddd recipe oidc-bff-session --path <app>
+```
+
+This emits provider-neutral verified authorization-code/S256 transport, opaque
+Lua sessions and durable token-retirement leases. Exact issuer/endpoints,
+credentials, cookie/routes, domain admission and worker scheduling remain the
+consumer's responsibility. Runtime dependencies and storage custody controls
+are explicit in the [generated guide](src/templates/recipes/oidc-bff-session/README.md.hbs).
+The recipe never installs dependencies or rewrites application configuration.
+
 ## Commands
 
 ### Core Commands

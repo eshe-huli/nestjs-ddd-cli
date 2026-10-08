@@ -17,3 +17,7 @@ Verified 2026-10-08; accepted scope from current user authorization and root del
 | GEN-10 | API / INTEGRATION | Kratos current session and identity reads need the same bounded mechanism | Export exact-origin encoded-path JSON GET and share POST mechanism; schemas/state/policies consumer-owned; accepted | Root explicit additive authorization | Generic transport proof |
 
 Required decisions are resolved. Homelab offload requires a Bun lockfile; inspect compatibility before offload. A missing lockfile does not authorize package-manager migration.
+
+| GEN-11 | AUTH / API / ASYNC | Patient reviewed OIDC and opaque Lua core need a single distribution owner | Additive framework-independent oidc-bff-session with exact trusted HTTPS endpoints, immutable configuration, bounded Valkey, durable retired-token subset and explicit provider-cutoff custody guard; accepted | Root explicit delegation; reviewed Patient core freeze | Emitted verification |
+| GEN-12 | ASSURANCE / DELIVERY | Emitted specs use Bun and exact jose/Redis runtime dependencies | Exact dev dependencies, Bun lock, preserve npm-lock provenance and Node CI matrix, test-job setup-bun1.4.0 only; accepted | Root explicit approvals | Established CI |
+| GEN-13 | DATA / INFRA | Redis JSON contains plaintext secrets; key hashes do not encrypt values | Production consumption needs authenticated app-scoped ACLs, private/TLS transport and verified encrypted storage/backup custody; no encryption redesign or activation in generator slice; accepted | Root live readiness audit | Deployment acceptance |

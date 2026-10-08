@@ -1,0 +1,635 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
+import { createLocalJWKSet, jwtVerify, type JWK, type JWTPayload } from 'jose';
+
+const RESPONSE_BYTES = 65_536;
+const TOKEN_BYTES = 16_384;
+const LOGIN_SECONDS = 600;
+export type OidcEndpoints = Readonly<{
+  discovery: string;
+  authorization: string;
+  token: string;
+  revocation: string;
+  jwks: string;
+}>;
+
+export type OidcBffConfig = Readonly<{
+  issuer: string;
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+  scopes: readonly string[];
+  endpoints: OidcEndpoints;
+  authorizationParameters?: Readonly<Record<string, string>>;
+  maxAccessTokenSeconds?: number;
+  timeoutMs?: number;
+  clockToleranceSeconds?: number;
+}>;
+export type PendingAuthorization = Readonly<{
+  state: string;
+  nonce: string;
+  codeVerifier: string;
+  startedAtMs: number;
+  requireFreshAuth: true;
+}>;
+export type VerifiedTokenSet = Readonly<{
+  accessToken: string;
+  refreshToken: string;
+  idToken: string;
+  expiresAtMs: number;
+  scopes: readonly string[];
+  subject: string;
+  authenticatedAtSeconds: number;
+  issuer: string;
+  clientId: string;
+}>;
+export type OidcBffDependencies = Readonly<{
+  fetch?: (url: string, init: RequestInit) => Promise<Response>;
+  now?: () => number;
+  onTokenPairIssued?: (
+    pair: Readonly<{ accessToken?: string; refreshToken?: string; expiresAtMs: number }>,
+  ) => Promise<void>;
+}>;
+
+export class OidcInvalidGrantError extends Error {
+  constructor(
+    readonly reason: 'pending' | 'state' | 'code' | 'invalid_grant' | 'token_response' | 'id_token',
+  ) {
+    super('Sign-in could not be verified');
+    this.name = 'OidcInvalidGrantError';
+  }
+}
+export class OidcUnavailableError extends Error {
+  constructor(
+    readonly reason:
+      | 'timeout'
+      | 'network'
+      | 'http'
+      | 'invalid_response'
+      | 'metadata'
+      | 'jwks'
+      | 'persistence',
+  ) {
+    super('Sign-in provider is unavailable');
+    this.name = 'OidcUnavailableError';
+  }
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function visible(value: unknown, maximum: number): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= maximum &&
+    Array.from(value).every(
+      (character) => character.charCodeAt(0) >= 33 && character.charCodeAt(0) <= 126,
+    )
+  );
+}
+function strings(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item: unknown) => typeof item === 'string');
+}
+function integer(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+function equal(left: string, right: string): boolean {
+  const a = Buffer.from(left),
+    b = Buffer.from(right);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new OidcUnavailableError('invalid_response');
+  }
+}
+function scopeName(value: unknown): value is string {
+  return visible(value, 256) && !value.includes('"') && !value.includes('\\');
+}
+function boundedSetting(value: number, minimum: number, maximum: number): number {
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new TypeError('Invalid OIDC sign-in configuration');
+  }
+  return value;
+}
+function snapshotConfig(input: OidcBffConfig) {
+  const config = {
+    ...input,
+    scopes: Object.freeze([...input.scopes]),
+    endpoints: Object.freeze({ ...input.endpoints }),
+    authorizationParameters: Object.freeze({ ...input.authorizationParameters }),
+  };
+  let callback: URL, issuer: URL;
+  try {
+    callback = new URL(config.redirectUri);
+    issuer = new URL(config.issuer);
+  } catch {
+    throw new TypeError('Invalid OIDC sign-in configuration');
+  }
+  if (
+    issuer.protocol !== 'https:' ||
+    issuer.username ||
+    issuer.password ||
+    issuer.search ||
+    issuer.hash ||
+    !visible(config.clientId, 256) ||
+    !visible(config.clientSecret, 4096) ||
+    config.scopes.length > 32 ||
+    !config.scopes.includes('openid') ||
+    !config.scopes.includes('offline_access') ||
+    new Set(config.scopes).size !== config.scopes.length ||
+    !config.scopes.every(scopeName) ||
+    callback.protocol !== 'https:' ||
+    callback.username ||
+    callback.password ||
+    callback.search ||
+    callback.hash ||
+    callback.href !== config.redirectUri
+  ) {
+    throw new TypeError('Invalid OIDC sign-in configuration');
+  }
+  const endpointNames = ['discovery', 'authorization', 'token', 'revocation', 'jwks'] as const;
+  if (
+    endpointNames.some((name) => {
+      try {
+        const endpoint = new URL(config.endpoints[name]);
+        return (
+          endpoint.protocol !== 'https:' ||
+          endpoint.origin !== issuer.origin ||
+          endpoint.username ||
+          endpoint.password ||
+          endpoint.hash ||
+          endpoint.search ||
+          endpoint.href !== config.endpoints[name] ||
+          endpoint.href.length > 2048
+        );
+      } catch {
+        return true;
+      }
+    })
+  )
+    throw new TypeError('Invalid OIDC sign-in configuration');
+  const reserved = new Set([
+    'client_id',
+    'redirect_uri',
+    'response_type',
+    'scope',
+    'state',
+    'nonce',
+    'code_challenge',
+    'code_challenge_method',
+    'prompt',
+    'max_age',
+  ]);
+  if (
+    Object.keys(config.authorizationParameters).length > 16 ||
+    Object.entries(config.authorizationParameters).some(
+      ([name, value]) =>
+        !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name) ||
+        reserved.has(name) ||
+        typeof value !== 'string' ||
+        value.length > 2048 ||
+        Array.from(value).some(
+          (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
+        ),
+    )
+  ) {
+    throw new TypeError('Invalid OIDC sign-in configuration');
+  }
+  return Object.freeze({
+    ...config,
+    maxAccessTokenSeconds: boundedSetting(config.maxAccessTokenSeconds ?? 3600, 1, 86400),
+    timeoutMs: boundedSetting(config.timeoutMs ?? 5000, 10, 30_000),
+    clockToleranceSeconds: boundedSetting(config.clockToleranceSeconds ?? 5, 0, 10),
+  });
+}
+
+// One deadline covers discovery, token exchange, JWKS download and signature verification.
+async function operation<T>(
+  timeoutMs: number,
+  work: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new OidcUnavailableError('timeout'));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([work(controller.signal), deadline]);
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+}
+
+async function responseText(response: Response, signal: AbortSignal): Promise<string> {
+  const length = response.headers.get('content-length');
+  if (length !== null && (!/^\d+$/.test(length) || Number(length) > RESPONSE_BYTES)) {
+    void response.body?.cancel().catch(() => {});
+    throw new OidcUnavailableError('invalid_response');
+  }
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const abort = () => {
+    void reader.cancel().catch(() => {});
+  };
+  signal.addEventListener('abort', abort, { once: true });
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      if (signal.aborted) throw new OidcUnavailableError('timeout');
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      size += chunk.value.byteLength;
+      if (size > RESPONSE_BYTES) throw new OidcUnavailableError('invalid_response');
+      chunks.push(chunk.value);
+    }
+    const bytes = new Uint8Array(size);
+    let position = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, position);
+      position += chunk.byteLength;
+    }
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch (error) {
+    if (error instanceof OidcUnavailableError) throw error;
+    throw new OidcUnavailableError(signal.aborted ? 'timeout' : 'invalid_response');
+  } finally {
+    signal.removeEventListener('abort', abort);
+    void reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
+
+function jwks(value: unknown): { keys: JWK[] } {
+  if (
+    !record(value) ||
+    !Array.isArray(value['keys']) ||
+    value['keys'].length === 0 ||
+    value['keys'].length > 16
+  ) {
+    throw new OidcUnavailableError('jwks');
+  }
+  const keys: JWK[] = [];
+  for (const key of value['keys'] as unknown[]) {
+    if (!record(key)) throw new OidcUnavailableError('jwks');
+    if (
+      key['kty'] !== 'RSA' ||
+      (key['use'] !== undefined && key['use'] !== 'sig') ||
+      (key['alg'] !== undefined && key['alg'] !== 'RS256')
+    )
+      continue;
+    if (
+      !visible(key['kid'], 128) ||
+      typeof key['n'] !== 'string' ||
+      !/^[A-Za-z0-9_-]+$/.test(key['n']) ||
+      typeof key['e'] !== 'string' ||
+      !/^[A-Za-z0-9_-]{1,8}$/.test(key['e']) ||
+      ['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth'].some((field) => key[field] !== undefined) ||
+      (key['key_ops'] !== undefined &&
+        (!strings(key['key_ops']) || !key['key_ops'].includes('verify')))
+    ) {
+      throw new OidcUnavailableError('jwks');
+    }
+    const modulus = Buffer.from(key['n'], 'base64url'),
+      exponent = Buffer.from(key['e'], 'base64url');
+    const firstModulusByte = modulus[0],
+      firstExponentByte = exponent[0],
+      lastExponentByte = exponent[exponent.length - 1];
+    if (
+      firstModulusByte === undefined ||
+      firstExponentByte === undefined ||
+      lastExponentByte === undefined ||
+      modulus.length < 256 ||
+      modulus.length > 1024 ||
+      firstModulusByte < 128 ||
+      exponent.length === 0 ||
+      exponent.length > 4 ||
+      lastExponentByte % 2 !== 1 ||
+      (exponent.length === 1 && firstExponentByte < 3)
+    ) {
+      throw new OidcUnavailableError('jwks');
+    }
+    if (keys.some((existing) => existing.kid === key['kid']))
+      throw new OidcUnavailableError('jwks');
+    keys.push({
+      kty: 'RSA',
+      kid: key['kid'],
+      n: key['n'],
+      e: key['e'],
+      alg: 'RS256',
+      use: 'sig',
+      key_ops: ['verify'],
+    });
+  }
+  if (!keys.length) throw new OidcUnavailableError('jwks');
+  return { keys };
+}
+
+export function createOidcBffClient(input: OidcBffConfig, dependencies: OidcBffDependencies = {}) {
+  const config = snapshotConfig(input);
+  const endpoints = config.endpoints;
+  const transport = dependencies.fetch ?? fetch;
+  const now = dependencies.now ?? Date.now;
+  const onTokenPairIssued = dependencies.onTokenPairIssued;
+  const credential = (value: string) => new URLSearchParams({ v: value }).toString().slice(2);
+  const authorization = `Basic ${Buffer.from(`${credential(config.clientId)}:${credential(config.clientSecret)}`).toString('base64')}`;
+
+  function pendingSnapshot(input: PendingAuthorization): PendingAuthorization {
+    const pending = Object.freeze({ ...input });
+    if (
+      !/^[A-Za-z0-9_-]{16,128}$/.test(pending.state) ||
+      !/^[A-Za-z0-9_-]{16,128}$/.test(pending.nonce) ||
+      !/^[A-Za-z0-9._~-]{43,128}$/.test(pending.codeVerifier) ||
+      !integer(pending.startedAtMs) ||
+      pending.requireFreshAuth !== true ||
+      pending.startedAtMs > now() + config.clockToleranceSeconds * 1000 ||
+      now() - pending.startedAtMs > LOGIN_SECONDS * 1000
+    )
+      throw new OidcInvalidGrantError('pending');
+    return pending;
+  }
+  async function request(url: string, signal: AbortSignal, form?: URLSearchParams) {
+    if (signal.aborted) throw new OidcUnavailableError('timeout');
+    let response: Response;
+    try {
+      response = await transport(url, {
+        method: form ? 'POST' : 'GET',
+        redirect: 'error',
+        cache: 'no-store',
+        signal,
+        headers: form
+          ? {
+              Accept: 'application/json',
+              'Content-Type': 'application/x-www-form-urlencoded',
+              Authorization: authorization,
+            }
+          : { Accept: 'application/json' },
+        ...(form ? { body: form.toString() } : {}),
+      });
+    } catch {
+      throw new OidcUnavailableError(signal.aborted ? 'timeout' : 'network');
+    }
+    if (!(response instanceof Response)) throw new OidcUnavailableError('invalid_response');
+    if (
+      response.redirected ||
+      (response.url && response.url !== url) ||
+      (response.status >= 300 && response.status < 400)
+    ) {
+      void response.body?.cancel().catch(() => {});
+      throw new OidcUnavailableError('http');
+    }
+    const text = await responseText(response, signal);
+    return { response, text };
+  }
+  async function discover(signal: AbortSignal) {
+    const { response, text } = await request(endpoints.discovery, signal);
+    if (response.status !== 200) throw new OidcUnavailableError('http');
+    const metadata = parseJson(text);
+    if (
+      !record(metadata) ||
+      metadata['issuer'] !== config.issuer ||
+      metadata['authorization_endpoint'] !== endpoints.authorization ||
+      metadata['token_endpoint'] !== endpoints.token ||
+      metadata['revocation_endpoint'] !== endpoints.revocation ||
+      metadata['jwks_uri'] !== endpoints.jwks ||
+      !strings(metadata['response_types_supported']) ||
+      !metadata['response_types_supported'].includes('code') ||
+      !strings(metadata['id_token_signing_alg_values_supported']) ||
+      !metadata['id_token_signing_alg_values_supported'].includes('RS256') ||
+      !strings(metadata['token_endpoint_auth_methods_supported']) ||
+      !metadata['token_endpoint_auth_methods_supported'].includes('client_secret_basic') ||
+      !strings(metadata['code_challenge_methods_supported']) ||
+      !metadata['code_challenge_methods_supported'].includes('S256')
+    ) {
+      throw new OidcUnavailableError('metadata');
+    }
+  }
+  async function revokeKnownTokens(
+    signal: AbortSignal,
+    tokens: readonly (readonly [string, string])[],
+  ) {
+    await Promise.all(
+      tokens.map(async ([hint, token]) => {
+        const { response } = await request(
+          endpoints.revocation,
+          signal,
+          new URLSearchParams({ token, token_type_hint: hint }),
+        );
+        if (response.status !== 200) throw new OidcUnavailableError('http');
+      }),
+    );
+  }
+  function validateClaims(
+    payload: JWTPayload,
+    pending: PendingAuthorization,
+    accessToken: string,
+    code: string,
+  ) {
+    const at = Math.floor(now() / 1000),
+      start = Math.floor(pending.startedAtMs / 1000),
+      tolerance = config.clockToleranceSeconds;
+    const audiences = typeof payload.aud === 'string' ? [payload.aud] : payload.aud;
+    if (
+      !visible(payload.sub, 256) ||
+      typeof payload['nonce'] !== 'string' ||
+      !equal(payload['nonce'], pending.nonce) ||
+      !strings(audiences) ||
+      audiences.length === 0 ||
+      audiences.length > 16 ||
+      new Set(audiences).size !== audiences.length ||
+      !audiences.includes(config.clientId) ||
+      (payload['azp'] !== undefined && payload['azp'] !== config.clientId) ||
+      (audiences.length > 1 && payload['azp'] !== config.clientId) ||
+      !integer(payload.exp) ||
+      !integer(payload.iat) ||
+      !integer(payload['auth_time']) ||
+      payload.exp <= at ||
+      payload.exp <= payload.iat ||
+      payload.exp - payload.iat > 86_400 ||
+      payload.iat < start - tolerance ||
+      payload.iat > at + tolerance ||
+      payload['auth_time'] < start - tolerance ||
+      payload['auth_time'] > at + tolerance ||
+      payload['auth_time'] > payload.iat + tolerance
+    ) {
+      throw new OidcInvalidGrantError('id_token');
+    }
+    for (const [claim, value] of [
+      ['at_hash', accessToken],
+      ['c_hash', code],
+    ] as const) {
+      if (payload[claim] === undefined) continue;
+      const expected = createHash('sha256')
+        .update(value)
+        .digest()
+        .subarray(0, 16)
+        .toString('base64url');
+      if (typeof payload[claim] !== 'string' || !equal(payload[claim], expected))
+        throw new OidcInvalidGrantError('id_token');
+    }
+    return { subject: payload.sub, authenticatedAtSeconds: payload['auth_time'] };
+  }
+
+  return Object.freeze({
+    async beginAuthorization(input: PendingAuthorization): Promise<string> {
+      const pending = pendingSnapshot(input);
+      return operation(config.timeoutMs, async (signal) => {
+        await discover(signal);
+        const query = new URLSearchParams({
+          client_id: config.clientId,
+          redirect_uri: config.redirectUri,
+          response_type: 'code',
+          scope: config.scopes.join(' '),
+          state: pending.state,
+          nonce: pending.nonce,
+          code_challenge: createHash('sha256').update(pending.codeVerifier).digest('base64url'),
+          code_challenge_method: 'S256',
+          ...config.authorizationParameters,
+          prompt: 'login',
+          max_age: '0',
+        });
+        return `${endpoints.authorization}?${query}`;
+      });
+    },
+    async exchangeAuthorizationCode(
+      input: Readonly<{ code: string; state: string; pending: PendingAuthorization }>,
+    ): Promise<VerifiedTokenSet> {
+      const pending = pendingSnapshot(input.pending),
+        code = input.code,
+        state = input.state;
+      if (!visible(state, 128) || !equal(state, pending.state))
+        throw new OidcInvalidGrantError('state');
+      if (!visible(code, 4096)) throw new OidcInvalidGrantError('code');
+      return operation(config.timeoutMs, async (signal) => {
+        await discover(signal);
+        const tokenRequestedAtMs = now();
+        const { response, text } = await request(
+          endpoints.token,
+          signal,
+          new URLSearchParams({
+            grant_type: 'authorization_code',
+            code,
+            redirect_uri: config.redirectUri,
+            code_verifier: pending.codeVerifier,
+          }),
+        );
+        const raw = parseJson(text);
+        if (response.status === 400 && record(raw) && raw['error'] === 'invalid_grant')
+          throw new OidcInvalidGrantError('invalid_grant');
+        if (response.status !== 200) throw new OidcUnavailableError('http');
+        const minted: [string, string][] = [];
+        if (record(raw)) {
+          if (visible(raw['access_token'], TOKEN_BYTES))
+            minted.push(['access_token', raw['access_token']]);
+          if (visible(raw['refresh_token'], TOKEN_BYTES))
+            minted.push(['refresh_token', raw['refresh_token']]);
+        }
+        try {
+          if (onTokenPairIssued && minted.length) {
+            // Custody precedes admission. Fallback expiry is only a configured retirement hint.
+            const lifetime =
+              record(raw) &&
+              integer(raw['expires_in']) &&
+              raw['expires_in'] > 0 &&
+              raw['expires_in'] <= config.maxAccessTokenSeconds
+                ? raw['expires_in']
+                : config.maxAccessTokenSeconds;
+            const retirement = {
+              ...(record(raw) && visible(raw['access_token'], TOKEN_BYTES)
+                ? { accessToken: raw['access_token'] }
+                : {}),
+              ...(record(raw) && visible(raw['refresh_token'], TOKEN_BYTES)
+                ? { refreshToken: raw['refresh_token'] }
+                : {}),
+              expiresAtMs: tokenRequestedAtMs + lifetime * 1000,
+            };
+            try {
+              await onTokenPairIssued(Object.freeze(retirement));
+            } catch {
+              throw new OidcUnavailableError('persistence');
+            }
+          }
+          if (
+            !record(raw) ||
+            !visible(raw['access_token'], TOKEN_BYTES) ||
+            !visible(raw['refresh_token'], TOKEN_BYTES) ||
+            !visible(raw['id_token'], TOKEN_BYTES) ||
+            !integer(raw['expires_in']) ||
+            raw['expires_in'] < 1 ||
+            raw['expires_in'] > config.maxAccessTokenSeconds ||
+            typeof raw['scope'] !== 'string' ||
+            raw['scope'].length > 8192 ||
+            raw['token_type'] !== 'Bearer'
+          ) {
+            throw new OidcInvalidGrantError('token_response');
+          }
+          const scopes = raw['scope'].split(' ');
+          if (
+            scopes.length !== config.scopes.length ||
+            new Set(scopes).size !== scopes.length ||
+            !scopes.every((scope) => config.scopes.includes(scope))
+          )
+            throw new OidcInvalidGrantError('token_response');
+          const expiresAtMs = tokenRequestedAtMs + raw['expires_in'] * 1000;
+          const downloaded = await request(endpoints.jwks, signal);
+          if (downloaded.response.status !== 200) throw new OidcUnavailableError('http');
+          const keys = jwks(parseJson(downloaded.text));
+          let payload: JWTPayload;
+          try {
+            const verified = await jwtVerify(raw['id_token'], createLocalJWKSet(keys), {
+              issuer: config.issuer,
+              audience: config.clientId,
+              algorithms: ['RS256'],
+              currentDate: new Date(now()),
+              clockTolerance: config.clockToleranceSeconds,
+              maxTokenAge: LOGIN_SECONDS,
+              requiredClaims: ['sub', 'exp', 'iat', 'nonce', 'auth_time'],
+            });
+            if (!visible(verified.protectedHeader.kid, 128))
+              throw new OidcInvalidGrantError('id_token');
+            payload = verified.payload;
+          } catch {
+            throw new OidcInvalidGrantError('id_token');
+          }
+          const claims = validateClaims(payload, pending, raw['access_token'], code);
+          if (signal.aborted || expiresAtMs <= now()) throw new OidcUnavailableError('timeout');
+          return Object.freeze({
+            accessToken: raw['access_token'],
+            refreshToken: raw['refresh_token'],
+            idToken: raw['id_token'],
+            expiresAtMs,
+            scopes: Object.freeze(scopes),
+            ...claims,
+            issuer: config.issuer,
+            clientId: config.clientId,
+          });
+        } catch (error) {
+          // Rejected minted credentials never enter the app store. Cleanup has the same deadline.
+          if (!signal.aborted && minted.length)
+            await revokeKnownTokens(signal, minted).catch(() => {});
+          throw error;
+        }
+      });
+    },
+    async revokeTokenPair(
+      pair: Readonly<{ accessToken?: string; refreshToken?: string }>,
+    ): Promise<void> {
+      const tokens: [string, string][] = [];
+      if (visible(pair.accessToken, TOKEN_BYTES)) tokens.push(['access_token', pair.accessToken]);
+      if (visible(pair.refreshToken, TOKEN_BYTES))
+        tokens.push(['refresh_token', pair.refreshToken]);
+      if (!tokens.length) throw new OidcInvalidGrantError('token_response');
+      await operation(config.timeoutMs, async (signal) => {
+        await discover(signal);
+        await revokeKnownTokens(signal, tokens);
+      });
+    },
+  });
+}

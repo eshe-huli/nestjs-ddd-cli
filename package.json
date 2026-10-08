@@ -27,7 +27,8 @@
     "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
     "typecheck:strict": "tsc --noEmit",
-    "prepare": "husky"
+    "prepare": "husky",
+    "test:oidc-bff-session": "bun run build && NODE_PATH=./node_modules bun node_modules/jest/bin/jest.js --runInBand --runTestsByPath tests/unit/oidc-bff-session-recipe.test.ts --testEnvironmentOptions '{\"globalsCleanup\":\"off\"}'"
   },
   "keywords": [
     "nestjs",
@@ -80,6 +81,7 @@
   "devDependencies": {
     "@jest/globals": "^30.0.5",
     "@nestjs/common": "11.1.6",
+    "@redis/client": "6.3.0",
     "@semantic-release/changelog": "^6.0.3",
     "@semantic-release/git": "^10.0.1",
     "@semantic-release/github": "^11.0.3",
@@ -98,6 +100,7 @@
     "eslint-plugin-prettier": "^5.5.4",
     "husky": "^9.1.7",
     "jest": "^30.0.5",
+    "jose": "6.2.12",
     "lint-staged": "^15.5.2",
     "prettier": "^3.6.2",
     "semantic-release": "^24.2.7",

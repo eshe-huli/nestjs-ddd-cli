@@ -23,6 +23,7 @@ import { applyBanklinkConnectorContractRecipe } from './recipes/banklink-connect
 import { applyOidcDashboardRecipe } from './recipes/oidc-dashboard.recipe';
 import { applyOidcResourceServerRecipe } from './recipes/oidc-resource-server.recipe';
 import { applyOAuth2ClientCredentialsRecipe } from './recipes/oauth2-client-credentials.recipe';
+import { applyOidcBffSessionRecipe } from './recipes/oidc-bff-session.recipe';
 import { applyOAuth2TokenIntrospectionRecipe } from './recipes/oauth2-token-introspection.recipe';
 import { applyExternalProjectionWorkerRecipe } from './recipes/external-projection-worker.recipe';
 
@@ -46,13 +47,14 @@ async function applyDryRunRecipe(
       }),
     'oidc-resource-server': () => applyOidcResourceServerRecipe(basePath, true),
     'oauth2-client-credentials': () => applyOAuth2ClientCredentialsRecipe(basePath, true),
+    'oidc-bff-session': () => applyOidcBffSessionRecipe(basePath, true),
     'oauth2-token-introspection': () => applyOAuth2TokenIntrospectionRecipe(basePath, true),
     'kafka-consumer': () => applyKafkaConsumerRecipe(basePath, true),
   };
   const handler = handlers[recipeName];
   if (!handler) {
     throw new Error(
-      'Dry-run is currently supported only by external-projection-worker, oidc-resource-server, oauth2-token-introspection, oauth2-client-credentials, and kafka-consumer',
+      'Dry-run is currently supported only by external-projection-worker, oidc-resource-server, oauth2-token-introspection, oauth2-client-credentials, oidc-bff-session, and kafka-consumer',
     );
   }
   await handler();
@@ -75,6 +77,13 @@ const AVAILABLE_RECIPES = {
     name: 'OAuth2 client credentials',
     description:
       'Bounded grant acquisition with single-flight cache and consumer-owned send policy',
+    dependencies: [],
+    devDependencies: [],
+  },
+  'oidc-bff-session': {
+    name: 'Confidential OIDC BFF session',
+    description:
+      'Framework-independent verified OIDC, opaque Lua sessions and durable token retirement',
     dependencies: [],
     devDependencies: [],
   },
@@ -386,6 +395,7 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
     'oidc-resource-server': applyOidcResourceServerRecipe,
     'oauth2-client-credentials': applyOAuth2ClientCredentialsRecipe,
     'oauth2-token-introspection': applyOAuth2TokenIntrospectionRecipe,
+    'oidc-bff-session': applyOidcBffSessionRecipe,
     'external-projection-worker': (target: string) =>
       applyExternalProjectionWorkerRecipe(target, {
         migrationTimestamp: options.migrationTimestamp,

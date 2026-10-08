@@ -1,0 +1,662 @@
+import { describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
+import { exportJWK, generateKeyPair, SignJWT, type JWTPayload } from 'jose';
+import {
+  createOidcBffClient,
+  OidcInvalidGrantError,
+  OidcUnavailableError,
+  type OidcBffConfig,
+  type PendingAuthorization,
+} from './oidc-bff.client';
+const ISSUER = 'https://identity.example.test/';
+
+const nowMs = 1_797_000_000_000;
+const at = nowMs / 1000;
+const pending: PendingAuthorization = Object.freeze({
+  state: 's'.repeat(43),
+  nonce: 'n'.repeat(43),
+  codeVerifier: 'v'.repeat(43),
+  startedAtMs: nowMs - 1000,
+  requireFreshAuth: true,
+});
+const config: OidcBffConfig = Object.freeze({
+  issuer: ISSUER,
+  clientId: 'web-client',
+  clientSecret: 'synthetic-client-secret',
+  redirectUri: 'https://app.example.test/callback',
+  scopes: ['openid', 'offline_access', 'application:read'],
+  endpoints: {
+    discovery: `${ISSUER}.well-known/openid-configuration`,
+    authorization: `${ISSUER}oauth2/auth`,
+    token: `${ISSUER}oauth2/token`,
+    revocation: `${ISSUER}oauth2/revoke`,
+    jwks: `${ISSUER}.well-known/jwks.json`,
+  },
+  authorizationParameters: { audience: 'https://api.example.test' },
+});
+const keyPair = await generateKeyPair('RS256', { modulusLength: 2048, extractable: true });
+const publicKey = {
+  ...(await exportJWK(keyPair.publicKey)),
+  kid: 'synthetic-signing-key',
+  alg: 'RS256',
+  use: 'sig',
+};
+const metadata = {
+  issuer: ISSUER,
+  authorization_endpoint: `${ISSUER}oauth2/auth`,
+  token_endpoint: `${ISSUER}oauth2/token`,
+  revocation_endpoint: `${ISSUER}oauth2/revoke`,
+  jwks_uri: `${ISSUER}.well-known/jwks.json`,
+  response_types_supported: ['code'],
+  id_token_signing_alg_values_supported: ['RS256'],
+  token_endpoint_auth_methods_supported: ['client_secret_basic'],
+  code_challenge_methods_supported: ['S256'],
+};
+const signedClaims = {
+  iss: ISSUER,
+  sub: 'synthetic-identity',
+  aud: config.clientId,
+  exp: at + 300,
+  iat: at,
+  auth_time: at,
+  nonce: pending.nonce,
+};
+const exchange = { code: 'synthetic-code', state: pending.state, pending };
+const json = (value: unknown, status = 200) => Response.json(value, { status });
+async function signed(
+  claims: JWTPayload = {},
+  header: { alg: string; kid?: string } = { alg: 'RS256', kid: publicKey.kid },
+) {
+  return new SignJWT({ ...signedClaims, ...claims })
+    .setProtectedHeader(header)
+    .sign(keyPair.privateKey);
+}
+type Call = { url: string; init: RequestInit };
+async function fixture(
+  options: {
+    claims?: JWTPayload;
+    token?: Record<string, unknown>;
+    discovery?: unknown;
+    keys?: unknown;
+    tokenResponse?: Response;
+    tokenString?: string;
+    timeoutMs?: number;
+    now?: () => number;
+    onTokenPairIssued?: (
+      pair: Readonly<{ accessToken?: string; refreshToken?: string; expiresAtMs: number }>,
+    ) => Promise<void>;
+    handle?: (call: Call) => Response | Promise<Response | undefined> | undefined;
+  } = {},
+) {
+  const idToken = options.tokenString ?? (await signed(options.claims));
+  const calls: Call[] = [];
+  const client = createOidcBffClient(
+    { ...config, timeoutMs: options.timeoutMs },
+    {
+      now: options.now ?? (() => nowMs),
+      onTokenPairIssued: options.onTokenPairIssued,
+      fetch: async (url, init) => {
+        const call = { url, init };
+        calls.push(call);
+        const custom = await options.handle?.(call);
+        if (custom) return custom;
+        if (url.endsWith('openid-configuration')) return json(options.discovery ?? metadata);
+        if (url.endsWith('/oauth2/token'))
+          return (
+            options.tokenResponse ??
+            json({
+              access_token: 'synthetic-access-token',
+              refresh_token: 'synthetic-refresh-token',
+              id_token: idToken,
+              token_type: 'Bearer',
+              expires_in: 3600,
+              scope: config.scopes.join(' '),
+              ...options.token,
+            })
+          );
+        if (url.endsWith('jwks.json')) return json(options.keys ?? { keys: [publicKey] });
+        if (url.endsWith('/oauth2/revoke')) return new Response(null, { status: 200 });
+        throw new Error('Unexpected synthetic endpoint');
+      },
+    },
+  );
+  return { client, calls, idToken };
+}
+
+describe('OIDC authorization code flow', () => {
+  test('uses the existing pending record, fresh login, configured provider parameter and S256 without secrets in authorization URL', async () => {
+    const { client, calls } = await fixture();
+    const url = new URL(await client.beginAuthorization(pending));
+    expect(url.origin + url.pathname).toBe(metadata.authorization_endpoint);
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      client_id: config.clientId,
+      redirect_uri: config.redirectUri,
+      response_type: 'code',
+      scope: config.scopes.join(' '),
+      state: pending.state,
+      nonce: pending.nonce,
+      code_challenge: createHash('sha256').update(pending.codeVerifier).digest('base64url'),
+      code_challenge_method: 'S256',
+      prompt: 'login',
+      max_age: '0',
+      audience: 'https://api.example.test',
+    });
+    expect(url.searchParams.has('resource')).toBe(false);
+    expect(url.href).not.toContain(config.clientSecret);
+    expect(url.href).not.toContain(pending.codeVerifier);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].init.headers).toEqual({ Accept: 'application/json' });
+  });
+  test('exchanges with exact callback and Basic client authentication, verifies real RSA signature and returns immutable evidence', async () => {
+    const { client, calls, idToken } = await fixture();
+    const tokens = await client.exchangeAuthorizationCode(exchange);
+    expect(tokens).toEqual({
+      accessToken: 'synthetic-access-token',
+      refreshToken: 'synthetic-refresh-token',
+      idToken,
+      expiresAtMs: nowMs + 3_600_000,
+      scopes: config.scopes,
+      subject: signedClaims.sub,
+      authenticatedAtSeconds: at,
+      issuer: ISSUER,
+      clientId: config.clientId,
+    });
+    expect(Object.isFrozen(tokens)).toBe(true);
+    expect(Object.isFrozen(tokens.scopes)).toBe(true);
+    const call = calls.find(({ url }) => url === metadata.token_endpoint)!;
+    expect(new Headers(call.init.headers).get('Authorization')).toBe(
+      `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString('base64')}`,
+    );
+    expect(Object.fromEntries(new URLSearchParams(String(call.init.body)))).toEqual({
+      grant_type: 'authorization_code',
+      code: exchange.code,
+      redirect_uri: config.redirectUri,
+      code_verifier: pending.codeVerifier,
+    });
+    expect(calls.every(({ init }) => init.redirect === 'error' && init.cache === 'no-store')).toBe(
+      true,
+    );
+    expect(calls.filter(({ init }) => new Headers(init.headers).has('Authorization'))).toHaveLength(
+      1,
+    );
+  });
+  test('rejects state before contacting the provider', async () => {
+    const { client, calls } = await fixture();
+    await expect(
+      client.exchangeAuthorizationCode({ ...exchange, state: 'wrong-state' }),
+    ).rejects.toMatchObject({ reason: 'state' });
+    expect(calls).toHaveLength(0);
+  });
+  for (const [name, change] of Object.entries({
+    stale: { startedAtMs: nowMs - 601_000 },
+    future: { startedAtMs: nowMs + 6000 },
+    verifier: { codeVerifier: 'short' },
+    nonce: { nonce: 'short' },
+    state: { state: 'short' },
+    disabled: { requireFreshAuth: false },
+  })) {
+    test(`rejects invalid pending material: ${name}`, async () => {
+      const { client, calls } = await fixture();
+      await expect(
+        client.beginAuthorization({ ...pending, ...change } as PendingAuthorization),
+      ).rejects.toMatchObject({ reason: 'pending' });
+      expect(calls).toHaveLength(0);
+    });
+  }
+  test('snapshots pending material before asynchronous provider work', async () => {
+    const mutable = { ...pending };
+    const { client } = await fixture({
+      handle: async ({ url }) => {
+        if (!url.endsWith('openid-configuration')) return undefined;
+        mutable.nonce = 'attacker-nonce';
+        mutable.codeVerifier = 'attacker-verifier';
+        return json(metadata);
+      },
+    });
+    expect(
+      (await client.exchangeAuthorizationCode({ ...exchange, pending: mutable })).subject,
+    ).toBe(signedClaims.sub);
+  });
+  test('snapshots configuration and uses form-encoded Basic credential components', async () => {
+    const input = {
+      ...config,
+      scopes: [...config.scopes],
+      clientSecret: 'synthetic:secret+encoded',
+    };
+    const calls: Call[] = [];
+    const token = await signed();
+    const client = createOidcBffClient(input, {
+      now: () => nowMs,
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.endsWith('openid-configuration')) return json(metadata);
+        if (url.endsWith('jwks.json')) return json({ keys: [publicKey] });
+        return json({
+          access_token: 'access',
+          refresh_token: 'refresh',
+          id_token: token,
+          token_type: 'Bearer',
+          expires_in: 300,
+          scope: config.scopes.join(' '),
+        });
+      },
+    });
+    input.clientSecret = 'changed';
+    input.scopes.push('wrong');
+    await client.exchangeAuthorizationCode(exchange);
+    expect(new Headers(calls[1].init.headers).get('Authorization')).toBe(
+      `Basic ${Buffer.from('web-client:synthetic%3Asecret%2Bencoded').toString('base64')}`,
+    );
+  });
+});
+
+describe('signed identity evidence', () => {
+  const rejected: Record<string, JWTPayload> = {
+    issuer: { iss: 'https://foreign.example/' },
+    audience: { aud: 'ops' },
+    azp: { azp: 'foreign-client' },
+    multipleWithoutAzp: { aud: [config.clientId, 'other'] },
+    nonce: { nonce: 'foreign-nonce' },
+    expired: { exp: at - 1 },
+    futureIat: { iat: at + 6 },
+    staleIat: { iat: at - 7 },
+    staleAuth: { auth_time: at - 7 },
+    futureAuth: { auth_time: at + 6 },
+    absentAuth: { auth_time: undefined },
+    fractionalAuth: { auth_time: at + 0.5 },
+    absentNonce: { nonce: undefined },
+    emptySubject: { sub: '' },
+    hash: { at_hash: 'wrong-hash' },
+    codeHash: { c_hash: 'wrong-hash' },
+    duplicateAudience: { aud: [config.clientId, config.clientId], azp: config.clientId },
+  };
+  for (const [name, claims] of Object.entries(rejected)) {
+    test(`rejects a correctly signed token with invalid ${name}`, async () => {
+      const { client } = await fixture({ claims });
+      await expect(client.exchangeAuthorizationCode(exchange)).rejects.toBeInstanceOf(
+        OidcInvalidGrantError,
+      );
+    });
+  }
+  test('accepts multiple audiences only with matching signed azp and validates token/code hashes', async () => {
+    const hash = (value: string) =>
+      createHash('sha256').update(value).digest().subarray(0, 16).toString('base64url');
+    const { client } = await fixture({
+      claims: {
+        aud: [config.clientId, 'other'],
+        azp: config.clientId,
+        at_hash: hash('synthetic-access-token'),
+        c_hash: hash(exchange.code),
+      },
+    });
+    expect((await client.exchangeAuthorizationCode(exchange)).subject).toBe(signedClaims.sub);
+  });
+  test('rejects an ID token whose signature is changed', async () => {
+    const idToken = await signed(),
+      parts = idToken.split('.');
+    parts[2] = `${parts[2][0] === 'A' ? 'B' : 'A'}${parts[2].slice(1)}`;
+    const { client } = await fixture({ tokenString: parts.join('.') });
+    await expect(client.exchangeAuthorizationCode(exchange)).rejects.toMatchObject({
+      reason: 'id_token',
+    });
+  });
+  test('rejects an unknown signing key without falling back to another issuer or algorithm', async () => {
+    const { client } = await fixture({
+      tokenString: await signed({}, { alg: 'RS256', kid: 'foreign' }),
+    });
+    await expect(client.exchangeAuthorizationCode(exchange)).rejects.toMatchObject({
+      reason: 'id_token',
+    });
+  });
+  test('revokes minted token pairs after a signed ID token is rejected', async () => {
+    const { client, calls } = await fixture({ claims: { nonce: 'foreign-nonce' } });
+    await expect(client.exchangeAuthorizationCode(exchange)).rejects.toMatchObject({
+      reason: 'id_token',
+    });
+    expect(
+      calls
+        .filter(({ url }) => url.endsWith('/revoke'))
+        .map(({ init }) => new URLSearchParams(String(init.body)).get('token_type_hint')),
+    ).toEqual(['access_token', 'refresh_token']);
+  });
+  test('rejects unsafe/private or duplicate JWKS material as provider failure', async () => {
+    for (const keys of [
+      { keys: [{ ...publicKey, d: 'synthetic-private-material' }] },
+      { keys: [publicKey, publicKey] },
+      { keys: [{ ...publicKey, n: 'too-small' }] },
+      { keys: [] },
+    ]) {
+      const { client } = await fixture({ keys });
+      await expect(client.exchangeAuthorizationCode(exchange)).rejects.toMatchObject({
+        reason: 'jwks',
+      });
+    }
+  });
+});
+
+describe('token endpoint and provider failure', () => {
+  for (const [name, token] of Object.entries({
+    scopeMissing: { scope: 'openid offline_access' },
+    scopeExtra: { scope: `${config.scopes.join(' ')} ops` },
+    scopeDuplicate: { scope: 'openid offline_access openid' },
+    tokenType: { token_type: 'MAC' },
+    zeroExpiry: { expires_in: 0 },
+    hugeExpiry: { expires_in: 3601 },
+    fractionalExpiry: { expires_in: 1.5 },
+    refreshMissing: { refresh_token: undefined },
+    accessControl: { access_token: 'raw\nsecret' },
+    hugeToken: { access_token: 'a'.repeat(16_385) },
+  })) {
+    test(`rejects invalid token response: ${name}`, async () => {
+      const { client } = await fixture({ token });
+      await expect(client.exchangeAuthorizationCode(exchange)).rejects.toMatchObject({
+        reason: 'token_response',
+      });
+    });
+  }
+  test('distinguishes invalid grant from provider HTTP failure without returning provider descriptions', async () => {
+    const invalid = await fixture({
+      tokenResponse: json(
+        { error: 'invalid_grant', error_description: 'synthetic-code secret' },
+        400,
+      ),
+    });
+    await expect(invalid.client.exchangeAuthorizationCode(exchange)).rejects.toMatchObject({
+      reason: 'invalid_grant',
+      message: 'Sign-in could not be verified',
+    });
+    const unavailable = await fixture({
+      tokenResponse: json({ error: 'invalid_client', error_description: config.clientSecret }, 401),
+    });
+    await expect(unavailable.client.exchangeAuthorizationCode(exchange)).rejects.toBeInstanceOf(
+      OidcUnavailableError,
+    );
+  });
+  for (const field of [
+    'issuer',
+    'authorization_endpoint',
+    'token_endpoint',
+    'revocation_endpoint',
+    'jwks_uri',
+  ]) {
+    test(`rejects a changed metadata ${field} before credentials or code leave the BFF`, async () => {
+      const { client, calls } = await fixture({
+        discovery: { ...metadata, [field]: 'https://foreign.example/steal' },
+      });
+      await expect(client.exchangeAuthorizationCode(exchange)).rejects.toMatchObject({
+        reason: 'metadata',
+      });
+      expect(calls).toHaveLength(1);
+    });
+  }
+  test('rejects redirected, oversize, malformed and invalid UTF-8 responses', async () => {
+    for (const response of [
+      new Response(null, { status: 302 }),
+      new Response('x'.repeat(65_537)),
+      new Response('{}', { headers: { 'content-length': '65537' } }),
+      new Response('not-json'),
+      new Response(new Uint8Array([0xff, 0xfe])),
+    ]) {
+      const { client } = await fixture({ handle: () => response });
+      await expect(client.beginAuthorization(pending)).rejects.toBeInstanceOf(OidcUnavailableError);
+    }
+  });
+  test('bounds a transport that ignores abort and hides its raw exception', async () => {
+    const hanging = await fixture({ timeoutMs: 20, handle: () => new Promise<Response>(() => {}) });
+    await expect(hanging.client.beginAuthorization(pending)).rejects.toMatchObject({
+      reason: 'timeout',
+    });
+    const failed = await fixture({ handle: () => Promise.reject(new Error(config.clientSecret)) });
+    await expect(failed.client.beginAuthorization(pending)).rejects.toMatchObject({
+      reason: 'network',
+      message: 'Sign-in provider is unavailable',
+    });
+  });
+  test('bounds a hanging JWKS response stream and cancels it', async () => {
+    let cancelled = false;
+    const { client } = await fixture({
+      timeoutMs: 30,
+      handle: ({ url }) =>
+        url.endsWith('jwks.json')
+          ? new Response(
+              new ReadableStream({
+                start(controller) {
+                  controller.enqueue(new TextEncoder().encode('{"keys":['));
+                },
+                cancel() {
+                  cancelled = true;
+                },
+              }),
+            )
+          : undefined,
+    });
+    await expect(client.exchangeAuthorizationCode(exchange)).rejects.toMatchObject({
+      reason: 'timeout',
+    });
+    expect(cancelled).toBe(true);
+  });
+  test('uses one operation deadline across discovery, token exchange and JWKS', async () => {
+    const { client, calls } = await fixture({
+      timeoutMs: 45,
+      handle: async ({ url }) => {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        if (url.endsWith('openid-configuration')) return json(metadata);
+        return json({ error: 'server_error' }, 500);
+      },
+    });
+    await expect(client.exchangeAuthorizationCode(exchange)).rejects.toMatchObject({
+      reason: 'timeout',
+    });
+    expect(calls).toHaveLength(2);
+  });
+});
+
+describe('per-app revocation', () => {
+  test('revokes both app tokens, accepts empty RFC7009 success bodies and does not log out shared provider SSO', async () => {
+    const { client, calls } = await fixture();
+    await client.revokeTokenPair({
+      accessToken: 'synthetic-access',
+      refreshToken: 'synthetic-refresh',
+    });
+    const writes = calls.filter(({ init }) => init.method === 'POST');
+    expect(
+      writes.map(({ init }) => Object.fromEntries(new URLSearchParams(String(init.body)))),
+    ).toEqual([
+      { token: 'synthetic-access', token_type_hint: 'access_token' },
+      { token: 'synthetic-refresh', token_type_hint: 'refresh_token' },
+    ]);
+    expect(
+      writes.every(
+        ({ url, init }) =>
+          url === metadata.revocation_endpoint && new Headers(init.headers).has('Authorization'),
+      ),
+    ).toBe(true);
+    expect(calls.some(({ url }) => url.includes('sessions') || url.includes('logout'))).toBe(false);
+  });
+  test('reports a revocation failure while attempting both token revocations', async () => {
+    const { client, calls } = await fixture({
+      handle: ({ url }) =>
+        url.endsWith('/revoke') ? json({ error: 'server_error' }, 503) : undefined,
+    });
+    await expect(
+      client.revokeTokenPair({ accessToken: 'access', refreshToken: 'refresh' }),
+    ).rejects.toBeInstanceOf(OidcUnavailableError);
+    expect(calls.filter(({ url }) => url.endsWith('/revoke'))).toHaveLength(2);
+  });
+  test('accepts access-only or refresh-only retirement and refuses an empty or entirely unsafe subset', async () => {
+    for (const pair of [
+      { accessToken: 'access' },
+      { refreshToken: 'refresh' },
+      { accessToken: 'access', refreshToken: 'bad\nrefresh' },
+    ]) {
+      const { client, calls } = await fixture();
+      await client.revokeTokenPair(pair);
+      expect(calls.filter(({ url }) => url.endsWith('/revoke'))).toHaveLength(1);
+    }
+    for (const pair of [{}, { accessToken: 'bad\naccess' }]) {
+      const { client, calls } = await fixture();
+      await expect(client.revokeTokenPair(pair)).rejects.toMatchObject({
+        reason: 'token_response',
+      });
+      expect(calls).toHaveLength(0);
+    }
+  });
+});
+
+describe('durable minted-token handoff', () => {
+  test('persists only safely parsed tokens before JWKS and signed ID-token validation', async () => {
+    const events: string[] = [];
+    let queued: unknown;
+    const { client } = await fixture({
+      claims: { nonce: 'foreign-nonce' },
+      onTokenPairIssued: async (pair) => {
+        queued = pair;
+        events.push('persisted');
+      },
+      handle: ({ url }) => {
+        if (url.endsWith('jwks.json')) events.push('jwks');
+      },
+    });
+    await expect(client.exchangeAuthorizationCode(exchange)).rejects.toMatchObject({
+      reason: 'id_token',
+    });
+    expect(events).toEqual(['persisted', 'jwks']);
+    expect(queued).toEqual({
+      accessToken: 'synthetic-access-token',
+      refreshToken: 'synthetic-refresh-token',
+      expiresAtMs: nowMs + 3_600_000,
+    });
+    expect(Object.isFrozen(queued)).toBe(true);
+  });
+  test('rejects admission and attempts both revocations if persistence fails, without exposing its raw error', async () => {
+    const { client, calls } = await fixture({
+      onTokenPairIssued: () =>
+        Promise.reject(new Error('synthetic-access-token synthetic-refresh-token')),
+    });
+    await expect(client.exchangeAuthorizationCode(exchange)).rejects.toMatchObject({
+      reason: 'persistence',
+      message: 'Sign-in provider is unavailable',
+    });
+    expect(calls.some(({ url }) => url.endsWith('jwks.json'))).toBe(false);
+    expect(calls.filter(({ url }) => url.endsWith('/revoke'))).toHaveLength(2);
+  });
+  test('stages safe tokens before scope, expiry, type and ID-token rejection without ever granting admission', async () => {
+    for (const token of [
+      { token_type: 'MAC' },
+      { scope: 'openid admin' },
+      { expires_in: -1 },
+      { id_token: 'invalid' },
+    ]) {
+      let queued: unknown;
+      const { client } = await fixture({
+        token,
+        onTokenPairIssued: async (pair) => {
+          queued = pair;
+        },
+      });
+      await expect(client.exchangeAuthorizationCode(exchange)).rejects.toBeInstanceOf(
+        OidcInvalidGrantError,
+      );
+      expect(queued).toEqual({
+        accessToken: 'synthetic-access-token',
+        refreshToken: 'synthetic-refresh-token',
+        expiresAtMs: nowMs + 3_600_000,
+      });
+    }
+  });
+  test('stages the safe subset when one credential is missing or malformed, using a retirement-only expiry hint', async () => {
+    for (const [token, expected] of [
+      [
+        { refresh_token: undefined, expires_in: 'malformed' },
+        { accessToken: 'synthetic-access-token' },
+      ],
+      [{ refresh_token: 'bad\nrefresh' }, { accessToken: 'synthetic-access-token' }],
+      [{ access_token: 'bad\naccess' }, { refreshToken: 'synthetic-refresh-token' }],
+    ]) {
+      let queued: unknown;
+      const { client } = await fixture({
+        token,
+        onTokenPairIssued: async (pair) => {
+          queued = pair;
+        },
+      });
+      await expect(client.exchangeAuthorizationCode(exchange)).rejects.toMatchObject({
+        reason: 'token_response',
+      });
+      expect(queued).toEqual({ ...expected, expiresAtMs: nowMs + 3_600_000 });
+    }
+  });
+  test('does not persist a response without any bounded safe credential', async () => {
+    let calls = 0;
+    const { client } = await fixture({
+      token: { access_token: 'bad\naccess', refresh_token: undefined },
+      onTokenPairIssued: async () => {
+        calls += 1;
+      },
+    });
+    await expect(client.exchangeAuthorizationCode(exchange)).rejects.toMatchObject({
+      reason: 'token_response',
+    });
+    expect(calls).toBe(0);
+  });
+  test('keeps the total operation deadline when a persistence hook hangs', async () => {
+    const { client, calls } = await fixture({
+      timeoutMs: 20,
+      onTokenPairIssued: () => new Promise<void>(() => {}),
+    });
+    await expect(client.exchangeAuthorizationCode(exchange)).rejects.toMatchObject({
+      reason: 'timeout',
+    });
+    expect(calls.some(({ url }) => url.endsWith('jwks.json'))).toBe(false);
+  });
+});
+
+test('rejects unsafe configuration instead of discovery or legacy-provider fallback', () => {
+  for (const change of [
+    { issuer: 'https://foreign.example.test' },
+    { redirectUri: 'https://app.example.test/callback?evil=1' },
+    { redirectUri: 'http://app.example.test/callback' },
+    { scopes: ['openid'] },
+    {
+      endpoints: {
+        ...config.endpoints,
+        token: 'https://user:password@identity.example.test/token',
+      },
+    },
+    { timeoutMs: 0 },
+    { clockToleranceSeconds: 11 },
+  ]) {
+    expect(() => createOidcBffClient({ ...config, ...change })).toThrow(TypeError);
+  }
+});
+
+test('requires exact configured endpoints and rejects reserved provider-parameter overrides', () => {
+  expect(() =>
+    createOidcBffClient({ ...config, authorizationParameters: { state: 'foreign-state' } }),
+  ).toThrow(TypeError);
+  expect(() =>
+    createOidcBffClient({
+      ...config,
+      endpoints: { ...config.endpoints, token: 'http://identity.example.test/token' },
+    }),
+  ).toThrow(TypeError);
+  expect(() => createOidcBffClient({ ...config, maxAccessTokenSeconds: 0 })).toThrow(TypeError);
+});
+
+test('does not extend provider expiry by custody hook latency or admit a token already expired during custody', async () => {
+  let clock = nowMs;
+  let stagedExpiry: number | undefined;
+  const { client } = await fixture({
+    token: { expires_in: 1 },
+    now: () => clock,
+    onTokenPairIssued: (pair) => {
+      stagedExpiry = pair.expiresAtMs;
+      clock += 2000;
+      return Promise.resolve();
+    },
+  });
+  await expect(client.exchangeAuthorizationCode(exchange)).rejects.toMatchObject({
+    reason: 'timeout',
+  });
+  expect(stagedExpiry).toBe(nowMs + 1000);
+});

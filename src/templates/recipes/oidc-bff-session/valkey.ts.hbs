@@ -1,0 +1,148 @@
+import { createClient } from '@redis/client';
+import type { SessionCommands } from './opaque-session-store';
+
+export class SessionStorageUnavailableError extends Error {
+  constructor() {
+    super('BFF session storage is unavailable');
+    this.name = 'SessionStorageUnavailableError';
+  }
+}
+export type ValkeySessionOptions = Readonly<{
+  url: string;
+  commandTimeoutMs?: number;
+  trustedInternalPlaintext?: boolean;
+}>;
+export interface SessionConnection {
+  readonly isOpen: boolean;
+  readonly isReady: boolean;
+  on(event: 'error', listener: () => void): unknown;
+  connect(): Promise<unknown>;
+  destroy(): void;
+  withAbortSignal(signal: AbortSignal): SessionCommands;
+}
+export type ValkeySessionDependencies = Readonly<{
+  createConnection?: (options: Readonly<{ url: string; timeoutMs: number }>) => SessionConnection;
+}>;
+
+/** One reusable command owner, no environment lookup, implicit retries or local fallback. */
+export function createValkeySessionCommands(
+  input: ValkeySessionOptions,
+  dependencies: ValkeySessionDependencies = {},
+): SessionCommands & { close(): void } {
+  const options = Object.freeze({ ...input });
+  const timeoutMs = options.commandTimeoutMs ?? 2000;
+  let url: URL;
+  try {
+    url = new URL(options.url);
+  } catch {
+    throw new TypeError('Invalid BFF session storage configuration');
+  }
+  if (
+    (url.protocol !== 'rediss:' &&
+      !(url.protocol === 'redis:' && options.trustedInternalPlaintext === true)) ||
+    !url.hostname ||
+    url.search ||
+    url.hash ||
+    !/^(?:\/(?:\d{1,5})?)?$/.test(url.pathname) ||
+    options.url.length > 8192 ||
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < 10 ||
+    timeoutMs > 5000
+  ) {
+    throw new TypeError('Invalid BFF session storage configuration');
+  }
+  const createConnection =
+    dependencies.createConnection ??
+    ((config) =>
+      createClient({
+        url: config.url,
+        disableOfflineQueue: true,
+        commandsQueueMaxLength: 128,
+        socket: { connectTimeout: config.timeoutMs, reconnectStrategy: false },
+      }));
+  let connecting: Promise<SessionConnection> | undefined;
+  let current: SessionConnection | undefined;
+  let closed = false;
+
+  async function client(): Promise<SessionConnection> {
+    if (closed) throw new SessionStorageUnavailableError();
+    if (!connecting) {
+      const connection = createConnection({ url: options.url, timeoutMs });
+      current = connection;
+      connection.on('error', () => {});
+      connecting = connection
+        .connect()
+        .then(() => connection)
+        .catch(() => {
+          if (connection.isOpen) connection.destroy();
+          if (current === connection) {
+            current = undefined;
+            connecting = undefined;
+          }
+          throw new SessionStorageUnavailableError();
+        });
+    }
+    const connection = await connecting;
+    if (closed || !connection.isReady) {
+      if (connection.isOpen) connection.destroy();
+      if (current === connection) {
+        current = undefined;
+        connecting = undefined;
+      }
+      throw new SessionStorageUnavailableError();
+    }
+    return connection;
+  }
+  return Object.freeze({
+    close() {
+      closed = true;
+      if (current?.isOpen) current.destroy();
+      current = undefined;
+      connecting = undefined;
+    },
+    async eval(script: string, command: { keys: string[]; arguments: string[] }): Promise<unknown> {
+      if (
+        typeof script !== 'string' ||
+        script.length > 16384 ||
+        !Array.isArray(command.keys) ||
+        !Array.isArray(command.arguments) ||
+        command.keys.length > 16 ||
+        command.arguments.length > 32 ||
+        command.keys.some((key: unknown) => typeof key !== 'string' || key.length > 1024) ||
+        command.arguments.some(
+          (argument: unknown) => typeof argument !== 'string' || argument.length > 40000,
+        )
+      ) {
+        throw new SessionStorageUnavailableError();
+      }
+      const keys = [...command.keys],
+        arguments_ = [...command.arguments];
+      const controller = new AbortController();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new SessionStorageUnavailableError());
+        }, timeoutMs);
+      });
+      try {
+        return await Promise.race([
+          (async () => {
+            const connection = await client();
+            if (controller.signal.aborted) throw new SessionStorageUnavailableError();
+            return await connection.withAbortSignal(controller.signal).eval(script, {
+              keys,
+              arguments: arguments_,
+            });
+          })(),
+          deadline,
+        ]);
+      } catch {
+        throw new SessionStorageUnavailableError();
+      } finally {
+        clearTimeout(timer);
+        controller.abort();
+      }
+    },
+  });
+}
