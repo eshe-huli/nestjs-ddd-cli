@@ -154,4 +154,62 @@ describe('Bounded provider JSON HTTP', () => {
     expect(result).toEqual({ provider_extra: { editable: true } });
     expect(Object.isFrozen(result)).toBe(true);
   });
+
+  it('POSTs bounded snapshotted JSON without changing form semantics or exposing headers', async () => {
+    const transport = jest.fn((_url: string, _init: RequestInit) => {
+      void _url;
+      void _init;
+      return Promise.resolve(new Response('{}'));
+    });
+    const client = create({
+      requestHeaders: { authorization: 'PRIVATE' },
+      transport,
+    });
+    const payload = { nested: { message: 'original' } };
+    const request = client.postJson(['messages'], payload);
+    payload.nested.message = 'changed';
+    await request;
+    await client.postForm(['token'], { grant_type: 'client_credentials' });
+    expect(transport.mock.calls[0]?.[1]).toMatchObject({
+      body: '{"nested":{"message":"original"}}',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(transport.mock.calls[1]?.[1]).toMatchObject({
+      body: 'grant_type=client_credentials',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    });
+    expect(JSON.stringify(client)).not.toContain('PRIVATE');
+  });
+
+  it('rejects invalid, cyclic, deep and oversized UTF8 JSON before any send', () => {
+    const transport = jest.fn(() => Promise.resolve(new Response('{}')));
+    const client = create({ transport });
+    const cyclic: { child?: unknown } = {};
+    cyclic.child = cyclic;
+    let deep: unknown = 'value';
+    for (let i = 0; i < 34; i++) deep = { child: deep };
+    const accessor = Object.defineProperty({}, 'secret', {
+      enumerable: true,
+      get: () => {
+        throw new Error('PRIVATE');
+      },
+    });
+    for (const payload of [
+      undefined,
+      NaN,
+      Infinity,
+      new Date(),
+      cyclic,
+      deep,
+      accessor,
+      { value: 'é'.repeat(140000) },
+      Array.from({ length: 10001 }, () => 1),
+      { toJSON: () => 'PRIVATE' },
+    ]) {
+      expect(() => client.postJson(['messages'], payload)).toThrow(
+        'Invalid provider request configuration',
+      );
+    }
+    expect(transport).not.toHaveBeenCalled();
+  });
 });

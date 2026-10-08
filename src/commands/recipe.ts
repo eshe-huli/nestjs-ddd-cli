@@ -22,6 +22,7 @@ import { applyPlatformParcAuthorizationRecipe } from './recipes/platform-parc-au
 import { applyBanklinkConnectorContractRecipe } from './recipes/banklink-connector-contract.recipe';
 import { applyOidcDashboardRecipe } from './recipes/oidc-dashboard.recipe';
 import { applyOidcResourceServerRecipe } from './recipes/oidc-resource-server.recipe';
+import { applyOAuth2ClientCredentialsRecipe } from './recipes/oauth2-client-credentials.recipe';
 import { applyOAuth2TokenIntrospectionRecipe } from './recipes/oauth2-token-introspection.recipe';
 import { applyExternalProjectionWorkerRecipe } from './recipes/external-projection-worker.recipe';
 
@@ -44,13 +45,14 @@ async function applyDryRunRecipe(
         migrationTimestamp: options.migrationTimestamp,
       }),
     'oidc-resource-server': () => applyOidcResourceServerRecipe(basePath, true),
+    'oauth2-client-credentials': () => applyOAuth2ClientCredentialsRecipe(basePath, true),
     'oauth2-token-introspection': () => applyOAuth2TokenIntrospectionRecipe(basePath, true),
     'kafka-consumer': () => applyKafkaConsumerRecipe(basePath, true),
   };
   const handler = handlers[recipeName];
   if (!handler) {
     throw new Error(
-      'Dry-run is currently supported only by external-projection-worker, oidc-resource-server, oauth2-token-introspection, and kafka-consumer',
+      'Dry-run is currently supported only by external-projection-worker, oidc-resource-server, oauth2-token-introspection, oauth2-client-credentials, and kafka-consumer',
     );
   }
   await handler();
@@ -69,6 +71,13 @@ async function installRecipeDependencies(
 }
 
 const AVAILABLE_RECIPES = {
+  'oauth2-client-credentials': {
+    name: 'OAuth2 client credentials',
+    description:
+      'Bounded grant acquisition with single-flight cache and consumer-owned send policy',
+    dependencies: [],
+    devDependencies: [],
+  },
   'oauth2-token-introspection': {
     name: 'OAuth2 token introspection',
     description: 'Bounded RFC7662 evidence transport with consumer-owned principal validation',
@@ -375,6 +384,7 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
     'banklink-connector-contract': applyBanklinkConnectorContractRecipe,
     'oidc-dashboard': applyOidcDashboardRecipe,
     'oidc-resource-server': applyOidcResourceServerRecipe,
+    'oauth2-client-credentials': applyOAuth2ClientCredentialsRecipe,
     'oauth2-token-introspection': applyOAuth2TokenIntrospectionRecipe,
     'external-projection-worker': (target: string) =>
       applyExternalProjectionWorkerRecipe(target, {

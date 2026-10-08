@@ -62,7 +62,7 @@ function pathSegments(value: unknown): value is readonly string[] {
 /** Minimal JSON transport. It neither authenticates a person nor grants permissions. */
 export class BoundedJsonHttpClient {
   private readonly origin: string;
-  private readonly headers: Readonly<Record<string, string>>;
+  readonly #headers: Readonly<Record<string, string>>;
   private readonly timeoutMs: number;
   private readonly maxResponseBytes: number;
   private readonly transport: (
@@ -90,7 +90,7 @@ export class BoundedJsonHttpClient {
           throw new Error();
         headers.set(key, value);
       }
-      this.headers = Object.freeze(Object.fromEntries(headers.entries()));
+      this.#headers = Object.freeze(Object.fromEntries(headers.entries()));
       this.timeoutMs = bounded(options.timeoutMs, 3000, 10, 30000);
       this.maxResponseBytes = bounded(
         options.maxResponseBytes,
@@ -118,9 +118,66 @@ export class BoundedJsonHttpClient {
     if (Object.values(form).some((value) => typeof value !== 'string'))
       throw new Error('Invalid provider request configuration');
     const body = new URLSearchParams(form).toString();
-    if (body.length > 262144)
+    if (new TextEncoder().encode(body).byteLength > 262144)
       throw new Error('Invalid provider request configuration');
-    return this.execute('POST', pathSegments, {}, body);
+    return this.execute(
+      'POST',
+      pathSegments,
+      {},
+      body,
+      'application/x-www-form-urlencoded',
+    );
+  }
+
+  postJson(
+    pathSegments: readonly string[],
+    payload: unknown,
+  ): Promise<unknown> {
+    let nodes = 0;
+    const seen = new Set<object>();
+    const visit = (value: unknown, depth: number): void => {
+      if (++nodes > 10000 || depth > 32) throw new Error();
+      if (
+        value === null ||
+        typeof value === 'string' ||
+        typeof value === 'boolean'
+      )
+        return;
+      if (typeof value === 'number' && Number.isFinite(value)) return;
+      if (typeof value !== 'object' || !value || seen.has(value))
+        throw new Error();
+      seen.add(value);
+      if (Array.isArray(value)) {
+        if (Object.getPrototypeOf(value) !== Array.prototype) throw new Error();
+        for (let i = 0; i < value.length; i++) {
+          const descriptor = Object.getOwnPropertyDescriptor(value, String(i));
+          if (!descriptor || !('value' in descriptor)) throw new Error();
+          visit(descriptor.value, depth + 1);
+        }
+        if (Object.getOwnPropertyNames(value).length !== value.length + 1)
+          throw new Error();
+      } else {
+        if (![Object.prototype, null].includes(Object.getPrototypeOf(value)))
+          throw new Error();
+        for (const descriptor of Object.values(
+          Object.getOwnPropertyDescriptors(value),
+        )) {
+          if (!descriptor.enumerable || !('value' in descriptor))
+            throw new Error();
+          visit(descriptor.value, depth + 1);
+        }
+      }
+      if (Object.getOwnPropertySymbols(value).length) throw new Error();
+      seen.delete(value);
+    };
+    try {
+      visit(payload, 0);
+      const body = JSON.stringify(payload);
+      if (new TextEncoder().encode(body).byteLength > 262144) throw new Error();
+      return this.execute('POST', pathSegments, {}, body, 'application/json');
+    } catch {
+      throw new Error('Invalid provider request configuration');
+    }
   }
 
   private async execute(
@@ -128,6 +185,7 @@ export class BoundedJsonHttpClient {
     segments: readonly string[],
     query: Readonly<Record<string, string>>,
     body?: string,
+    contentType?: string,
   ): Promise<unknown> {
     if (!pathSegments(segments)) {
       throw new Error('Invalid provider request configuration');
@@ -167,7 +225,7 @@ export class BoundedJsonHttpClient {
     });
     try {
       return await Promise.race([
-        this.request(url.href, method, body, abort.signal),
+        this.request(url.href, method, body, abort.signal, contentType),
         timeout,
       ]);
     } catch (error) {
@@ -184,6 +242,7 @@ export class BoundedJsonHttpClient {
     method: 'GET' | 'POST',
     body: string | undefined,
     signal: AbortSignal,
+    contentType?: string,
   ): Promise<unknown> {
     const response = await this.transport(url, {
       method,
@@ -191,10 +250,11 @@ export class BoundedJsonHttpClient {
       headers:
         method === 'POST'
           ? {
-              ...this.headers,
-              'content-type': 'application/x-www-form-urlencoded',
+              ...this.#headers,
+              'content-type':
+                contentType ?? 'application/x-www-form-urlencoded',
             }
-          : { ...this.headers },
+          : { ...this.#headers },
       redirect: 'error',
       cache: 'no-store',
       signal,
