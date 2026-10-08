@@ -118,7 +118,7 @@ describe('OAuth2 token introspection recipe', () => {
     expect(listing).toContain('oauth2-token-introspection');
   });
 
-  it('strict-compiles generated output and executes the emitted consumer behavior spec', async () => {
+  it('strict-compiles generated output and executes emitted introspection and bounded PUT behavior', async () => {
     await applyOAuth2TokenIntrospectionRecipe(target);
     const sourceDir = path.join(target, 'src/shared/auth/oauth2-token-introspection');
     const files = (await fs.readdir(sourceDir)).filter((file) => file.endsWith('.ts'));
@@ -185,10 +185,24 @@ describe('OAuth2 token introspection recipe', () => {
       numPassedTests: number;
       numFailedTests: number;
       numTotalTestSuites: number;
+      testResults: { assertionResults: { title: string; status: string }[] }[];
     };
     expect(proof.success).toBe(true);
     expect(proof.numFailedTests).toBe(0);
     expect(proof.numTotalTestSuites).toBe(2);
+    expect(proof.testResults.flatMap((suite) => suite.assertionResults)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: 'PUTs one immutable JSON decision with an encoded bounded challenge query',
+          status: 'passed',
+        }),
+        expect.objectContaining({
+          title:
+            'bounds the whole PUT transport and stream deadline even when the provider ignores abort',
+          status: 'passed',
+        }),
+      ]),
+    );
     process.stdout.write(
       `Generated consumer proof: ${proof.numPassedTests} passed in ${proof.numTotalTestSuites} suites\n`,
     );

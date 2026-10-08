@@ -251,4 +251,161 @@ describe('Bounded provider JSON HTTP', () => {
     ).rejects.toMatchObject({ reason: 'http', status: 503 });
     expect(transport).toHaveBeenCalledTimes(1);
   });
+
+  it('PUTs one immutable JSON decision with an encoded bounded challenge query', async () => {
+    const transport = jest.fn((_url: string, _init: RequestInit) => {
+      void _url;
+      void _init;
+      return Promise.resolve(
+        new Response('{"redirect_to":"https://provider.example.test/oauth2/auth"}'),
+      );
+    });
+    const requestHeaders = { authorization: 'PRIVATE' };
+    const options = { origin: 'https://provider.example.test', requestHeaders, transport };
+    const client = create(options);
+    options.origin = 'https://evil.example';
+    requestHeaders.authorization = 'changed';
+    const payload = { subject: 'identity', context: { session: 'original' } };
+    const query = { login_challenge: 'challenge&redirect=https://evil.example/#fragment' };
+    const request = client.putJson(
+      ['admin', 'oauth2', 'auth', 'requests', 'login', 'accept'],
+      payload,
+      query,
+    );
+    payload.context.session = 'changed';
+    query.login_challenge = 'changed';
+    const response = await request;
+    expect(response).toEqual({ redirect_to: 'https://provider.example.test/oauth2/auth' });
+    expect(Object.isFrozen(response)).toBe(true);
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(transport.mock.calls[0]?.[0]).toBe(
+      'https://provider.example.test/admin/oauth2/auth/requests/login/accept?login_challenge=challenge%26redirect%3Dhttps%3A%2F%2Fevil.example%2F%23fragment',
+    );
+    expect(transport.mock.calls[0]?.[1]).toMatchObject({
+      method: 'PUT',
+      body: '{"subject":"identity","context":{"session":"original"}}',
+      redirect: 'error',
+      cache: 'no-store',
+      headers: {
+        accept: 'application/json',
+        authorization: 'PRIVATE',
+        'content-type': 'application/json',
+      },
+    });
+    expect(transport.mock.calls[0]?.[1].signal?.aborted).toBe(true);
+    expect(JSON.stringify(client)).not.toContain('PRIVATE');
+    await client.putJson(['decisions'], { accepted: false });
+    expect(transport.mock.calls[1]?.[0]).toBe('https://provider.example.test/decisions');
+  });
+
+  it('rejects unsafe PUT paths and challenge queries before dispatch', async () => {
+    const transport = jest.fn(() => Promise.resolve(new Response('{}')));
+    const client = create({ transport });
+    const invalidRequests = [
+      { segments: ['..'], query: {} },
+      { segments: ['\nPRIVATE'], query: {} },
+      { segments: ['decision'], query: { '': 'value' } },
+      { segments: ['decision'], query: { challenge: '\nPRIVATE' } },
+      { segments: ['decision'], query: { challenge: 'x'.repeat(2049) } },
+      {
+        segments: ['decision'],
+        query: Object.fromEntries(
+          Array.from({ length: 33 }, (_, index) => [`key${index}`, 'value']),
+        ),
+      },
+    ];
+    for (const { segments, query } of invalidRequests) {
+      await expect(client.putJson(segments, { safe: true }, query)).rejects.toThrow(
+        'Invalid provider request configuration',
+      );
+    }
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsafe PUT JSON without invoking accessors or sending a partial decision', () => {
+    const transport = jest.fn(() => Promise.resolve(new Response('{}')));
+    const client = create({ transport });
+    const getter = jest.fn(() => 'PRIVATE');
+    const accessor = Object.defineProperty({}, 'secret', { enumerable: true, get: getter });
+    const cyclic: { child?: unknown } = {};
+    cyclic.child = cyclic;
+    let deep: unknown = 'value';
+    for (let i = 0; i < 34; i++) deep = { child: deep };
+    for (const payload of [
+      undefined,
+      NaN,
+      new Date(),
+      cyclic,
+      deep,
+      accessor,
+      { message: 'é'.repeat(140000) },
+    ]) {
+      expect(() => client.putJson(['decisions'], payload, { challenge: 'safe' })).toThrow(
+        'Invalid provider request configuration',
+      );
+    }
+    expect(getter).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it.each([401, 404, 410, 503])(
+    'holds failed PUT status %s without retry or provider disclosure',
+    async (status) => {
+      const transport = jest.fn(() => Promise.resolve(new Response('PRIVATE-BODY', { status })));
+      const error: unknown = await create({ transport })
+        .putJson(['decision'], { accepted: true })
+        .catch((error: unknown) => error);
+      expect(error).toMatchObject({
+        reason: 'http',
+        status,
+        message: 'Provider validation unavailable',
+      });
+      expect(String(error)).not.toContain('PRIVATE');
+      expect(transport).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('rejects PUT redirects and malformed or oversized response data without retries', async () => {
+    for (const response of [
+      new Response('PRIVATE', { status: 302, headers: { location: 'https://evil.example' } }),
+      new Response('PRIVATE-NOT-JSON'),
+      new Response(new Uint8Array([0xff])),
+      new Response('x'.repeat(129)),
+      new Response('{}', { headers: { 'content-length': '129' } }),
+    ]) {
+      const transport = jest.fn(() => Promise.resolve(response));
+      await expect(
+        create({ transport, maxResponseBytes: 128 }).putJson(['decision'], {}),
+      ).rejects.toBeInstanceOf(BoundedJsonHttpUnavailableError);
+      expect(transport).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('bounds the whole PUT transport and stream deadline even when the provider ignores abort', async () => {
+    for (const result of [
+      () => new Promise<Response>(() => undefined),
+      () => Promise.resolve(new Response(new ReadableStream<Uint8Array>())),
+    ]) {
+      const transport = jest.fn((_url: string, _init: RequestInit) => {
+        void _url;
+        void _init;
+        return result();
+      });
+      await expect(
+        create({ transport, timeoutMs: 10 }).putJson(['decision'], {}),
+      ).rejects.toMatchObject({ reason: 'timeout' });
+      expect(transport).toHaveBeenCalledTimes(1);
+      expect(transport.mock.calls[0]?.[1].signal?.aborted).toBe(true);
+    }
+  });
+
+  it('sanitizes a PUT network failure and never retries the uncertain decision', async () => {
+    const transport = jest.fn(() => Promise.reject(new Error('PRIVATE-HEADER-BODY')));
+    const error: unknown = await create({ transport })
+      .putJson(['decision'], {})
+      .catch((error: unknown) => error);
+    expect(error).toMatchObject({ reason: 'network', message: 'Provider validation unavailable' });
+    expect(String(error)).not.toContain('PRIVATE');
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
 });

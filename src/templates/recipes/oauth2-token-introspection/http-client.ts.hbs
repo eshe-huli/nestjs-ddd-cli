@@ -143,10 +143,19 @@ export class BoundedJsonHttpClient {
     return this.json('PATCH', pathSegments, payload);
   }
 
-  private json(
-    method: 'POST' | 'PATCH',
+  putJson(
     pathSegments: readonly string[],
     payload: unknown,
+    query: Readonly<Record<string, string>> = {},
+  ): Promise<unknown> {
+    return this.json('PUT', pathSegments, payload, query);
+  }
+
+  private json(
+    method: 'POST' | 'PATCH' | 'PUT',
+    pathSegments: readonly string[],
+    payload: unknown,
+    query: Readonly<Record<string, string>> = {},
   ): Promise<unknown> {
     let nodes = 0;
     const seen = new Set<object>();
@@ -190,14 +199,14 @@ export class BoundedJsonHttpClient {
       visit(payload, 0);
       const body = JSON.stringify(payload);
       if (new TextEncoder().encode(body).byteLength > 262144) throw new Error();
-      return this.execute(method, pathSegments, {}, body, 'application/json');
+      return this.execute(method, pathSegments, query, body, 'application/json');
     } catch {
       throw new Error('Invalid provider request configuration');
     }
   }
 
   private async execute(
-    method: 'GET' | 'POST' | 'PATCH',
+    method: 'GET' | 'POST' | 'PATCH' | 'PUT',
     segments: readonly string[],
     query: Readonly<Record<string, string>>,
     body?: string,
@@ -255,7 +264,7 @@ export class BoundedJsonHttpClient {
 
   private async request(
     url: string,
-    method: 'GET' | 'POST' | 'PATCH',
+    method: 'GET' | 'POST' | 'PATCH' | 'PUT',
     body: string | undefined,
     signal: AbortSignal,
     contentType?: string,

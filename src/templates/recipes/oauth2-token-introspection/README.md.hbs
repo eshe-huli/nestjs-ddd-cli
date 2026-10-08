@@ -80,10 +80,27 @@ does not infer account status from JSON. Transport errors retain safe reason and
 optional numeric HTTP status, so the adapter can distinguish a missing session
 from upstream unavailability without inspecting or logging response bodies.
 The helper also exposes bounded `postForm` for the introspection client and
-`postJson`/`patchJson` for explicit consumer-owned JSON endpoints. JSON is
+`postJson`/`patchJson`/`putJson` for explicit consumer-owned JSON endpoints. JSON is
 snapshotted before dispatch, validated against the same byte/depth/value bounds,
 and sent once to the configured origin with no redirects or retries. It
 applies the same origin, redirect, timeout, byte, nesting and no-cache rules.
+
+`putJson(pathSegments, payload, query = {})` also accepts the same bounded query
+record as GET. For example, Hydra login/consent accept and reject APIs use a
+JSON PUT body with the challenge in a query parameter:
+
+```ts
+const result = await hydra.putJson(
+  ['admin', 'oauth2', 'auth', 'requests', 'login', 'accept'],
+  { subject: validatedKratosIdentityId, remember: false },
+  { login_challenge: validatedLoginChallenge },
+);
+```
+
+The adapter must first verify the challenge, exact client/scopes/audience,
+current Kratos session and canonical admission policy. A successful transport
+request establishes none of those facts. Challenge query values are snapshotted
+and encoded before dispatch; failed or uncertain decisions are not retried.
 
 ## Evidence and consumer policy
 
