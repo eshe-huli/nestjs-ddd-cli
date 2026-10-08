@@ -1005,7 +1005,7 @@ spec:
 `;
 
   return [
-    { destination: 'k8s/deployment.yaml', content: deploymentContent },
+    { destination: 'k8s/deployment.yaml', content: deploymentContent.trimEnd() + '\n' },
     { destination: 'k8s/service.yaml', content: serviceContent },
     { destination: 'k8s/configmap.yaml', content: configMapContent },
     ...(profile.visibility === 'public'

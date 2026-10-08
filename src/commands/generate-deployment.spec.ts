@@ -194,6 +194,45 @@ describe('deployment profile generator', () => {
     expect(parse(await file(root, 'k8s/deployment.yaml')).spec.replicas).toBe(0);
   });
 
+  it.each<{
+    label: string;
+    profile: DeploymentOptions;
+    probes: string[];
+    replicas: number;
+  }>([
+    {
+      label: 'public active defaults',
+      profile: { kubernetes: true },
+      probes: ['livenessProbe', 'readinessProbe'],
+      replicas: 3,
+    },
+    { label: 'held without probes', profile: held, probes: [], replicas: 0 },
+    {
+      label: 'held liveness only',
+      profile: { ...held, probe: true, probeMode: 'live-only' },
+      probes: ['livenessProbe'],
+      replicas: 0,
+    },
+    {
+      label: 'held liveness and readiness',
+      profile: { ...held, probe: true },
+      probes: ['livenessProbe', 'readinessProbe'],
+      replicas: 0,
+    },
+  ])('emits one final Deployment newline with unchanged $label semantics', async (fixture) => {
+    await makeBunProject(root);
+    await generateDeployment({ ...fixture.profile, path: root });
+    const source = await file(root, 'k8s/deployment.yaml');
+    expect(source).toMatch(/\S\n$/);
+    expect(source).not.toMatch(/[ \t]+\n/);
+    const deployment = parse(source);
+    const container = deployment.spec.template.spec.containers[0];
+    expect(deployment.spec.replicas).toBe(fixture.replicas);
+    expect(['livenessProbe', 'readinessProbe'].filter((key) => key in container)).toEqual(
+      fixture.probes,
+    );
+  });
+
   it('holds GitLab publication behind a manual job and an explicit false-default variable', async () => {
     await makeBunProject(root);
     await generateDeployment({ ...held, path: root, ci: 'gitlab' });

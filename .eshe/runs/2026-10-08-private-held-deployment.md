@@ -85,3 +85,35 @@ Consumer generation remains conditional on established exact-head Node CI.
 Final proof JSON includes all four immutable images, actual production imports
 on arm64/x64 and all emitted-file SHA256 values. MDL service repositories,
 application bodies and locks are preserved until that separate consumption gate.
+
+## Deployment end-of-file correction
+
+PR11's initial exact head `afbf838` passed all four established Node CI jobs in
+run37821276369 before actual CLI consumption into the two held service repos.
+Source commits Accounts`c99bb74` and Delivery`8eb7573` preserve those original
+emissions. Their Deployment documents have a trailing empty line, independently
+detected by `git diff --check` at lines34/40; their prior bytes also fail the
+new final-newline invariant. This is a formatting defect, not a YAML policy or
+runtime change, and root authorized a follow-up without amending those commits.
+
+Only the Deployment document's trailing whitespace is normalized to one newline.
+Four new actual-emission tests cover public/active defaults and held no-probe,
+liveness-only and liveness-plus-readiness profiles, retaining replica/probe
+semantics. Focused Linux homelab job`laptop-test-7131b91e5f15` snapshot
+`ffbc2d95d7a85ec4a26a30b2c6dc778d9b091120d81570390f0b5467ba257b3b`
+passes46/46, production build/typecheck and strict owned lint, exit0/cleanup0.
+Local build/typecheck/strict owned lint and source diff-check pass as well.
+
+Actual temporary CLI regeneration changes only `k8s/deployment.yaml` in each
+service; parsed YAML is identical and the other six generated hashes are
+unchanged. Clean Deployment hashes are Accounts
+`b354edfccc8845e637d8f6121b457759f560e97c98869b8f00e071294d04dc5a`
+and Delivery
+`618b2fd0a519f515006a9b78b31c18975304d6d66c2e884e06d1c2d4bc6e36e2`.
+Compiled emitter SHA256 is now
+`646fed66cd9ac307bba150b7c56b079bdcfba650ac10974d91e7d7288c28d83f`;
+`/tmp/mdl-held-final-clean-preview-20261008.json` supersedes the earlier newline
+receipt only. Exact follow-up Node CI remains required before real service
+regeneration. Existing Docker/package/source inputs are identical, so their
+immutable build proof is retained without a redundant rebuild. Service schema,
+doctor and diff checks must be repeated after consumption; activation stays held.
