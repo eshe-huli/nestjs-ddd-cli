@@ -46,7 +46,30 @@ immediate revocation. A wholly malformed/oversize response cannot safely
 disclose token material; it is rejected without session admission.
 
 `OpaqueSessionStore` accepts injected `SessionCommands`, a trusted stable client
-namespace, optional clock (integer seconds) and immutable duration settings.
+namespace, optional clock (integer seconds), immutable duration settings and a
+**mandatory fifth argument** `OpaqueSessionNamespace` containing `restoreEpoch`.
+The epoch must be a canonical lowercase UUIDv4 held outside the Redis persistence
+and backup failure domain. There is no default, generated operator value or
+legacy namespace fallback. Missing/invalid configuration rejects construction
+before any storage command. Existing callers must pass their explicit trusted
+epoch after the clock/settings arguments (use `undefined` and `{}` when omitted).
+For example, the application-owned wrapper supplies its already validated
+external setting:
+
+```ts
+new OpaqueSessionStore(commands, clientId, undefined, settings, {
+  restoreEpoch: externallyCustodiedRestoreEpoch,
+});
+```
+
+The constructor snapshots the epoch into a hash. Active browser, pending,
+claim, current-session and session keys include that hash within the client's
+existing Redis Cluster slot. Pending/session records also carry hash provenance.
+Retirement rows, index, leases and non-admissible markers remain client-only;
+rotation does not hide restored queued credentials. `RevocationClaim.epoch` is
+hash provenance, not an operator value or permission. The lease itself binds
+that provenance, so changing the returned claim cannot settle an old-epoch
+lease through a new-epoch owner.
 Browser cookies contain only random handles; pending PKCE and token material
 remain server-side. Client-hashed Redis Cluster slots isolate keys. Lua owns
 one-time pending claim/completion, browser/generation/client binding, fresh
@@ -55,7 +78,7 @@ durable revocation enqueue/lease/ack/retry. Only successful exact pending and
 pair commit removes the staged ticket. Once any worker claims retirement, a
 durable non-admissible marker prevents later session commit through retries or
 expired leases; only completed retirement removes that marker. Expired access retains refresh custody.
-Restart uses the same backend/client namespace; there is no local fallback.
+Restart requires the same backend/client namespace and external epoch; there is no local fallback.
 
 Defaults: session 3300s, pending 600s, browser generation 1 year, provider access
 maximum 3600s, provider refresh maximum 86400s, token custody 90000s, lease 30s,
@@ -94,3 +117,48 @@ ACLs, verified private/TLS transport, and verified encryption/access controls
 for persistent storage and backups. An unauthenticated shared Redis instance is
 not a suitable production deployment. This recipe does not provision or prove
 those operator controls.
+
+
+## Restore and retirement acceptance
+
+A normal independent application logout rotates only that browser's generation.
+Changing the external restore epoch is an operator recovery boundary, not an
+ordinary logout or shared-provider SSO logout. Current provider/canonical checks
+remain required; they cannot prove that a restored local logout generation was
+not rolled back.
+
+Before restoring Redis persistence, hold every affected application and its
+retirement workers. The operator must advance each affected client's externally
+custodied UUIDv4 outside the restored dataset and confirm the value cannot be
+restored from the same backup. Reusing a previous epoch permits pre-logout
+session/callback replay. Keep the held state until recovery reconciliation and
+storage controls are verified, then start every owner with the same current
+per-client epoch. A sibling client's epoch and keys remain independent.
+
+Under the advanced epoch, old cookies, pending callbacks and already claimed
+callbacks cannot resume admission; consumers must take the current pending
+record before exchanging a provider code. Same-epoch process/connection restart
+still works. This is explicit operator fencing, not automatic rollback detection:
+a process left running with the old epoch can still address old active keys.
+
+Retirement custody from the restored backup remains visible to the new owner.
+Existing leases expire normally; old-epoch acknowledgements through a new owner
+are refused and marker fences remain. A current owner can then lease and settle
+retirement after the provider operation succeeds. Restored active token rows in
+an abandoned epoch are not automatically enqueued or swept by this recipe.
+The operator must explicitly reconcile them before service resumes.
+
+Epoch rotation does **not** revoke provider tokens and cannot reconstruct token
+material minted, queued or deleted after the backup snapshot. A stale snapshot
+can lose those credentials and retirement tickets altogether. Recovery therefore
+also requires an independently proven provider cleanup/revocation or conservative
+provider-lifetime cutoff and externally held custody reconciliation. Never call
+browser denial a successful provider retirement. This recipe creates no operator
+epoch, secret, worker schedule or recovery-provider call.
+
+The opt-in disposable Redis suite uses native `DUMP`/`RESTORE` on only random
+synthetic client keys to reproduce stale snapshot rollback. It demonstrates the
+unsafe reused-epoch control, rotated-epoch denial before an exchange seam,
+client isolation, same-epoch restart, cross-epoch retirement visibility and
+stale lease acknowledgement refusal. It does not prove deployed AOF recovery,
+external custody, operator quiescence, provider cleanup or authorized actors.

@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 
+const RESTORE_EPOCH = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const HANDLE = /^[A-Za-z0-9_-]{43}$/;
 const SESSION_HANDLE = /^v3\.([A-Za-z0-9_-]{43})$/;
 export const SESSION_SECONDS = 3300;
@@ -55,8 +56,14 @@ function sessionSettings(input: Partial<OpaqueSessionSettings>): OpaqueSessionSe
   }
   return settings;
 }
+export type OpaqueSessionNamespace = Readonly<{ restoreEpoch: string }>;
 export type RetirementTokens = { accessToken?: string; refreshToken?: string; expiresAt: number };
-export type RevocationClaim = { ticket: string; lease: string; tokens: RetirementTokens };
+export type RevocationClaim = {
+  ticket: string;
+  lease: string;
+  epoch: string;
+  tokens: RetirementTokens;
+};
 
 export type TokenPair = {
   accessToken: string;
@@ -64,6 +71,7 @@ export type TokenPair = {
   expiresAt: number;
 };
 export type PendingLogin = {
+  epoch: string;
   browser: string;
   generation: string;
   state: string;
@@ -102,6 +110,7 @@ local raw = redis.call('GET', KEYS[1])
 if not raw then return false end
 local ok, pending = pcall(cjson.decode, raw)
 if not ok then redis.call('DEL', KEYS[1]); return false end
+if pending.epoch ~= ARGV[5] then return false end
 if pending.browser ~= ARGV[1] or pending.generation ~= ARGV[2] or pending.state ~= ARGV[3] then return false end
 redis.call('DEL', KEYS[1])
 if redis.call('GET', KEYS[2]) ~= pending.generation then return false end
@@ -139,6 +148,7 @@ local raw = redis.call('GET', KEYS[1])
 if not raw then return false end
 local ok, session = pcall(cjson.decode, raw)
 if not ok then redis.call('DEL', KEYS[1]); return false end
+if session.epoch ~= ARGV[3] then return false end
 if session.generation ~= ARGV[1] then return false end
 if redis.call('GET', ARGV[2] .. session.browser) ~= session.generation then return false end
 return raw`;
@@ -245,20 +255,34 @@ function validRetirement(value: unknown): value is RetirementTokens {
 /** All tokens and pending PKCE secrets stay in the server store. No local fallback. */
 export class OpaqueSessionStore {
   private readonly prefix: string;
+  private readonly activePrefix: string;
+  private readonly epoch: string;
   private readonly settings: Readonly<OpaqueSessionSettings>;
   constructor(
     private readonly commands: SessionCommands,
     clientId: string,
     private readonly now: () => number = () => Math.floor(Date.now() / 1000),
     settings: Partial<OpaqueSessionSettings> = {},
+    namespace: OpaqueSessionNamespace,
   ) {
+    const restoreEpoch = namespace?.restoreEpoch;
+    if (
+      typeof restoreEpoch !== 'string' ||
+      restoreEpoch.length !== 36 ||
+      !RESTORE_EPOCH.test(restoreEpoch)
+    ) {
+      throw new Error('Invalid BFF external restore epoch configuration');
+    }
+    this.epoch = hash(restoreEpoch);
     this.settings = sessionSettings(settings);
     if (!clientId.trim() || clientId.length > 256) throw new Error('Invalid BFF client namespace');
     // A stable client hash also keeps all Lua keys in one Redis Cluster slot.
     this.prefix = `oidc:bff:{${hash(clientId)}}:`;
+    // Admission state is rollback-fenced; retirement custody survives epoch rotation.
+    this.activePrefix = `${this.prefix}active:${this.epoch}:`;
   }
   private key(kind: string, id: string): string {
-    return `${this.prefix}${kind}:${hash(id)}`;
+    return `${this.activePrefix}${kind}:${hash(id)}`;
   }
   private queueKey(ticket: string): string {
     return `${this.prefix}revocation:${ticket}`;
@@ -290,6 +314,7 @@ export class OpaqueSessionStore {
         : handle();
     const pendingHandle = handle();
     const pending: PendingLogin = {
+      epoch: this.epoch,
       browser: hash(browser),
       generation,
       state: handle(),
@@ -344,11 +369,18 @@ export class OpaqueSessionStore {
           this.key('browser', browser),
           this.key('claim', state),
         ],
-        arguments: [hash(browser), generation, state, String(this.settings.loginSeconds)],
+        arguments: [
+          hash(browser),
+          generation,
+          state,
+          String(this.settings.loginSeconds),
+          this.epoch,
+        ],
       }),
     );
     if (
       !parsed ||
+      parsed['epoch'] !== this.epoch ||
       parsed['browser'] !== hash(browser) ||
       parsed['generation'] !== generation ||
       parsed['state'] !== state ||
@@ -372,6 +404,7 @@ export class OpaqueSessionStore {
   ): Promise<string | null> {
     const now = this.now();
     if (
+      pending.epoch !== this.epoch ||
       !validTokens(tokens, now) ||
       tokens.expiresAt > now + this.settings.maxProviderAccessSeconds ||
       !/^[a-f0-9]{64}$/.test(pending.browser) ||
@@ -386,10 +419,10 @@ export class OpaqueSessionStore {
     const sid = `v3.${handle()}`;
     const result = await this.commands.eval(COMPLETE, {
       keys: [
-        `${this.prefix}browser:${pending.browser}`,
+        `${this.activePrefix}browser:${pending.browser}`,
         this.key('session', sid),
         this.key('claim', pending.state),
-        `${this.prefix}current:${pending.browser}`,
+        `${this.activePrefix}current:${pending.browser}`,
         `${this.prefix}revocations`,
         this.queueKey(stagedTicket ?? 'invalid'),
         `${this.prefix}retiring:${stagedTicket ?? 'invalid'}`,
@@ -397,6 +430,7 @@ export class OpaqueSessionStore {
       arguments: [
         pending.generation,
         JSON.stringify({
+          epoch: this.epoch,
           browser: pending.browser,
           generation: pending.generation,
           activeUntil: Math.min(now + this.settings.sessionSeconds, tokens.expiresAt),
@@ -419,10 +453,11 @@ export class OpaqueSessionStore {
     const parsed = record(
       await this.commands.eval(READ, {
         keys: [this.key('session', sid)],
-        arguments: [generation, `${this.prefix}browser:`],
+        arguments: [generation, `${this.activePrefix}browser:`, this.epoch],
       }),
     );
     return parsed &&
+      parsed['epoch'] === this.epoch &&
       typeof parsed['activeUntil'] === 'number' &&
       parsed['activeUntil'] > this.now() &&
       validTokens(parsed['tokens'], this.now())
@@ -500,7 +535,7 @@ export class OpaqueSessionStore {
       keys: [`${this.prefix}revocations`],
       arguments: [
         String(this.now()),
-        lease,
+        `${this.epoch}:${lease}`,
         `${this.prefix}revocation:`,
         `${this.prefix}revocation-lease:`,
         ticket ?? '',
@@ -514,7 +549,7 @@ export class OpaqueSessionStore {
     const parsed = record(result[1]);
     if (!parsed || !validRetirement(parsed['tokens']))
       throw new Error('Invalid BFF token retirement record');
-    return { ticket: result[0], lease, tokens: parsed['tokens'] };
+    return { ticket: result[0], lease, epoch: this.epoch, tokens: parsed['tokens'] };
   }
 
   async revocationPending(ticket: string): Promise<boolean> {
@@ -528,7 +563,8 @@ export class OpaqueSessionStore {
   }
 
   async settleRevocation(claim: RevocationClaim, complete: boolean): Promise<boolean> {
-    if (!HANDLE.test(claim.ticket) || !HANDLE.test(claim.lease)) return false;
+    if (claim.epoch !== this.epoch || !HANDLE.test(claim.ticket) || !HANDLE.test(claim.lease))
+      return false;
     return (
       (await this.commands.eval(SETTLE, {
         keys: [
@@ -538,7 +574,7 @@ export class OpaqueSessionStore {
           `${this.prefix}retiring:${claim.ticket}`,
         ],
         arguments: [
-          claim.lease,
+          `${this.epoch}:${claim.lease}`,
           claim.ticket,
           complete ? 'complete' : 'retry',
           String(this.now() + this.settings.retrySeconds),
