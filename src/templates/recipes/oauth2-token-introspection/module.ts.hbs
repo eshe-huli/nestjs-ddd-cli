@@ -1,0 +1,49 @@
+import { DynamicModule, FactoryProvider, Module, ModuleMetadata } from '@nestjs/common';
+import {
+  OAUTH2_TOKEN_INTROSPECTION_OPTIONS,
+  OAuth2TokenIntrospectionClient,
+  OAuth2TokenIntrospectionOptions,
+} from './oauth2-token-introspection.client';
+
+export interface OAuth2TokenIntrospectionModuleAsyncOptions
+  extends Pick<ModuleMetadata, 'imports'> {
+  inject?: FactoryProvider<OAuth2TokenIntrospectionOptions>['inject'];
+  useFactory: FactoryProvider<OAuth2TokenIntrospectionOptions>['useFactory'];
+}
+
+const clientProvider: FactoryProvider<OAuth2TokenIntrospectionClient> = {
+  provide: OAuth2TokenIntrospectionClient,
+  inject: [OAUTH2_TOKEN_INTROSPECTION_OPTIONS],
+  useFactory: (options: OAuth2TokenIntrospectionOptions) =>
+    new OAuth2TokenIntrospectionClient(options),
+};
+
+@Module({})
+export class OAuth2TokenIntrospectionModule {
+  static register(options: OAuth2TokenIntrospectionOptions): DynamicModule {
+    return {
+      module: OAuth2TokenIntrospectionModule,
+      providers: [
+        { provide: OAUTH2_TOKEN_INTROSPECTION_OPTIONS, useValue: options },
+        clientProvider,
+      ],
+      exports: [OAuth2TokenIntrospectionClient],
+    };
+  }
+
+  static registerAsync(options: OAuth2TokenIntrospectionModuleAsyncOptions): DynamicModule {
+    return {
+      module: OAuth2TokenIntrospectionModule,
+      imports: options.imports ?? [],
+      providers: [
+        {
+          provide: OAUTH2_TOKEN_INTROSPECTION_OPTIONS,
+          inject: options.inject ?? [],
+          useFactory: options.useFactory,
+        },
+        clientProvider,
+      ],
+      exports: [OAuth2TokenIntrospectionClient],
+    };
+  }
+}

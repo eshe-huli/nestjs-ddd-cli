@@ -1,0 +1,107 @@
+# OAuth2 token introspection
+
+```sh
+ddd recipe oauth2-token-introspection --path <service> --dry-run
+ddd recipe oauth2-token-introspection --path <service>
+```
+
+The recipe adds a dependency-free RFC7662 client, sync/async Nest module, barrel,
+consumer tests and this document. It does not wire AppModule, install packages,
+change lockfiles or grant access. Dry-run writes nothing. All targets are checked
+before writes; differing files and symlinks fail closed, identical reruns are
+untouched, and failed writes roll back unchanged files created by this invocation.
+Rollback checks inode, timestamps and content; concurrent owner changes are
+preserved and reported as an explicit rollback conflict.
+
+## Configuration and composition
+
+Import the owning module; do not redeclare its exported client in a consumer.
+
+```ts
+OAuth2TokenIntrospectionModule.registerAsync({
+  imports: [ConfigModule],
+  inject: [ConfigService],
+  useFactory: (config: ConfigService): OAuth2TokenIntrospectionOptions => ({
+    introspectionUrl: config.getOrThrow<string>('OAUTH2_INTROSPECTION_URL'),
+    requestHeaders: { authorization: config.getOrThrow<string>('OAUTH2_INTROSPECTION_AUTHORIZATION') },
+    timeoutMs: 3000,
+  }),
+})
+```
+
+Set the exact trusted URL and required provider authentication headers from
+validated deployment configuration. Never derive the URL or headers from a
+request. HTTPS is the default. Credentials, queries and fragments in the URL
+are rejected; redirects are disabled. For a verified private HTTP endpoint,
+explicitly set `trustedInternalHttp: true`. For example, self-hosted Hydra v26.2.0
+can use `http://hydra-admin.ory-staging.svc.cluster.local:4445/admin/oauth2/introspect`.
+This opt-in does not add TLS or secure a cluster: the operator must establish
+private routing and network policy and keep admin ports off public ingress.
+Hydra's admin listener uses private network protection; do not assume a Basic
+header authenticates it. Omit `requestHeaders` when the selected server does not
+require them. No introspection endpoint is discovered from token contents.
+
+Options snapshot URL/headers and bound timeout (10..30000 ms, default 3000),
+response bytes (128..1048576, default 65536) and token bytes (1..65536, default
+16384). Tokens must be nonempty visible ASCII without a Bearer prefix. A timeout
+includes transport and response streaming; even a noncompliant transport cannot
+hold the caller indefinitely. `transport(url, RequestInit)` is an injectable
+Fetch-compatible seam for tests or an owned transport; it must honor the URL,
+AbortSignal and redirect policy. No retries or positive-validation cache exist.
+Every call rechecks the provider. Runtime baseline is Node 18+ or Bun with Fetch
+and Web Streams; no consumer dependency installation is needed.
+
+## Evidence and consumer policy
+
+`introspect(originalAccessToken)` POSTs form-encoded `token` and
+`token_type_hint=access_token`. The hint does not prove token kind. Active false
+throws `InvalidOAuth2TokenError`; active true returns immutable evidence with
+optional issuer, subject, client ID, numeric dates, token type/use, audience and
+scope arrays, raw claims, and provider extensions. RFC7662 permits missing
+claims; the client does not invent them or map them into people or permissions.
+
+Prefer `validate(token, policy)` to return only a consumer-approved principal:
+
+```ts
+const principal = await client.validate(token, {
+  validate: async (evidence) => {
+    // The owner must enforce the selected provider's required issuer, resource
+    // audience, authorized client, time, access-token profile and actor contract.
+    // Then check canonical identity, current session/revocation and domain scope.
+    if (evidence.issuer !== trustedIssuer || evidence.tokenUse !== 'access_token') {
+      throw new InvalidOAuth2TokenError('policy_rejected');
+    }
+    return owningAdmissionPolicy.resolve(evidence);
+  },
+});
+```
+
+The example delegates the remaining checks; matching issuer and token_use alone
+is insufficient. No generic grant-type or human/machine inference is made.
+ZITADEL JWT validation remains a separate supported recipe; this transport must
+not become an automatic fallback after a rejected token. For Hydra v26.2.0,
+introspection returns `client_id`, `token_use`, `aud` and `ext`; arbitrary
+consent `session.access_token` data is returned in `ext` and carried through
+refresh grants. A Kratos binding in that data is a consumer-defined convention,
+not a built-in introspection session field. Hydra and Kratos session revocation
+are separate; the owner must validate any bound Kratos session independently.
+
+## Failures and proof
+
+`InvalidOAuth2TokenError` means malformed, inactive or explicitly policy-rejected
+credentials; map to the consumer's denial response. `OAuth2IntrospectionUnavailableError`
+means timeout, transport, HTTP, malformed upstream response or unexpected policy
+failure; deny access while distinguishing an unavailable validator operationally.
+Errors contain fixed messages and safe reason enums, never tokens, headers,
+claims, URLs or upstream bodies. The client performs no logging. Explicit policy
+errors preserve these safe classes; unexpected exceptions are sanitized.
+Policy implementations own their own I/O limits and must not log credentials.
+
+The generated spec verifies wire format, immutable evidence, no validation
+cache, denial, HTTP opt-in, malformed/bounded responses, hangs, error redaction,
+consumer policy and module ownership. It proves a transport contract, not
+deployment, provider authentication, clinical permissions or real actor access.
+
+Sources: [RFC7662](https://www.rfc-editor.org/rfc/rfc7662),
+[pinned Hydra API](https://raw.githubusercontent.com/ory/hydra/v26.2.0/spec/api.json),
+[pinned Hydra admin server](https://raw.githubusercontent.com/ory/hydra/v26.2.0/cmd/server/handler.go).

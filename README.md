@@ -41,6 +41,21 @@ ddd security-patterns
 ddd observability
 ```
 
+## OAuth2 token introspection
+
+Generate a bounded RFC7662 client and an owning Nest module:
+
+```sh
+ddd recipe oauth2-token-introspection --path <service> --dry-run
+ddd recipe oauth2-token-introspection --path <service>
+```
+
+The client rechecks the provider on every call and returns immutable evidence.
+The consuming service supplies principal/session/permission policy. HTTPS is the
+default; verified private HTTP requires explicit opt-in. See the
+[generated operator guide](src/templates/recipes/oauth2-token-introspection/README.md.hbs)
+for async registration, limits, failure handling and provider compatibility.
+
 ## Commands
 
 ### Core Commands
