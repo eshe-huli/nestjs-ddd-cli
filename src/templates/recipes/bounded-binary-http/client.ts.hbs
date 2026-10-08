@@ -55,6 +55,8 @@ export interface BoundedBinaryHttpRequest {
   query?: Readonly<Record<string, string>>;
   body?: Uint8Array;
   signal?: AbortSignal;
+  /** An explicit fixed collection path suffix; segments remain nonempty. */
+  trailingSlash?: boolean;
 }
 
 export interface BoundedBinaryHttpResponse {
@@ -372,7 +374,15 @@ export class BoundedBinaryHttpClient {
     if (!['HEAD', 'GET', 'POST', 'PATCH'].includes(method)) {
       throw new Error('Invalid bounded binary HTTP method');
     }
-    const target = this.target(pathSegments, options.query ?? {});
+    const trailingSlash = options.trailingSlash;
+    if (trailingSlash !== undefined && typeof trailingSlash !== 'boolean') {
+      throw new Error('Invalid bounded binary HTTP path suffix');
+    }
+    const target = this.target(
+      pathSegments,
+      options.query ?? {},
+      trailingSlash ?? false,
+    );
     const supplied = requestHeaders(options.headers ?? {}, this.requestAllowed);
     const headers: Record<string, string> = { ...this.configuredHeaders };
     for (const [name, value] of Object.entries(supplied)) {
@@ -558,6 +568,7 @@ export class BoundedBinaryHttpClient {
   private target(
     pathSegments: readonly string[],
     query: Readonly<Record<string, string>>,
+    trailingSlash: boolean,
   ): string {
     if (
       !Array.isArray(pathSegments) ||
@@ -583,7 +594,9 @@ export class BoundedBinaryHttpClient {
         throw new Error('Invalid bounded binary HTTP path');
       }
     });
-    const url = new URL(`${this.origin}/${encoded.join('/')}`);
+    const url = new URL(
+      `${this.origin}/${encoded.join('/')}${trailingSlash ? '/' : ''}`,
+    );
     const pairs = entries(query);
     if (pairs.length > 32) throw new Error('Invalid bounded binary HTTP query');
     for (const [key, value] of pairs) {

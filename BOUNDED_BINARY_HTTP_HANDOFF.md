@@ -117,3 +117,14 @@ does not authorize consumption of this corrective source.
 Required exact-head Node 18/20/22/24 CI is separate publication evidence and must
 be read back before consumption. No real keys, private native storage, Tus hooks,
 MinIO bytes, authorized actors, staging or production were exercised here.
+
+The Media consumer exposed a fixed Tus collection path prerequisite: empty
+segments are intentionally rejected, so `['files', '']` cannot select `/files/`.
+An additive request option `trailingSlash?: boolean` now snapshots and strictly
+validates the boolean before dispatch, then appends only one slash after the
+same encoded nonempty segments. The default remains unchanged. A real loopback
+case proves `/files` twice and `/files/` once; empty segments and invalid option
+types still fail before transport, and redirects remain refused. Current
+focused output: 10 generator cases and 47 emitted behaviors pass, including
+strict output compilation. Media consumption awaits this delta's exact Node
+18/20/22/24 matrix; no emitted helper was hand-edited to obtain the suffix.

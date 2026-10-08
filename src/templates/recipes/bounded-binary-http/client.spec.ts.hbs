@@ -148,6 +148,14 @@ describe('Bounded binary transport emitted contract', () => {
     const accessor = jest.fn(() => 'secret');
     const query = Object.defineProperty({}, 'key', { get: accessor });
     await expect(client.request('GET', ['..'])).rejects.toThrow('path');
+    await expect(
+      client.request('POST', ['files', ''], { trailingSlash: true }),
+    ).rejects.toThrow('path');
+    await expect(
+      client.request('POST', ['files'], {
+        trailingSlash: 'true' as unknown as boolean,
+      }),
+    ).rejects.toThrow('path suffix');
     await expect(client.request('GET', ['x\n'])).rejects.toThrow('path');
     await expect(client.request('GET', ['files'], { query })).rejects.toThrow(
       'dictionary',
@@ -649,6 +657,25 @@ describe('Actual loopback HTTP transport', () => {
       ),
     ).toBe('native bytes');
     expect(attempts).toEqual({ '/head': 1, '/echo': 1 });
+  });
+
+  it('appends only an explicit trailing collection slash without changing the default', async () => {
+    const bounded = client();
+    await bounded.request('POST', ['files'], { body: bytes('default') });
+    await bounded.request('POST', ['files'], {
+      trailingSlash: false,
+      body: bytes('same'),
+    });
+    const result = await bounded.request('POST', ['files'], {
+      trailingSlash: true,
+      body: bytes('collection'),
+    });
+    expect(decoded(result.body)).toBe('collection');
+    expect(attempts).toEqual({ '/files': 2, '/files/': 1 });
+    await expect(
+      bounded.request('POST', ['redirect'], { trailingSlash: false }),
+    ).rejects.toBeInstanceOf(BoundedBinaryHttpUnavailableError);
+    expect(attempts['/destination']).toBeUndefined();
   });
 
   it('rejects an actual redirect without following the target', async () => {

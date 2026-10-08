@@ -10,6 +10,10 @@ bounds for time and request/response bytes. HTTPS is required unless trusted
 internal HTTP is explicitly configured. Caller dictionaries cannot replace
 server headers. Headers, path segments, query parameters and actual bodies are
 bounded. Path segments are percent-encoded by the client.
+Nonempty segments are required. An explicit boolean `trailingSlash: true`
+appends one slash for a fixed collection path such as `/files/`; the default
+and `false` leave the encoded path unchanged. This creates no new origin or
+redirect authority.
 
 `request('HEAD' | 'GET' | 'POST' | 'PATCH', pathSegments, options)` snapshots a
 `Uint8Array` request body before asynchronous transport. It makes exactly one
