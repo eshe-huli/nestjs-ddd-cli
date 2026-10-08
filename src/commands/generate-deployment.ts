@@ -1,5 +1,7 @@
 import * as path from 'path';
 import chalk from 'chalk';
+import * as fs from 'fs-extra';
+import { parse } from 'yaml';
 import { ensureDir, writeFile, fileExists } from '../utils/file.utils';
 
 export interface DeploymentOptions {
@@ -8,125 +10,344 @@ export interface DeploymentOptions {
   compose?: boolean;
   ci?: 'github' | 'gitlab' | 'none';
   kubernetes?: boolean;
+  visibility?: 'public' | 'private';
+  state?: 'active' | 'held';
+  serviceName?: string;
+  port?: string | number;
+  packageManager?: 'npm' | 'bun';
+  probePath?: string;
+  probeMode?: 'live-only' | 'live-and-ready';
+  probe?: boolean;
+  nodeImage?: string;
+}
+
+interface DeploymentProfile {
+  visibility: 'public' | 'private';
+  state: 'active' | 'held';
+  serviceName: string;
+  port: number;
+  packageManager: 'npm' | 'bun';
+  probePath: string | undefined;
+  probeMode: 'live-only' | 'live-and-ready';
+  nodeImage: string;
+  hasPrisma: boolean;
+  hasNestConfig: boolean;
+}
+
+interface DeploymentFile {
+  destination: string;
+  content: string;
+}
+
+const BUN_IMAGE =
+  'oven/bun:1.4.0-alpine@sha256:07235578f79ef8c6f97d94aee7938e76f5cdba5f21ae5dbfdd3d3d38058437eb';
+
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+async function lstatOrAbsent(target: string): Promise<fs.Stats | undefined> {
+  try {
+    return await fs.lstat(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
+async function readOwnedFile(basePath: string, name: string): Promise<string> {
+  const target = path.join(basePath, name);
+  const stat = await lstatOrAbsent(target);
+  if (!stat?.isFile() || stat.isSymbolicLink() || stat.size > 10 * 1024 * 1024) {
+    throw new Error(`A regular project-owned ${name} is required`);
+  }
+  return fs.readFile(target, 'utf8');
+}
+
+async function resolveProfile(
+  basePath: string,
+  options: DeploymentOptions,
+): Promise<DeploymentProfile> {
+  const visibility = options.visibility ?? 'public';
+  const state = options.state ?? 'active';
+  const packageManager = options.packageManager ?? 'npm';
+  const serviceName = options.serviceName ?? 'nestjs-app';
+  const portText = String(options.port ?? 3000);
+  const nodeImage = options.nodeImage ?? 'node:20-alpine';
+  const probeMode = options.probeMode ?? 'live-and-ready';
+  if (!['live-only', 'live-and-ready'].includes(probeMode)) throw new Error('Invalid probe mode');
+  if (!['public', 'private'].includes(visibility)) throw new Error('Invalid visibility');
+  if (!['active', 'held'].includes(state)) throw new Error('Invalid state');
+  if (!['npm', 'bun'].includes(packageManager)) throw new Error('Invalid package manager');
+  if (options.ci !== undefined && !['github', 'gitlab', 'none'].includes(options.ci))
+    throw new Error('Invalid CI type');
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(serviceName))
+    throw new Error('Invalid service name');
+  if (!/^[1-9][0-9]{0,4}$/.test(portText) || Number(portText) > 65535)
+    throw new Error('Invalid port');
+  if (!/^node:(20|22|24)-alpine(?:@sha256:[a-f0-9]{64})?$/.test(nodeImage))
+    throw new Error('Invalid supported Node Alpine image');
+  if (options.probe === false && options.probePath !== undefined)
+    throw new Error('--no-probe conflicts with --probe-path');
+  const probePath = options.probe === false ? undefined : (options.probePath ?? '/health');
+  if (
+    probePath !== undefined &&
+    (!/^\/[A-Za-z0-9/_-]{0,199}$/.test(probePath) || probePath.includes('//'))
+  )
+    throw new Error('Invalid probe path');
+  if (state === 'held' && options.compose !== false)
+    throw new Error('Held deployment requires --no-compose');
+  if (visibility === 'private' && options.compose !== false)
+    throw new Error('Private deployment requires --no-compose');
+
+  if (packageManager === 'bun') {
+    const manifest: unknown = JSON.parse(await readOwnedFile(basePath, 'package.json'));
+    const lock: unknown = parse(await readOwnedFile(basePath, 'bun.lock'), { maxAliasCount: 0 });
+    if (
+      !record(manifest) ||
+      !record(lock) ||
+      ![1, 2].includes(Number(lock['lockfileVersion'])) ||
+      !record(lock['workspaces']) ||
+      !record(lock['workspaces'][''])
+    )
+      throw new Error('Invalid Bun manifest/lock provenance');
+    const workspace = lock['workspaces'][''];
+    if (typeof manifest['name'] !== 'string' || workspace['name'] !== manifest['name'])
+      throw new Error('Bun lock workspace name mismatch');
+    for (const field of [
+      'dependencies',
+      'devDependencies',
+      'optionalDependencies',
+      'peerDependencies',
+    ]) {
+      const declared = manifest[field] ?? {};
+      const locked = workspace[field] ?? {};
+      if (
+        !record(declared) ||
+        !record(locked) ||
+        Object.keys(declared).length !== Object.keys(locked).length ||
+        Object.entries(declared).some(
+          ([name, version]) => typeof version !== 'string' || locked[name] !== version,
+        )
+      )
+        throw new Error(`Bun lock ${field} mismatch`);
+    }
+    if (!record(lock['packages'])) throw new Error('Bun lock has no package resolutions');
+    if (Object.keys(lock['workspaces']).length !== 1)
+      throw new Error('Bun deployment requires a single-package lock');
+    for (const field of [
+      'dependencies',
+      'devDependencies',
+      'optionalDependencies',
+      'peerDependencies',
+    ]) {
+      const dependencies = workspace[field] ?? {};
+      if (!record(dependencies)) throw new Error('Invalid Bun dependency declarations');
+      for (const name of Object.keys(dependencies)) {
+        const resolution = lock['packages'][name];
+        if (!Array.isArray(resolution) || typeof resolution[0] !== 'string')
+          throw new Error(`Bun lock has no resolution for ${name}`);
+      }
+    }
+  }
+  if (visibility === 'private' && packageManager === 'npm') {
+    const manifest: unknown = JSON.parse(await readOwnedFile(basePath, 'package.json'));
+    const lock: unknown = JSON.parse(await readOwnedFile(basePath, 'package-lock.json'));
+    if (
+      !record(manifest) ||
+      !record(lock) ||
+      ![2, 3].includes(Number(lock['lockfileVersion'])) ||
+      !record(lock['packages']) ||
+      !record(lock['packages'][''])
+    )
+      throw new Error('Invalid npm manifest/lock provenance');
+    const workspace = lock['packages'][''];
+    if (workspace['name'] !== manifest['name']) throw new Error('npm lock package name mismatch');
+    for (const field of [
+      'dependencies',
+      'devDependencies',
+      'optionalDependencies',
+      'peerDependencies',
+    ]) {
+      const declared = manifest[field] ?? {};
+      const locked = workspace[field] ?? {};
+      if (
+        !record(declared) ||
+        !record(locked) ||
+        Object.keys(declared).length !== Object.keys(locked).length ||
+        Object.entries(declared).some(
+          ([name, version]) => typeof version !== 'string' || locked[name] !== version,
+        )
+      )
+        throw new Error(`npm lock ${field} mismatch`);
+    }
+  }
+  const schema = await lstatOrAbsent(path.join(basePath, 'prisma/schema.prisma'));
+  const prismaDirectory = await lstatOrAbsent(path.join(basePath, 'prisma'));
+  const hasPrisma =
+    !!schema?.isFile() &&
+    !schema.isSymbolicLink() &&
+    !!prismaDirectory?.isDirectory() &&
+    !prismaDirectory.isSymbolicLink();
+  const nestConfig = await lstatOrAbsent(path.join(basePath, 'nest-cli.json'));
+  const hasNestConfig = !!nestConfig?.isFile() && !nestConfig.isSymbolicLink();
+  return {
+    visibility,
+    state,
+    serviceName,
+    port: Number(portText),
+    packageManager,
+    probePath,
+    probeMode,
+    nodeImage,
+    hasPrisma,
+    hasNestConfig,
+  };
+}
+
+async function assertPrivateTarget(basePath: string, destination: string): Promise<void> {
+  const target = path.join(basePath, destination);
+  let cursor = target;
+  while (true) {
+    const stat = await lstatOrAbsent(cursor);
+    if (stat?.isSymbolicLink()) throw new Error(`Refusing symlink deployment target: ${cursor}`);
+    if (stat && cursor !== target && !stat.isDirectory())
+      throw new Error(`Deployment parent is not a directory: ${cursor}`);
+    if (cursor === basePath) break;
+    cursor = path.dirname(cursor);
+  }
+  if (await lstatOrAbsent(target))
+    throw new Error(`Refusing to overwrite private deployment file: ${destination}`);
 }
 
 export async function generateDeployment(options: DeploymentOptions) {
+  const basePath = path.resolve(options.path || process.cwd());
+  const profile = await resolveProfile(basePath, options);
   console.log(chalk.blue('\n🚀 Generating deployment configurations...\n'));
-
-  const basePath = options.path || process.cwd();
-
-  // Generate Dockerfile
-  if (options.docker !== false) {
-    await generateDockerfile(basePath);
+  const files: DeploymentFile[] = [];
+  if (options.docker !== false) files.push(...(await generateDockerfile(basePath, profile)));
+  if (options.compose !== false) files.push(...(await generateDockerCompose(basePath, profile)));
+  if (options.ci && options.ci !== 'none')
+    files.push(...(await generateCIPipeline(basePath, options.ci, profile)));
+  if (options.kubernetes) files.push(...(await generateKubernetesManifests(basePath, profile)));
+  files.push(
+    ...(await generateDockerIgnore(basePath)),
+    ...(await generateEnvExample(basePath, profile)),
+  );
+  if (
+    profile.state === 'held' &&
+    options.kubernetes &&
+    (await lstatOrAbsent(path.join(basePath, 'k8s/hpa.yaml')))
+  ) {
+    throw new Error('Refusing existing HPA in held deployment');
   }
-
-  // Generate docker-compose
-  if (options.compose !== false) {
-    await generateDockerCompose(basePath);
+  if (profile.visibility === 'private') {
+    // Preflight every selected target before the first write, including dangling links.
+    for (const file of files) await assertPrivateTarget(basePath, file.destination);
+    if (options.kubernetes) {
+      for (const destination of ['k8s/ingress.yaml', 'k8s/hpa.yaml']) {
+        if (!files.some((file) => file.destination === destination))
+          await assertPrivateTarget(basePath, destination);
+      }
+    }
   }
-
-  // Generate CI/CD pipeline
-  if (options.ci && options.ci !== 'none') {
-    await generateCIPipeline(basePath, options.ci);
+  for (const file of files) {
+    const target = path.join(basePath, file.destination);
+    if (profile.visibility === 'private') {
+      await assertPrivateTarget(basePath, file.destination);
+      await ensureDir(path.dirname(target));
+      // Preserve a concurrently created file instead of truncating it.
+      await fs.writeFile(target, file.content, { encoding: 'utf8', flag: 'wx' });
+    } else {
+      await writeFile(target, file.content);
+    }
+    console.log(chalk.green(`  ✓ ${file.destination}`));
   }
-
-  // Generate Kubernetes manifests
-  if (options.kubernetes) {
-    await generateKubernetesManifests(basePath);
-  }
-
-  // Generate .dockerignore
-  await generateDockerIgnore(basePath);
-
-  // Generate .env.example
-  await generateEnvExample(basePath);
-
   console.log(chalk.green('\n✅ Deployment configurations generated successfully!'));
-  console.log(chalk.yellow('\n📋 Next steps:'));
-  console.log('   1. Review and customize the generated files');
-  console.log('   2. Update environment variables in .env');
-  console.log(`   3. Build: ${chalk.cyan('docker build -t my-app .')}`);
-  console.log(`   4. Run: ${chalk.cyan('docker-compose up -d')}`);
+  console.log(
+    profile.state === 'held'
+      ? chalk.yellow(
+          'Held source only: replicas 0; review image, private network and readiness before activation.',
+        )
+      : chalk.yellow('Review generated files and environment before deployment.'),
+  );
 }
 
-async function generateDockerfile(basePath: string) {
+async function generateDockerfile(
+  basePath: string,
+  profile: DeploymentProfile,
+): Promise<DeploymentFile[]> {
   const dockerfilePath = path.join(basePath, 'Dockerfile');
 
-  if (await fileExists(dockerfilePath)) {
+  if (profile.visibility === 'public' && (await fileExists(dockerfilePath))) {
     console.log(chalk.yellow('  Dockerfile already exists. Skipping...'));
-    return;
+    return [];
   }
 
-  const content = `# Stage 1: Build
-FROM node:20-alpine AS builder
+  const prismaCopy = profile.hasPrisma ? 'COPY prisma ./prisma\n' : '';
+  const prismaGenerate = profile.hasPrisma
+    ? `RUN ${profile.packageManager === 'bun' ? 'bun ./node_modules/prisma/build/index.js' : 'npx prisma'} generate\n`
+    : '';
+  const prismaProductionCopy = profile.hasPrisma
+    ? 'COPY --from=builder --chown=nestjs:nodejs /app/prisma ./prisma\n'
+    : '';
+  const healthcheck =
+    profile.probePath === undefined
+      ? 'HEALTHCHECK NONE\n'
+      : `HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \\\n  CMD wget --no-verbose --tries=1 --spider http://localhost:${profile.port}${profile.probePath} || exit 1\n`;
+  const bunStages =
+    profile.packageManager === 'bun'
+      ? `FROM ${BUN_IMAGE} AS bun-runtime
 
+# Production dependencies are installed inside the container with portable paths.
+FROM ${profile.nodeImage} AS production-dependencies
+COPY --from=bun-runtime /usr/local/bin/bun /usr/local/bin/bun
 WORKDIR /app
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile --production --linker=hoisted
 
-# Copy package files
-COPY package*.json ./
+`
+      : '';
+  const install =
+    profile.packageManager === 'bun'
+      ? `COPY --from=bun-runtime /usr/local/bin/bun /usr/local/bin/bun
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile --linker=hoisted`
+      : 'COPY package*.json ./\nRUN npm ci';
+  const content = `${bunStages}# Stage 1: Build
+FROM ${profile.nodeImage} AS builder
+WORKDIR /app
+${install}
 COPY tsconfig*.json ./
-
-# Install dependencies
-RUN npm ci
-
-# Copy source code
-COPY src ./src
-COPY prisma ./prisma 2>/dev/null || true
-
-# Generate Prisma client if prisma folder exists
-RUN if [ -d "prisma" ]; then npx prisma generate; fi
-
-# Build the application
-RUN npm run build
-
-# Remove dev dependencies
-RUN npm prune --production
-
-# Stage 2: Production
-FROM node:20-alpine AS production
-
+${profile.hasNestConfig ? 'COPY nest-cli.json ./\n' : ''}COPY src ./src
+${prismaCopy}${prismaGenerate}RUN ${profile.packageManager === 'bun' ? 'bun run --bun' : 'npm run'} build
+${profile.packageManager === 'npm' ? 'RUN npm prune --production\n' : ''}
+# Stage 2: Production (Node runtime remains unchanged)
+FROM ${profile.nodeImage} AS production
 WORKDIR /app
-
-# Add non-root user for security
-RUN addgroup -g 1001 -S nodejs && \\
-    adduser -S nestjs -u 1001
-
-# Copy built assets from builder
-COPY --from=builder --chown=nestjs:nodejs /app/node_modules ./node_modules
-COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
+RUN addgroup -g 1001 -S nodejs && \\\n    adduser -S nestjs -u 1001
+COPY --from=${profile.packageManager === 'bun' ? 'production-dependencies' : 'builder'} --chown=nestjs:nodejs /app/node_modules ./node_modules
+${profile.hasPrisma && profile.packageManager === 'bun' ? 'COPY --from=builder --chown=nestjs:nodejs /app/node_modules/.prisma ./node_modules/.prisma\n' : ''}COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
 COPY --from=builder --chown=nestjs:nodejs /app/package*.json ./
-
-# Copy Prisma files if they exist
-COPY --from=builder --chown=nestjs:nodejs /app/prisma ./prisma 2>/dev/null || true
-
-# Set environment variables
-ENV NODE_ENV=production
-ENV PORT=3000
-
-# Expose port
-EXPOSE 3000
-
-# Switch to non-root user
+${prismaProductionCopy}ENV NODE_ENV=production
+ENV PORT=${profile.port}
+EXPOSE ${profile.port}
 USER nestjs
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \\
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
-
-# Start the application
-CMD ["node", "dist/main"]
+${healthcheck}CMD ["node", "dist/main"]
 `;
 
-  await writeFile(dockerfilePath, content);
-  console.log(chalk.green('  ✓ Dockerfile'));
+  return [{ destination: 'Dockerfile', content }];
 }
 
-async function generateDockerCompose(basePath: string) {
+async function generateDockerCompose(
+  basePath: string,
+  profile: DeploymentProfile,
+): Promise<DeploymentFile[]> {
   const composePath = path.join(basePath, 'docker-compose.yml');
 
   if (await fileExists(composePath)) {
     console.log(chalk.yellow('  docker-compose.yml already exists. Skipping...'));
-    return;
+    return [];
   }
 
   const content = `version: "3.8"
@@ -136,10 +357,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: nestjs-app
+    container_name: ${profile.serviceName}
     restart: unless-stopped
     ports:
-      - "\${PORT:-3000}:3000"
+      - "\${PORT:-${profile.port}}:${profile.port}"
     environment:
       - NODE_ENV=production
       - DATABASE_URL=\${DATABASE_URL}
@@ -150,12 +371,16 @@ services:
       - redis
     networks:
       - app-network
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+${
+  profile.probePath === undefined
+    ? '    healthcheck:\n      disable: true'
+    : `    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:${profile.port}${profile.probePath}"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 40s`
+}
 
   postgres:
     image: postgres:15-alpine
@@ -220,24 +445,27 @@ networks:
     driver: bridge
 `;
 
-  await writeFile(composePath, content);
-  console.log(chalk.green('  ✓ docker-compose.yml'));
+  return [{ destination: 'docker-compose.yml', content }];
 }
 
-async function generateCIPipeline(basePath: string, ciType: 'github' | 'gitlab') {
+async function generateCIPipeline(
+  basePath: string,
+  ciType: 'github' | 'gitlab',
+  profile: DeploymentProfile,
+): Promise<DeploymentFile[]> {
   if (ciType === 'github') {
-    await generateGitHubActions(basePath);
-  } else if (ciType === 'gitlab') {
-    await generateGitLabCI(basePath);
+    return generateGitHubActions(basePath, profile);
+  } else {
+    return generateGitLabCI(basePath, profile);
   }
 }
 
-async function generateGitHubActions(basePath: string) {
-  const workflowsPath = path.join(basePath, '.github/workflows');
-  await ensureDir(workflowsPath);
-
+async function generateGitHubActions(
+  _basePath: string,
+  profile: DeploymentProfile,
+): Promise<DeploymentFile[]> {
   // CI Pipeline
-  const ciContent = `name: CI
+  let ciContent = `name: CI
 
 on:
   push:
@@ -333,11 +561,70 @@ jobs:
           path: dist/
 `;
 
-  await writeFile(path.join(workflowsPath, 'ci.yml'), ciContent);
-  console.log(chalk.green('  ✓ .github/workflows/ci.yml'));
+  if (profile.visibility === 'private') {
+    ciContent = `name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+${
+  profile.packageManager === 'bun'
+    ? `      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"
+`
+    : `      - uses: actions/setup-node@v4
+        with:
+          node-version: "${profile.nodeImage.slice(5, 7)}"
+          cache: npm
+`
+}      - name: Install locked dependencies
+        run: ${profile.packageManager === 'bun' ? 'bun install --frozen-lockfile --linker=hoisted' : 'npm ci'}
+      - name: Lint
+        run: ${profile.packageManager === 'bun' ? 'bun run --bun' : 'npm run'} lint
+      - name: Typecheck
+        run: ${profile.packageManager === 'bun' ? 'bun run --bun' : 'npm run'} typecheck
+      - name: Test source
+        run: ${profile.packageManager === 'bun' ? `bun run --bun test --testEnvironmentOptions='{"globalsCleanup":"off"}'` : 'npm test'}
+      - name: Build
+        run: ${profile.packageManager === 'bun' ? 'bun run --bun' : 'npm run'} build
+# Native database/restore/provider proof is separate from this source gate.
+`;
+  } else if (profile.packageManager === 'bun') {
+    ciContent = ciContent
+      .replace(
+        /      - name: Setup Node.js[\s\S]*?cache: "npm"/g,
+        `      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"`,
+      )
+      .replace(/npm ci/g, 'bun install --frozen-lockfile --linker=hoisted')
+      .replace(/npm run/g, 'bun run --bun')
+      .replace(
+        'npm test -- --coverage',
+        `bun run --bun test --coverage --testEnvironmentOptions='{"globalsCleanup":"off"}'`,
+      );
+  }
+
+  ciContent = ciContent.replace(
+    /node-version: "20"/g,
+    `node-version: "${profile.nodeImage.slice(5, 7)}"`,
+  );
 
   // CD Pipeline
-  const cdContent = `name: CD
+  let cdContent = `name: CD
 
 on:
   push:
@@ -393,19 +680,69 @@ jobs:
           cache-to: type=gha,mode=max
 `;
 
-  await writeFile(path.join(workflowsPath, 'cd.yml'), cdContent);
-  console.log(chalk.green('  ✓ .github/workflows/cd.yml'));
-}
+  if (profile.state === 'held') {
+    cdContent = `name: Held image build
 
-async function generateGitLabCI(basePath: string) {
-  const gitlabCIPath = path.join(basePath, '.gitlab-ci.yml');
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish reviewed image (does not activate a workload)
+        type: boolean
+        default: false
+        required: true
 
-  if (await fileExists(gitlabCIPath)) {
-    console.log(chalk.yellow('  .gitlab-ci.yml already exists. Skipping...'));
-    return;
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Registry login for explicit publish only
+        if: inputs.publish == true
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: \${{ github.actor }}
+          password: \${{ secrets.GITHUB_TOKEN }}
+      - name: Normalize repository image name
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/\${{ github.repository }}
+          flavor: latest=false
+          tags: type=raw,value=sha-\${{ github.sha }}
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: \${{ inputs.publish == true }}
+          tags: \${{ steps.meta.outputs.tags }}
+          labels: \${{ steps.meta.outputs.labels }}
+# No deploy, migrations, cluster credentials or automatic publish.
+`;
   }
 
-  const content = `stages:
+  return [
+    { destination: '.github/workflows/ci.yml', content: ciContent },
+    { destination: '.github/workflows/cd.yml', content: cdContent },
+  ];
+}
+
+async function generateGitLabCI(
+  basePath: string,
+  profile: DeploymentProfile,
+): Promise<DeploymentFile[]> {
+  const gitlabCIPath = path.join(basePath, '.gitlab-ci.yml');
+
+  if (profile.visibility === 'public' && (await fileExists(gitlabCIPath))) {
+    console.log(chalk.yellow('  .gitlab-ci.yml already exists. Skipping...'));
+    return [];
+  }
+
+  let content = `stages:
   - test
   - build
   - deploy
@@ -480,41 +817,86 @@ docker:
     - tags
 `;
 
-  await writeFile(gitlabCIPath, content);
-  console.log(chalk.green('  ✓ .gitlab-ci.yml'));
+  if (profile.visibility === 'private') {
+    content = `stages: [test, build]
+
+source:
+  image: ${profile.packageManager === 'bun' ? BUN_IMAGE : profile.nodeImage}
+  stage: test
+  script:
+    - ${profile.packageManager === 'bun' ? 'bun install --frozen-lockfile --linker=hoisted' : 'npm ci'}
+    - ${profile.packageManager === 'bun' ? 'bun run --bun' : 'npm run'} lint
+    - ${profile.packageManager === 'bun' ? 'bun run --bun' : 'npm run'} typecheck
+    - ${profile.packageManager === 'bun' ? `bun run --bun test --testEnvironmentOptions='{"globalsCleanup":"off"}'` : 'npm test'}
+    - ${profile.packageManager === 'bun' ? 'bun run --bun' : 'npm run'} build
+`;
+  } else if (profile.packageManager === 'bun') {
+    content = content
+      .replace('image: node:20-alpine', `image: ${BUN_IMAGE}`)
+      .replace(/npm ci/g, 'bun install --frozen-lockfile --linker=hoisted')
+      .replace(/npm run/g, 'bun run --bun')
+      .replace(
+        'npm test -- --coverage',
+        `bun run --bun test --coverage --testEnvironmentOptions='{"globalsCleanup":"off"}'`,
+      );
+  }
+  content = content.replace('image: node:20-alpine', `image: ${profile.nodeImage}`);
+  if (profile.state === 'held') {
+    const heldDocker = `variables:
+  PUBLISH_IMAGE: "false"
+
+docker:
+  stage: build
+  image: docker:24-dind
+  services: [docker:24-dind]
+  when: manual
+  script:
+    - docker build -t \$CI_REGISTRY_IMAGE:\$CI_COMMIT_SHA .
+    - |
+      if [ "\$PUBLISH_IMAGE" = "true" ]; then
+        printf '%s' "\$CI_REGISTRY_PASSWORD" | docker login --username "\$CI_REGISTRY_USER" --password-stdin "\$CI_REGISTRY"
+        docker push "\$CI_REGISTRY_IMAGE:\$CI_COMMIT_SHA"
+      fi
+# Manual image build only; no workload activation or migrations.
+`;
+    const dockerStart = content.indexOf('\ndocker:');
+    content = (dockerStart >= 0 ? content.slice(0, dockerStart) : content) + '\n' + heldDocker;
+  }
+
+  return [{ destination: '.gitlab-ci.yml', content }];
 }
 
-async function generateKubernetesManifests(basePath: string) {
-  const k8sPath = path.join(basePath, 'k8s');
-  await ensureDir(k8sPath);
-
+async function generateKubernetesManifests(
+  _basePath: string,
+  profile: DeploymentProfile,
+): Promise<DeploymentFile[]> {
   // Deployment
   const deploymentContent = `apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: nestjs-app
+  name: ${profile.serviceName}
   labels:
-    app: nestjs-app
+    app: ${profile.serviceName}
 spec:
-  replicas: 3
+  replicas: ${profile.state === 'held' ? 0 : 3}
   selector:
     matchLabels:
-      app: nestjs-app
+      app: ${profile.serviceName}
   template:
     metadata:
       labels:
-        app: nestjs-app
+        app: ${profile.serviceName}
     spec:
       containers:
-        - name: nestjs-app
-          image: your-registry/nestjs-app:latest
+        - name: ${profile.serviceName}
+          image: your-registry/${profile.serviceName}:latest
           ports:
-            - containerPort: 3000
+            - containerPort: ${profile.port}
           envFrom:
             - configMapRef:
-                name: nestjs-app-config
+                name: ${profile.serviceName}-config
             - secretRef:
-                name: nestjs-app-secrets
+                name: ${profile.serviceName}-secrets
           resources:
             requests:
               memory: "256Mi"
@@ -522,53 +904,58 @@ spec:
             limits:
               memory: "512Mi"
               cpu: "500m"
-          livenessProbe:
+${
+  profile.probePath === undefined
+    ? ''
+    : `          livenessProbe:
             httpGet:
-              path: /health
-              port: 3000
+              path: ${profile.probePath}
+              port: ${profile.port}
             initialDelaySeconds: 30
             periodSeconds: 10
-          readinessProbe:
+${
+  profile.probeMode === 'live-only'
+    ? ''
+    : `          readinessProbe:
             httpGet:
-              path: /health
-              port: 3000
+              path: ${profile.probePath}
+              port: ${profile.port}
             initialDelaySeconds: 5
-            periodSeconds: 5
+            periodSeconds: 5`
+}`
+}
 `;
-  await writeFile(path.join(k8sPath, 'deployment.yaml'), deploymentContent);
 
   // Service
   const serviceContent = `apiVersion: v1
 kind: Service
 metadata:
-  name: nestjs-app
+  name: ${profile.serviceName}
 spec:
   selector:
-    app: nestjs-app
+    app: ${profile.serviceName}
   ports:
     - protocol: TCP
       port: 80
-      targetPort: 3000
+      targetPort: ${profile.port}
   type: ClusterIP
 `;
-  await writeFile(path.join(k8sPath, 'service.yaml'), serviceContent);
 
   // ConfigMap
   const configMapContent = `apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: nestjs-app-config
+  name: ${profile.serviceName}-config
 data:
   NODE_ENV: "production"
-  PORT: "3000"
+  PORT: "${profile.port}"
 `;
-  await writeFile(path.join(k8sPath, 'configmap.yaml'), configMapContent);
 
   // Ingress
   const ingressContent = `apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: nestjs-app
+  name: ${profile.serviceName}
   annotations:
     kubernetes.io/ingress.class: nginx
     cert-manager.io/cluster-issuer: letsencrypt-prod
@@ -576,7 +963,7 @@ spec:
   tls:
     - hosts:
         - api.example.com
-      secretName: nestjs-app-tls
+      secretName: ${profile.serviceName}-tls
   rules:
     - host: api.example.com
       http:
@@ -585,22 +972,21 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: nestjs-app
+                name: ${profile.serviceName}
                 port:
                   number: 80
 `;
-  await writeFile(path.join(k8sPath, 'ingress.yaml'), ingressContent);
 
   // HPA
   const hpaContent = `apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: nestjs-app
+  name: ${profile.serviceName}
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: nestjs-app
+    name: ${profile.serviceName}
   minReplicas: 2
   maxReplicas: 10
   metrics:
@@ -617,21 +1003,24 @@ spec:
           type: Utilization
           averageUtilization: 80
 `;
-  await writeFile(path.join(k8sPath, 'hpa.yaml'), hpaContent);
 
-  console.log(chalk.green('  ✓ k8s/deployment.yaml'));
-  console.log(chalk.green('  ✓ k8s/service.yaml'));
-  console.log(chalk.green('  ✓ k8s/configmap.yaml'));
-  console.log(chalk.green('  ✓ k8s/ingress.yaml'));
-  console.log(chalk.green('  ✓ k8s/hpa.yaml'));
+  return [
+    { destination: 'k8s/deployment.yaml', content: deploymentContent },
+    { destination: 'k8s/service.yaml', content: serviceContent },
+    { destination: 'k8s/configmap.yaml', content: configMapContent },
+    ...(profile.visibility === 'public'
+      ? [{ destination: 'k8s/ingress.yaml', content: ingressContent }]
+      : []),
+    ...(profile.state === 'active' ? [{ destination: 'k8s/hpa.yaml', content: hpaContent }] : []),
+  ];
 }
 
-async function generateDockerIgnore(basePath: string) {
+async function generateDockerIgnore(basePath: string): Promise<DeploymentFile[]> {
   const dockerignorePath = path.join(basePath, '.dockerignore');
 
   if (await fileExists(dockerignorePath)) {
     console.log(chalk.yellow('  .dockerignore already exists. Skipping...'));
-    return;
+    return [];
   }
 
   const content = `# Dependencies
@@ -679,19 +1068,27 @@ tmp
 temp
 `;
 
-  await writeFile(dockerignorePath, content);
-  console.log(chalk.green('  ✓ .dockerignore'));
+  return [{ destination: '.dockerignore', content }];
 }
 
-async function generateEnvExample(basePath: string) {
+async function generateEnvExample(
+  basePath: string,
+  profile: DeploymentProfile,
+): Promise<DeploymentFile[]> {
   const envExamplePath = path.join(basePath, '.env.example');
 
   if (await fileExists(envExamplePath)) {
     console.log(chalk.yellow('  .env.example already exists. Skipping...'));
-    return;
+    return [];
   }
 
-  const content = `# Application
+  const content =
+    profile.visibility === 'private'
+      ? `# Source scaffold only; configure private application policy separately.
+NODE_ENV=production
+PORT=${profile.port}
+`
+      : `# Application
 NODE_ENV=development
 PORT=3000
 API_PREFIX=api
@@ -750,6 +1147,5 @@ PGADMIN_PASSWORD=admin
 PGADMIN_PORT=5050
 `;
 
-  await writeFile(envExamplePath, content);
-  console.log(chalk.green('  ✓ .env.example'));
+  return [{ destination: '.env.example', content }];
 }
