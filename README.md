@@ -56,6 +56,19 @@ default; verified private HTTP requires explicit opt-in. See the
 [generated operator guide](src/templates/recipes/oauth2-token-introspection/README.md.hbs)
 for async registration, limits, failure handling and provider compatibility.
 
+## Framework-independent bounded JSON transport
+
+```sh
+ddd recipe bounded-json-http --path <application> --dry-run
+ddd recipe bounded-json-http --path <application>
+```
+
+Emit the same fixed-origin HTTP client without a Nest module or dependencies.
+The consumer owns its server-only wrapper, exact response validation and domain
+admission. GET, form POST and JSON POST/PATCH/PUT have bounded responses and
+deadlines, with no redirects or retries. See the
+[generated guide](src/templates/recipes/bounded-json-http/README.md.hbs).
+
 ## Confidential OIDC BFF sessions
 
 ```sh
@@ -222,6 +235,7 @@ ddd recipe jest-cjs-compat --path /path/to/service --dry-run
 | `oidc-dashboard` | OIDC broker integration for internal dashboards and admin APIs |
 | `external-projection-worker` | Postgres-backed external projection intents with atomic enqueue, canonical idempotency, fenced leases, and bounded retry outcomes |
 | `jest-cjs-compat` | Node/Jest-only CommonJS transformation of ESM Nest configuration; production TypeScript and dependency versions stay intact |
+| `bounded-json-http` | Fixed-origin GET/form/JSON transport without framework dependencies or domain admission policy |
 
 ## Generated Structure
 

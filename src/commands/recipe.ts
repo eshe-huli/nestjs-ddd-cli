@@ -27,6 +27,7 @@ import { applyOidcBffSessionRecipe } from './recipes/oidc-bff-session.recipe';
 import { applyOAuth2TokenIntrospectionRecipe } from './recipes/oauth2-token-introspection.recipe';
 import { applyExternalProjectionWorkerRecipe } from './recipes/external-projection-worker.recipe';
 import { applyJestCommonJsCompatibilityRecipe } from './recipes/jest-cjs-compat.recipe';
+import { applyBoundedJsonHttpRecipe } from './recipes/bounded-json-http.recipe';
 
 export interface RecipeOptions {
   path?: string;
@@ -52,11 +53,12 @@ async function applyDryRunRecipe(
     'oauth2-token-introspection': () => applyOAuth2TokenIntrospectionRecipe(basePath, true),
     'kafka-consumer': () => applyKafkaConsumerRecipe(basePath, true),
     'jest-cjs-compat': () => applyJestCommonJsCompatibilityRecipe(basePath, true),
+    'bounded-json-http': () => applyBoundedJsonHttpRecipe(basePath, true),
   };
   const handler = handlers[recipeName];
   if (!handler) {
     throw new Error(
-      'Dry-run is currently supported only by external-projection-worker, oidc-resource-server, oauth2-token-introspection, oauth2-client-credentials, oidc-bff-session, kafka-consumer, and jest-cjs-compat',
+      'Dry-run is currently supported only by external-projection-worker, oidc-resource-server, oauth2-token-introspection, oauth2-client-credentials, oidc-bff-session, kafka-consumer, jest-cjs-compat, and bounded-json-http',
     );
   }
   await handler();
@@ -75,6 +77,13 @@ async function installRecipeDependencies(
 }
 
 const AVAILABLE_RECIPES = {
+  'bounded-json-http': {
+    name: 'Bounded JSON HTTP transport',
+    description:
+      'Framework-independent fixed-origin transport without Nest dependencies or admission policy',
+    dependencies: [],
+    devDependencies: [],
+  },
   'jest-cjs-compat': {
     name: 'NestJS Jest CommonJS compatibility',
     description:
@@ -406,6 +415,7 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
     'oauth2-client-credentials': applyOAuth2ClientCredentialsRecipe,
     'oauth2-token-introspection': applyOAuth2TokenIntrospectionRecipe,
     'oidc-bff-session': applyOidcBffSessionRecipe,
+    'bounded-json-http': applyBoundedJsonHttpRecipe,
     'external-projection-worker': (target: string) =>
       applyExternalProjectionWorkerRecipe(target, {
         migrationTimestamp: options.migrationTimestamp,
@@ -3360,6 +3370,7 @@ export const loggerConfig: Params = {
     redact: {
       paths: [
         "req.headers.authorization",
+        "req.headers['x-internal-api-key']",
         "req.headers.cookie",
         "res.headers['set-cookie']",
         "body.password",

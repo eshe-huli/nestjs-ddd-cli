@@ -1,0 +1,36 @@
+# Bounded JSON HTTP transport
+
+```sh
+ddd recipe bounded-json-http --path <application> --dry-run
+ddd recipe bounded-json-http --path <application>
+```
+
+This emits only the reusable transport and this handoff. It requires the native
+Fetch, Headers, Web Streams and TextEncoder APIs supplied by Node 18+ or Bun. It
+does not emit a Nest module, install packages, register routes, validate a human
+identity or grant domain permissions. Import the client directly from
+`src/shared/auth/oauth2-token-introspection/bounded-json-http.client.ts`.
+
+The output path and unchanged template are shared with the OAuth recipes. A
+matching existing file is preserved; a conflicting file, symlink or unsafe
+destination rejects the complete plan before writes. Dry-run performs the same
+preflight without creating files or directories. If later filesystem operations
+fail, rollback preserves a concurrent owner's successor content and reports a
+rollback conflict.
+
+Supply a fixed, validated origin from deployment configuration. HTTPS is the
+default; `trustedInternalHttp: true` is an explicit operator-owned exception for
+a proven private HTTP service. Dynamic path segments are encoded individually.
+Do not accept origins, authorization headers or arbitrary paths from callers.
+Constructor headers are snapshotted and private. Request policies use bounded
+deadlines and byte limits, refuse redirects and do not retry or positively cache
+responses. Errors expose a safe category/status, never credentials or bodies.
+
+`get`, `postForm`, `postJson`, `putJson` and `patchJson` return immutable JSON evidence. The
+consumer must validate its exact schema and distinguish an authoritative denial
+from an unavailable or malformed provider. A successful transport response does
+not admit an account, link identities, complete a callback or authorize a write.
+Provider-specific token and membership policy belongs to the owning application.
+Use the owning application's tests to prove those decisions and verify this
+mechanism under its supported runtime. Next.js consumers should add their own
+`server-only` wrapper; the framework-neutral generated file has no Next import.
