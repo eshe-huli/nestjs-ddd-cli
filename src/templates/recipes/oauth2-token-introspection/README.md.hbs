@@ -79,7 +79,10 @@ session/identity, expiry, assurance, binding and authorization. The mechanism
 does not infer account status from JSON. Transport errors retain safe reason and
 optional numeric HTTP status, so the adapter can distinguish a missing session
 from upstream unavailability without inspecting or logging response bodies.
-The helper also exposes bounded `postForm` for the introspection client; it
+The helper also exposes bounded `postForm` for the introspection client and
+`postJson`/`patchJson` for explicit consumer-owned JSON endpoints. JSON is
+snapshotted before dispatch, validated against the same byte/depth/value bounds,
+and sent once to the configured origin with no redirects or retries. It
 applies the same origin, redirect, timeout, byte, nesting and no-cache rules.
 
 ## Evidence and consumer policy

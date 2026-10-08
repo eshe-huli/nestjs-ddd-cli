@@ -212,4 +212,43 @@ describe('Bounded provider JSON HTTP', () => {
     }
     expect(transport).not.toHaveBeenCalled();
   });
+  it('PATCHes only one bounded JSON snapshot using the configured origin and headers', async () => {
+    const transport = jest.fn((_url: string, _init: RequestInit) => {
+      void _url;
+      void _init;
+      return Promise.resolve(new Response('{}'));
+    });
+    const client = create({
+      requestHeaders: { authorization: 'PRIVATE' },
+      transport,
+    });
+    const payload = { preferredName: 'original' };
+    const request = client.patchJson(['sessions', 'me', 'profile'], payload);
+    payload.preferredName = 'changed';
+    await request;
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(transport.mock.calls[0]?.[1]).toMatchObject({
+      method: 'PATCH',
+      body: '{"preferredName":"original"}',
+      redirect: 'error',
+      headers: { authorization: 'PRIVATE', 'content-type': 'application/json' },
+    });
+    expect(JSON.stringify(client)).not.toContain('PRIVATE');
+    expect(() => client.patchJson(['sessions'], undefined)).toThrow(
+      'Invalid provider request configuration',
+    );
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+  it('holds a failed PATCH without retry or raw provider response disclosure', async () => {
+    const transport = jest.fn(() =>
+      Promise.resolve(new Response('PRIVATE-PAYLOAD', { status: 503 })),
+    );
+    const client = create({ transport });
+    await expect(
+      client.patchJson(['sessions', 'me', 'profile'], {
+        preferredName: 'safe',
+      }),
+    ).rejects.toMatchObject({ reason: 'http', status: 503 });
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
 });

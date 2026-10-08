@@ -27,3 +27,12 @@ publication, consuming-service tests and real provider proof remain distinct.
 New service boundary and provider choices remain in the owning MyDermaLife
 workspace's accepted run; this recipe grants no identity or delivery authority.
 Local source acceptance: 27 suites, 137 tests and two snapshots pass (one opt-in smoke skipped in the full run); the separate real Bun Nest/DDD initialization smoke and option checks pass 9/9. New recipe safety10 and emitted behavior46 pass; prior introspection safety10 and emitted behavior51 pass. Production type/build, focused strict lint and diff checks pass. The existing external-projection suite needs reflect-metadata via the established consumer NODE_PATH because the shared upstream dependency snapshot does not expose that peer; no CI/dependency policy was changed. Common writer extraction ba91b5d and explicit Bun initialization7878389 are separate local commits. No publication, CI, live send or credential proof claimed.
+
+
+Root authorized the additive explicit patchJson seam for the MyDermaLife trusted
+self-profile bridge. POST and PATCH share one bounded JSON snapshot pipeline,
+fixed configured origin/headers, no redirects/retries and sanitized failures.
+Focused source acceptance: 20 generator cases; 48 emitted credential/HTTP cases
+and 53 emitted introspection/HTTP cases; strict emitted compilation and rebuilt
+production output pass. Existing GET/form/POST contracts are preserved. No
+principal, permissions, endpoint policy, CI or publication behavior is inferred.
