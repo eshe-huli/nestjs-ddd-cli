@@ -1,9 +1,5 @@
 export type BoundedBinaryHttpFailure =
-  | 'timeout'
-  | 'cancelled'
-  | 'network'
-  | 'http'
-  | 'invalid_response';
+  'timeout' | 'cancelled' | 'network' | 'http' | 'invalid_response';
 
 /** Deliberately excludes upstream URLs, headers, response bodies and causes. */
 export class BoundedBinaryHttpUnavailableError extends Error {
@@ -17,10 +13,7 @@ export class BoundedBinaryHttpUnavailableError extends Error {
 }
 
 export type BoundedBinaryBodyFailure =
-  | 'body_limit'
-  | 'invalid_body'
-  | 'timeout'
-  | 'cancelled';
+  'body_limit' | 'invalid_body' | 'timeout' | 'cancelled';
 
 export class BoundedBinaryBodyError extends Error {
   constructor(public readonly reason: BoundedBinaryBodyFailure) {

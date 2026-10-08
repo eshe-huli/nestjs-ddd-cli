@@ -128,3 +128,33 @@ types still fail before transport, and redirects remain refused. Current
 focused output: 10 generator cases and 47 emitted behaviors pass, including
 strict output compilation. Media consumption awaits this delta's exact Node
 18/20/22/24 matrix; no emitted helper was hand-edited to obtain the suffix.
+
+## Consumer formatting correction
+
+The Media consumer's established Prettier80/type-checked ESLint found two binary
+union declaration formatting errors and seven double-quoted request-context
+strings. The approved correction is confined to those canonical emitter tokens
+and the two existing quote-sensitive logging assertions. No transport API,
+behavior, dependency, manager, auth, dispatcher or Media business source changed.
+No whole-file formatter ran. The unrelated untracked `.impeccable/` is preserved.
+
+The actual CLI was rebuilt over `0299e0de` and used for disposable binary
+dry-run/generation and health generation. Health still has no dry-run support.
+Both actual emitted files pass Media's complete recommended type-checked ESLint
+and Prettier80 with zero errors/warnings. Receipt:
+`/tmp/mdl-cli-generated-format-receipt-20261008.json`. Current generated SHA256:
+
+- binary: `6cf445a581de9a188646ca8b037625752aefa26b3901fa68e44dc5e6764407e0`
+- request-context: `24ddeae02983c3c87cd38c936f92f08242798d331af27bf193dcd6f854ef90e7`
+
+Focused existing checks pass three suites/13 cases, including all 47 emitted
+binary behaviors and real concurrent logging context isolation. Full established
+local CLI passes 32 suites/177 cases with the existing one opt-in skip and two
+snapshots (23.496s). Build and production typecheck pass. Established strict
+source lint exits zero with 911 inherited warnings; the two existing logging
+test files have zero errors and one inherited formatting warning. Diff checks
+pass. Logs: `/tmp/mdl-cli-generated-format-{build,type,lint,test-lint,focused,full,emitted}-20261008.log`.
+
+Root review, coherent source publication and exact-head Node18/20/22/24 CI remain
+required before actual Media re-consumption. This correction is not Media
+publication, deployed/native storage, current consent or actor acceptance.

@@ -3423,10 +3423,10 @@ export class LoggingModule {}
   await writeFile(path.join(loggingPath, 'logging.module.ts'), loggingModuleContent);
 
   // Request context
-  const requestContextContent = `import { Injectable, NestMiddleware } from "@nestjs/common";
-import { Request, Response, NextFunction } from "express";
-import { randomUUID } from "node:crypto";
-import { AsyncLocalStorage } from "node:async_hooks";
+  const requestContextContent = `import { Injectable, NestMiddleware } from '@nestjs/common';
+import { Request, Response, NextFunction } from 'express';
+import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 export interface RequestContext {
   requestId: string;
@@ -3445,10 +3445,10 @@ interface AuthenticatedRequest extends Request {
 @Injectable()
 export class RequestContextMiddleware implements NestMiddleware {
   use(req: Request, res: Response, next: NextFunction) {
-    const requestId = (req.headers["x-request-id"] as string) || randomUUID();
+    const requestId = (req.headers['x-request-id'] as string) || randomUUID();
     const candidateUserId = (req as AuthenticatedRequest).user?.id;
     const userId =
-      typeof candidateUserId === "string" && candidateUserId.trim()
+      typeof candidateUserId === 'string' && candidateUserId.trim()
         ? candidateUserId
         : undefined;
 
@@ -3461,7 +3461,7 @@ export class RequestContextMiddleware implements NestMiddleware {
     };
 
     // Set request ID header for response
-    res.setHeader("X-Request-Id", requestId);
+    res.setHeader('X-Request-Id', requestId);
 
     requestContextStorage.run(context, () => {
       next();
