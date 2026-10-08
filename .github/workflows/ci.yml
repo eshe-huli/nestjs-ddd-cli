@@ -61,6 +61,24 @@ jobs:
             echo "No E2E test files are present yet."
           fi
 
+  lock-metadata:
+    name: Release preset lock metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Use established Node.js release runtime
+        uses: actions/setup-node@v3
+        with:
+          node-version: '24.x'
+      - name: Emit package manager lock metadata without scripts
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Upload only the emitted lockfile for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-lock-metadata
+          path: package-lock.json
+          if-no-files-found: error
+
   build-and-publish:
     needs: test
     runs-on: ubuntu-latest
