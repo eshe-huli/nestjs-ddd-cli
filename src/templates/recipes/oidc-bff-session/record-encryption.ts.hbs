@@ -5,8 +5,9 @@ import {
 
 const KEY_ID = /^[A-Za-z0-9_-]{1,32}$/;
 const ENCODED = /^[A-Za-z0-9_-]+$/;
-const MAX_PLAINTEXT_BYTES = 40_000;
-export const MAX_SESSION_RECORD_BYTES = 60_000;
+// Two 16 KiB printable token fields can double in size through JSON escaping.
+const MAX_PLAINTEXT_BYTES = 70_000;
+export const MAX_SESSION_RECORD_BYTES = 100_000;
 export type SessionEncryptionKeyRing = Readonly<{
   activeKeyId: string;
   keys: Readonly<Record<string, string>>;

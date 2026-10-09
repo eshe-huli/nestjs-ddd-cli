@@ -7,7 +7,7 @@ Existing suites remain untouched and deferred to whole-project final validation.
 
 The server-only adapter requires `BFF_SESSION_ENCRYPTION_KEYS` as explicit
 approved secret JSON: exactly `activeKeyId` and `keys`, mapping 1–8 IDs to
-canonical unpadded base64url encodings of 32 random bytes. No operator key was
+canonical unpadded base64url encodings of 32 random bytes. No staging key was
 generated, provisioned or committed. Retain old decryption keys for queued
 credentials and any retained restore material. This is separate from
 `BFF_RESTORE_EPOCH`, which still fences active handles after recovery.
@@ -52,3 +52,12 @@ controller deployment in the expected external-secrets namespace. Provider crede
 account preservation, real admission, migration/cohorts and coordinated
 develop→staging release remain open. No engine/BFF image or staging activation.
 
+
+The final packaged record ceilings are70,000 plaintext bytes/100,000 stored
+characters to include JSON escaping of both16KiB token fields. This changes only
+previously unoperated size ceilings. The ordinary native payload and missing-key
+entry observations are reused; maximum escaped-size admission is not claimed.
+
+The upstream [PR13](https://github.com/eshe-huli/nestjs-ddd-cli/pull/13) retains
+`BFF_RECORD_CUSTODY_NATIVE.json` with actual observations and both artifact
+snapshots. Payload-size relaxation is recorded separately from operated inputs.

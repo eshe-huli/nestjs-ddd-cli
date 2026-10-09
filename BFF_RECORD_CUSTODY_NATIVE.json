@@ -1,0 +1,201 @@
+{
+  "date": "2026-10-09",
+  "observedUpstreamSource": "4554874",
+  "generatedBy": "bun dist/index.js recipe oidc-bff-session --path <owned output>; dry-run then apply",
+  "generatedSpecs": false,
+  "observedGeneratedSha256": {
+    "src/shared/oidc-bff/opaque-session-store.ts": "f1e3ac41300069bc25ea97904ec29d2685bc1f5965d0f878e81484afb5ce9a57",
+    "src/shared/oidc-bff/session-record-encryption.ts": "a79d36797d5acd51d49f7c54c284fe988bf6dc5416edeab3707d42cf5dd4681f",
+    "src/shared/oidc-bff/valkey-session-store.ts": "da1750c7461889b185afcb663c5f89479dea9134fbed94595907810a2a6fce6b"
+  },
+  "finalGeneratedSha256": {
+    "src/shared/oidc-bff/opaque-session-store.ts": "f1e3ac41300069bc25ea97904ec29d2685bc1f5965d0f878e81484afb5ce9a57",
+    "src/shared/oidc-bff/session-record-encryption.ts": "3fcef2de45195eb0bf3a5eb9f173ff6b6a6c25ac8325e74d42f73b992760fbbc",
+    "src/shared/oidc-bff/valkey-session-store.ts": "da1750c7461889b185afcb663c5f89479dea9134fbed94595907810a2a6fce6b"
+  },
+  "nativeStorage": {
+    "classification": "Actual generated CLI/store/Lua flow on disposable native Redis; synthetic credentials, no identity-provider or actor admission",
+    "redisVersion": "8.10.2",
+    "transport": "Authenticated task-owned TCP loopback; explicit trusted plaintext option, not staging TLS proof",
+    "serverReady": "PONG",
+    "login": {
+      "consumedPending": true,
+      "stagedCustodyTransferred": true,
+      "activeTokenRecovered": true
+    },
+    "newStoreOwner": true,
+    "siblingCannotReadPatientHandle": true,
+    "storedEnvelope": {
+      "kind": "session",
+      "encrypted": true
+    },
+    "metadataMutation": "BFF session record protection is unavailable",
+    "logout": {
+      "currentSessionDenied": true,
+      "siblingStillAdmittedToOwnStorage": true,
+      "queuedRetirement": true
+    },
+    "rotatedOwner": {
+      "oldActiveHandleDenied": true,
+      "oldKeyQueuedCredentialRecovered": true,
+      "storageAckOnly": true,
+      "providerRevocation": "not operated; synthetic material only"
+    },
+    "storageInspection": {
+      "stringValuesInspected": 4,
+      "tokenOrPendingSecretCleartext": false
+    },
+    "nativeAofInspection": {
+      "filesInspected": 2,
+      "tokenOrPendingSecretCleartext": false
+    },
+    "serverExitCode": 0
+  },
+  "initialAppStartup": {
+    "classification": "Actual changed Next16.3.3 development auth routes under explicit missing encryption-key configuration; synthetic unregistered client, no provider or actor admission",
+    "observations": [
+      {
+        "app": "Patient",
+        "endpoints": [
+          {
+            "path": "/auth/login",
+            "status": 503,
+            "cacheControl": "private, no-store",
+            "redirects": false,
+            "writesCookies": false,
+            "code": "unavailable"
+          },
+          {
+            "path": "/auth/callback",
+            "status": 503,
+            "cacheControl": "private, no-store",
+            "redirects": false,
+            "writesCookies": false,
+            "code": "unavailable"
+          },
+          {
+            "path": "/auth/logout",
+            "status": 503,
+            "cacheControl": "private, no-store",
+            "redirects": false,
+            "writesCookies": false,
+            "code": "unavailable"
+          }
+        ],
+        "runtimeExitCode": 0
+      },
+      {
+        "app": "Pro",
+        "endpoints": [],
+        "failure": "Error",
+        "runtimeExitCode": 1
+      }
+    ]
+  },
+  "repairedAppStartup": {
+    "classification": "Actual changed Pro Next16.3.3 and commerce Next15.5.25 development auth routes under explicit missing encryption-key configuration; synthetic unregistered client, no provider or actor admission",
+    "observations": [
+      {
+        "app": "Pro",
+        "endpoints": [
+          {
+            "path": "/auth/login",
+            "status": 503,
+            "cacheControl": "private, no-store",
+            "redirects": false,
+            "writesCookies": false
+          },
+          {
+            "path": "/auth/callback",
+            "status": 503,
+            "cacheControl": "private, no-store",
+            "redirects": false,
+            "writesCookies": false
+          },
+          {
+            "path": "/auth/logout",
+            "status": 503,
+            "cacheControl": "private, no-store",
+            "redirects": false,
+            "writesCookies": false
+          }
+        ],
+        "runtimeExitCode": 0
+      },
+      {
+        "app": "Seller",
+        "endpoints": [
+          {
+            "path": "/api/auth/login",
+            "status": 503,
+            "cacheControl": "private, no-store",
+            "redirects": false,
+            "writesCookies": false
+          },
+          {
+            "path": "/api/auth/callback",
+            "status": 503,
+            "cacheControl": "private, no-store",
+            "redirects": false,
+            "writesCookies": false
+          },
+          {
+            "path": "/api/auth/logout",
+            "status": 503,
+            "cacheControl": "private, no-store",
+            "redirects": false,
+            "writesCookies": false
+          }
+        ],
+        "runtimeExitCode": 0
+      },
+      {
+        "app": "Storefront",
+        "endpoints": [
+          {
+            "path": "/api/auth/login",
+            "status": 503,
+            "cacheControl": "private, no-store",
+            "redirects": false,
+            "writesCookies": false
+          },
+          {
+            "path": "/api/auth/callback",
+            "status": 503,
+            "cacheControl": "private, no-store",
+            "redirects": false,
+            "writesCookies": false
+          },
+          {
+            "path": "/api/auth/logout",
+            "status": 503,
+            "cacheControl": "private, no-store",
+            "redirects": false,
+            "writesCookies": false
+          }
+        ],
+        "runtimeExitCode": 0
+      }
+    ]
+  },
+  "reusedAfterDelta": {
+    "change": "Only plaintext/stored size ceilings increased to70000/100000 for JSON escaping; documentation updated. Existing ordinary-input storage and missing-key route observations reused.",
+    "largestEscapedPayloadOperated": false,
+    "providerAdmission": false,
+    "stagingValkeyOrTlsProof": false,
+    "snapshotRestoreOperated": false,
+    "automatedChecks": "deferred to whole-project final validation; no new suites or tests written"
+  },
+  "cleanup": {
+    "nativeRedisExitCode": 0,
+    "allNextRuntimeExitCodes": 0,
+    "ownedPorts": [
+      33580,
+      33581,
+      33582,
+      33583,
+      33584
+    ],
+    "ownedPortsHadListenersAfterStop": false
+  }
+}

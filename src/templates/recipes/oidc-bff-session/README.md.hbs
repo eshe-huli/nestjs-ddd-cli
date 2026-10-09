@@ -159,8 +159,8 @@ do not delete old queues or introduce a plaintext admission fallback. Existing
 spec fixtures that omitted a key ring need owner adaptation at final validation;
 historical plaintext proof does not cover this format.
 
-Record bounds are 40,000 plaintext bytes and 60,000 stored/command characters,
-allowing both existing 16 KiB token fields after envelope expansion. Payload
+Record bounds are 70,000 plaintext bytes and 100,000 stored/command characters,
+allowing both existing 16 KiB token fields with JSON escaping and envelope expansion. Payload
 encryption does not encrypt routing metadata or protect record deletion,
 rollback, Redis administration, key custody or transport. Production still
 requires authenticated app-scoped ACLs, verified private/TLS transport,
