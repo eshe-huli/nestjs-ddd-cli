@@ -1,0 +1,142 @@
+import { Buffer } from 'node:buffer';
+import {
+  createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes, timingSafeEqual,
+} from 'node:crypto';
+
+const KEY_ID = /^[A-Za-z0-9_-]{1,32}$/;
+const ENCODED = /^[A-Za-z0-9_-]+$/;
+const MAX_PLAINTEXT_BYTES = 40_000;
+export const MAX_SESSION_RECORD_BYTES = 60_000;
+export type SessionEncryptionKeyRing = Readonly<{
+  activeKeyId: string;
+  keys: Readonly<Record<string, string>>;
+}>;
+
+export class SessionRecordUnavailableError extends Error {
+  constructor() {
+    super('BFF session record protection is unavailable');
+    this.name = 'SessionRecordUnavailableError';
+  }
+}
+
+function decode(value: unknown, exactBytes?: number): Buffer {
+  if (typeof value !== 'string' || value.length > MAX_SESSION_RECORD_BYTES || !ENCODED.test(value))
+    throw new SessionRecordUnavailableError();
+  const bytes = Buffer.from(value, 'base64url');
+  if (bytes.toString('base64url') !== value || (exactBytes !== undefined && bytes.length !== exactBytes))
+    throw new SessionRecordUnavailableError();
+  return bytes;
+}
+
+/** Explicit operator input only. No generated key, default or cleartext fallback. */
+export function parseSessionEncryptionKeyRing(raw: unknown): SessionEncryptionKeyRing {
+  try {
+    if (typeof raw !== 'string' || raw.length > 4096) throw new SessionRecordUnavailableError();
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new SessionRecordUnavailableError();
+    const ring = parsed as Record<string, unknown>;
+    if (Object.keys(ring).sort().join(',') !== 'activeKeyId,keys' ||
+      typeof ring['activeKeyId'] !== 'string' || !KEY_ID.test(ring['activeKeyId']) ||
+      !ring['keys'] || typeof ring['keys'] !== 'object' || Array.isArray(ring['keys']))
+      throw new SessionRecordUnavailableError();
+    const entries = Object.entries(ring['keys'] as Record<string, unknown>);
+    if (entries.length < 1 || entries.length > 8) throw new SessionRecordUnavailableError();
+    const keys: Record<string, string> = Object.create(null);
+    for (const [id, key] of entries) {
+      if (!KEY_ID.test(id)) throw new SessionRecordUnavailableError();
+      decode(key, 32);
+      keys[id] = key as string;
+    }
+    if (!Object.hasOwn(keys, ring['activeKeyId'])) throw new SessionRecordUnavailableError();
+    return Object.freeze({ activeKeyId: ring['activeKeyId'], keys: Object.freeze(keys) });
+  } catch {
+    throw new SessionRecordUnavailableError();
+  }
+}
+
+/** Routing metadata is authenticated; credentials never reach storage as cleartext. */
+export class SessionRecordEncryption {
+  private readonly keys: ReadonlyMap<string, Readonly<{ cipher: Buffer; binding: Buffer }>>;
+  private readonly activeKeyId: string;
+  constructor(input: SessionEncryptionKeyRing) {
+    let ring: SessionEncryptionKeyRing;
+    try { ring = parseSessionEncryptionKeyRing(JSON.stringify(input)); }
+    catch { throw new SessionRecordUnavailableError(); }
+    this.activeKeyId = ring.activeKeyId;
+    this.keys = new Map(Object.entries(ring.keys).map(([id, encoded]) => {
+      const key = decode(encoded, 32);
+      const derived = (purpose: string) => Buffer.from(hkdfSync('sha256', key,
+        Buffer.alloc(0), `oidc-bff-record-v1:${purpose}`, 32));
+      const material = Object.freeze({ cipher: derived('cipher'), binding: derived('binding') });
+      key.fill(0);
+      return [id, material] as const;
+    }));
+  }
+  private material(id: string) {
+    const material = this.keys.get(id);
+    if (!material) throw new SessionRecordUnavailableError();
+    return material;
+  }
+  private aad(context: string, keyId: string): Buffer {
+    if (typeof context !== 'string' || Buffer.byteLength(context) > 8192)
+      throw new SessionRecordUnavailableError();
+    return Buffer.from(JSON.stringify(['oidc-bff-record-v1', keyId, context]));
+  }
+  private plaintext(value: string): Buffer {
+    if (typeof value !== 'string' || value.length === 0 || Buffer.byteLength(value) > MAX_PLAINTEXT_BYTES)
+      throw new SessionRecordUnavailableError();
+    return Buffer.from(value);
+  }
+  seal(value: string, context: string): string {
+    try {
+      const iv = randomBytes(12);
+      const cipher = createCipheriv('aes-256-gcm', this.material(this.activeKeyId).cipher, iv,
+        { authTagLength: 16 });
+      cipher.setAAD(this.aad(context, this.activeKeyId));
+      const plaintext = this.plaintext(value);
+      let ciphertext: Buffer;
+      try { ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]); }
+      finally { plaintext.fill(0); }
+      return ['e1', this.activeKeyId, iv.toString('base64url'), ciphertext.toString('base64url'),
+        cipher.getAuthTag().toString('base64url')].join('.');
+    } catch { throw new SessionRecordUnavailableError(); }
+  }
+  open(envelope: unknown, context: string): string {
+    try {
+      if (typeof envelope !== 'string' || envelope.length > MAX_SESSION_RECORD_BYTES)
+        throw new SessionRecordUnavailableError();
+      const parts = envelope.split('.');
+      if (parts.length !== 5 || parts[0] !== 'e1' || !KEY_ID.test(parts[1]))
+        throw new SessionRecordUnavailableError();
+      const ciphertext = decode(parts[3]);
+      if (ciphertext.length > MAX_PLAINTEXT_BYTES) throw new SessionRecordUnavailableError();
+      const decipher = createDecipheriv('aes-256-gcm', this.material(parts[1]).cipher,
+        decode(parts[2], 12), { authTagLength: 16 });
+      decipher.setAAD(this.aad(context, parts[1]));
+      decipher.setAuthTag(decode(parts[4], 16));
+      // Never expose unauthenticated decipher.update output before final succeeds.
+      const first = decipher.update(ciphertext);
+      let plaintext: Buffer | undefined;
+      try {
+        plaintext = Buffer.concat([first, decipher.final()]);
+        return plaintext.toString('utf8');
+      } finally { first.fill(0); plaintext?.fill(0); }
+    } catch { throw new SessionRecordUnavailableError(); }
+  }
+  binding(value: string, context: string): string {
+    return this.bind(value, context, this.activeKeyId);
+  }
+  private bind(value: string, context: string, keyId: string): string {
+    const plaintext = this.plaintext(value);
+    try {
+      return `${keyId}.${createHmac('sha256', this.material(keyId).binding)
+        .update(this.aad(context, keyId)).update(plaintext).digest('hex')}`;
+    } finally { plaintext.fill(0); }
+  }
+  matchesBinding(value: string, context: string, binding: unknown): boolean {
+    if (typeof binding !== 'string' || !/^[A-Za-z0-9_-]{1,32}\.[a-f0-9]{64}$/.test(binding))
+      return false;
+    const expected = this.bind(value, context, binding.split('.')[0]);
+    return expected.length === binding.length && timingSafeEqual(Buffer.from(expected), Buffer.from(binding));
+  }
+}

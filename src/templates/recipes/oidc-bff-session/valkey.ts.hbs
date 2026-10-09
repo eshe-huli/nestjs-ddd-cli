@@ -1,5 +1,6 @@
 import { createClient } from '@redis/client';
 import type { SessionCommands } from './opaque-session-store';
+import { MAX_SESSION_RECORD_BYTES } from './session-record-encryption';
 
 export class SessionStorageUnavailableError extends Error {
   constructor() {
@@ -110,7 +111,7 @@ export function createValkeySessionCommands(
         command.arguments.length > 32 ||
         command.keys.some((key: unknown) => typeof key !== 'string' || key.length > 1024) ||
         command.arguments.some(
-          (argument: unknown) => typeof argument !== 'string' || argument.length > 40000,
+          (argument: unknown) => typeof argument !== 'string' || argument.length > MAX_SESSION_RECORD_BYTES,
         )
       ) {
         throw new SessionStorageUnavailableError();
