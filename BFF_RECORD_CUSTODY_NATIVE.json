@@ -1,6 +1,5 @@
 {
   "date": "2026-10-09",
-  "observedUpstreamSource": "4554874",
   "generatedBy": "bun dist/index.js recipe oidc-bff-session --path <owned output>; dry-run then apply",
   "generatedSpecs": false,
   "observedGeneratedSha256": {
@@ -197,5 +196,8 @@
       33584
     ],
     "ownedPortsHadListenersAfterStop": false
-  }
+  },
+  "nativeSourceEquivalentCommit": "4554874",
+  "nativeCheckoutBaseline": "4fd902b565625122ec0aa34d80230323e8390785",
+  "nativeCheckout": "Owned uncommitted implementation during operation; generated input hashes bind the bytes. Later4554874 publication is a source-equivalent reference, not the Git HEAD at runtime."
 }
