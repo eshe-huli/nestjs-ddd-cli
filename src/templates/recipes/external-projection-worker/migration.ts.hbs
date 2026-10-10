@@ -82,6 +82,14 @@ export class CreateExternalProjectionOperationsMIGRATIONTIMESTAMPPLACEHOLDER
   }
 
   async down(queryRunner: QueryRunner): Promise<void> {
+    if (queryRunner.connection.options.type !== 'postgres' || !queryRunner.isTransactionActive) {
+      throw new Error('Projection rollback requires a PostgreSQL transaction');
+    }
+    await queryRunner.query('LOCK TABLE external_projection_operations, external_projection_target_heads IN ACCESS EXCLUSIVE MODE');
+    const [{ retained }] = await queryRunner.query(
+      'SELECT EXISTS(SELECT 1 FROM external_projection_operations) OR EXISTS(SELECT 1 FROM external_projection_target_heads) AS retained',
+    );
+    if (retained) throw new Error('Retain projection operations across rollback; use reviewed forward recovery');
     await queryRunner.query('DROP TABLE external_projection_operations');
     await queryRunner.query('DROP TABLE external_projection_target_heads');
   }

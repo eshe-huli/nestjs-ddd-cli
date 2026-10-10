@@ -12,6 +12,14 @@ export class KafkaConsumerReceipts1788600000000 implements MigrationInterface {
   }
 
   async down(queryRunner: QueryRunner): Promise<void> {
+    if (queryRunner.connection.options.type !== 'postgres' || !queryRunner.isTransactionActive) {
+      throw new Error('Kafka receipt rollback requires a PostgreSQL transaction');
+    }
+    await queryRunner.query('LOCK TABLE kafka_consumer_receipts IN ACCESS EXCLUSIVE MODE');
+    const [{ retained }] = await queryRunner.query(
+      'SELECT EXISTS(SELECT 1 FROM kafka_consumer_receipts) AS retained',
+    );
+    if (retained) throw new Error('Retain Kafka receipts across rollback; use reviewed forward recovery');
     await queryRunner.query('DROP TABLE kafka_consumer_receipts');
   }
 }
