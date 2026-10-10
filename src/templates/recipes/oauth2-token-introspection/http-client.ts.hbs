@@ -59,6 +59,19 @@ function pathSegments(value: unknown): value is readonly string[] {
   );
 }
 
+function requireDeadline(deadline: number, signal?: AbortSignal): void {
+  if (signal?.aborted || performance.now() >= deadline)
+    throw new BoundedJsonHttpUnavailableError('timeout');
+}
+
+function cancelBody(body: ReadableStream<Uint8Array> | null): void {
+  try {
+    void body?.cancel().catch(() => undefined);
+  } catch {
+    // A broken source cannot replace the sanitized result or extend its cutoff.
+  }
+}
+
 /** Minimal JSON transport. It neither authenticates a person nor grants permissions. */
 export class BoundedJsonHttpClient {
   private readonly origin: string;
@@ -115,6 +128,7 @@ export class BoundedJsonHttpClient {
     pathSegments: readonly string[],
     form: Readonly<Record<string, string>>,
   ): Promise<unknown> {
+    const deadline = performance.now() + this.timeoutMs;
     if (Object.values(form).some((value) => typeof value !== 'string'))
       throw new Error('Invalid provider request configuration');
     const body = new URLSearchParams(form).toString();
@@ -126,6 +140,7 @@ export class BoundedJsonHttpClient {
       {},
       body,
       'application/x-www-form-urlencoded',
+      deadline,
     );
   }
 
@@ -157,6 +172,7 @@ export class BoundedJsonHttpClient {
     payload: unknown,
     query: Readonly<Record<string, string>> = {},
   ): Promise<unknown> {
+    const deadline = performance.now() + this.timeoutMs;
     let nodes = 0;
     const seen = new Set<object>();
     const visit = (value: unknown, depth: number): void => {
@@ -199,7 +215,14 @@ export class BoundedJsonHttpClient {
       visit(payload, 0);
       const body = JSON.stringify(payload);
       if (new TextEncoder().encode(body).byteLength > 262144) throw new Error();
-      return this.execute(method, pathSegments, query, body, 'application/json');
+      return this.execute(
+        method,
+        pathSegments,
+        query,
+        body,
+        'application/json',
+        deadline,
+      );
     } catch {
       throw new Error('Invalid provider request configuration');
     }
@@ -211,6 +234,7 @@ export class BoundedJsonHttpClient {
     query: Readonly<Record<string, string>>,
     body?: string,
     contentType?: string,
+    deadline = performance.now() + this.timeoutMs,
   ): Promise<unknown> {
     if (!pathSegments(segments)) {
       throw new Error('Invalid provider request configuration');
@@ -240,21 +264,33 @@ export class BoundedJsonHttpClient {
     } catch {
       throw new Error('Invalid provider request configuration');
     }
+    requireDeadline(deadline);
     const abort = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        abort.abort();
-        reject(new BoundedJsonHttpUnavailableError('timeout'));
-      }, this.timeoutMs);
+      timer = setTimeout(
+        () => {
+          abort.abort();
+          reject(new BoundedJsonHttpUnavailableError('timeout'));
+        },
+        Math.max(0, deadline - performance.now()),
+      );
     });
     try {
       return await Promise.race([
-        this.request(url.href, method, body, abort.signal, contentType),
+        this.request(
+          url.href,
+          method,
+          body,
+          abort.signal,
+          deadline,
+          contentType,
+        ),
         timeout,
       ]);
     } catch (error) {
       if (error instanceof BoundedJsonHttpUnavailableError) throw error;
+      requireDeadline(deadline, abort.signal);
       throw new BoundedJsonHttpUnavailableError('network');
     } finally {
       clearTimeout(timer);
@@ -267,8 +303,10 @@ export class BoundedJsonHttpClient {
     method: 'GET' | 'POST' | 'PATCH' | 'PUT',
     body: string | undefined,
     signal: AbortSignal,
+    deadline: number,
     contentType?: string,
   ): Promise<unknown> {
+    requireDeadline(deadline, signal);
     const response = await this.transport(url, {
       method,
       body,
@@ -284,51 +322,65 @@ export class BoundedJsonHttpClient {
       cache: 'no-store',
       signal,
     });
-    if (!response.ok || response.redirected) {
-      void response.body?.cancel().catch(() => undefined);
-      throw new BoundedJsonHttpUnavailableError('http', response.status);
-    }
-    if (signal.aborted) {
-      void response.body?.cancel().catch(() => undefined);
+    if (signal.aborted || performance.now() >= deadline) {
+      cancelBody(response.body);
       throw new BoundedJsonHttpUnavailableError('timeout');
+    }
+    if (!response.ok || response.redirected) {
+      cancelBody(response.body);
+      throw new BoundedJsonHttpUnavailableError('http', response.status);
     }
     const length = response.headers.get('content-length');
     if (
       length !== null &&
       (!/^\d+$/.test(length) || Number(length) > this.maxResponseBytes)
     ) {
-      void response.body?.cancel().catch(() => undefined);
+      cancelBody(response.body);
+      requireDeadline(deadline, signal);
       throw new BoundedJsonHttpUnavailableError('invalid_response');
+    }
+    if (signal.aborted || performance.now() >= deadline) {
+      cancelBody(response.body);
+      throw new BoundedJsonHttpUnavailableError('timeout');
     }
     if (!response.body)
       throw new BoundedJsonHttpUnavailableError('invalid_response');
     const reader = response.body.getReader();
     const cancel = () => {
-      void reader.cancel().catch(() => undefined);
+      try {
+        void reader.cancel().catch(() => undefined);
+      } catch {
+        // Cancellation must not mask the bounded operation's result.
+      }
     };
     signal.addEventListener('abort', cancel, { once: true });
-    const chunks: Uint8Array[] = [];
     let size = 0;
     try {
+      // A single capacity buffer bounds overhead even for empty/tiny chunks.
+      const bytes = new Uint8Array(this.maxResponseBytes);
       while (true) {
+        requireDeadline(deadline, signal);
         const { done, value } = await reader.read();
+        requireDeadline(deadline, signal);
         if (done) break;
-        size += value.byteLength;
-        if (size > this.maxResponseBytes)
+        if (!(value instanceof Uint8Array))
           throw new BoundedJsonHttpUnavailableError('invalid_response');
-        chunks.push(value);
-      }
-      const bytes = new Uint8Array(size);
-      let offset = 0;
-      for (const chunk of chunks) {
-        bytes.set(chunk, offset);
-        offset += chunk.byteLength;
+        const next = size + value.byteLength;
+        if (!Number.isSafeInteger(next) || next > this.maxResponseBytes)
+          throw new BoundedJsonHttpUnavailableError('invalid_response');
+        bytes.set(value, size);
+        size = next;
       }
       try {
+        requireDeadline(deadline, signal);
         const parsed: unknown = JSON.parse(
-          new TextDecoder('utf-8', { fatal: true }).decode(bytes),
+          new TextDecoder('utf-8', { fatal: true }).decode(
+            bytes.subarray(0, size),
+          ),
         );
+        requireDeadline(deadline, signal);
         freeze(parsed);
+        requireDeadline(deadline, signal);
         return parsed;
       } catch (error) {
         if (error instanceof BoundedJsonHttpUnavailableError) throw error;
@@ -336,8 +388,12 @@ export class BoundedJsonHttpClient {
       }
     } finally {
       signal.removeEventListener('abort', cancel);
-      void reader.cancel().catch(() => undefined);
-      reader.releaseLock();
+      cancel();
+      try {
+        reader.releaseLock();
+      } catch {
+        // A late pending read may still own the lock; it cannot renew the cutoff.
+      }
     }
   }
 }

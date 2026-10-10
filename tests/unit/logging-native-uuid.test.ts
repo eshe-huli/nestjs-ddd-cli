@@ -15,7 +15,7 @@ it('generates request IDs without an undeclared uuid dependency', async () => {
   const generated = await fs.readFile(
     path.join(output, 'src/shared/logging/request-context.ts'), 'utf8',
   );
-  expect(generated).toContain('import { randomUUID } from "node:crypto"');
+  expect(generated).toContain("import { randomUUID } from 'node:crypto'");
   expect(generated).toContain('|| randomUUID()');
   expect(generated).not.toContain('from "uuid"');
 });

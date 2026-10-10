@@ -28,6 +28,7 @@ import { applyOAuth2TokenIntrospectionRecipe } from './recipes/oauth2-token-intr
 import { applyExternalProjectionWorkerRecipe } from './recipes/external-projection-worker.recipe';
 import { applyJestCommonJsCompatibilityRecipe } from './recipes/jest-cjs-compat.recipe';
 import { applyBoundedJsonHttpRecipe } from './recipes/bounded-json-http.recipe';
+import { applyBoundedBinaryHttpRecipe } from './recipes/bounded-binary-http.recipe';
 
 export interface RecipeOptions {
   path?: string;
@@ -54,11 +55,12 @@ async function applyDryRunRecipe(
     'kafka-consumer': () => applyKafkaConsumerRecipe(basePath, true),
     'jest-cjs-compat': () => applyJestCommonJsCompatibilityRecipe(basePath, true),
     'bounded-json-http': () => applyBoundedJsonHttpRecipe(basePath, true),
+    'bounded-binary-http': () => applyBoundedBinaryHttpRecipe(basePath, true),
   };
   const handler = handlers[recipeName];
   if (!handler) {
     throw new Error(
-      'Dry-run is currently supported only by external-projection-worker, oidc-resource-server, oauth2-token-introspection, oauth2-client-credentials, oidc-bff-session, kafka-consumer, jest-cjs-compat, and bounded-json-http',
+      'Dry-run is currently supported only by external-projection-worker, oidc-resource-server, oauth2-token-introspection, oauth2-client-credentials, oidc-bff-session, kafka-consumer, jest-cjs-compat, bounded-json-http, and bounded-binary-http',
     );
   }
   await handler();
@@ -77,6 +79,13 @@ async function installRecipeDependencies(
 }
 
 const AVAILABLE_RECIPES = {
+  'bounded-binary-http': {
+    name: 'Bounded binary and HEAD HTTP transport',
+    description:
+      'Framework-independent fixed-origin bytes with header allowlists, cancellation and no retries',
+    dependencies: [],
+    devDependencies: [],
+  },
   'bounded-json-http': {
     name: 'Bounded JSON HTTP transport',
     description:
@@ -416,6 +425,7 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
     'oauth2-token-introspection': applyOAuth2TokenIntrospectionRecipe,
     'oidc-bff-session': applyOidcBffSessionRecipe,
     'bounded-json-http': applyBoundedJsonHttpRecipe,
+    'bounded-binary-http': applyBoundedBinaryHttpRecipe,
     'external-projection-worker': (target: string) =>
       applyExternalProjectionWorkerRecipe(target, {
         migrationTimestamp: options.migrationTimestamp,
@@ -3413,10 +3423,10 @@ export class LoggingModule {}
   await writeFile(path.join(loggingPath, 'logging.module.ts'), loggingModuleContent);
 
   // Request context
-  const requestContextContent = `import { Injectable, NestMiddleware } from "@nestjs/common";
-import { Request, Response, NextFunction } from "express";
-import { randomUUID } from "node:crypto";
-import { AsyncLocalStorage } from "node:async_hooks";
+  const requestContextContent = `import { Injectable, NestMiddleware } from '@nestjs/common';
+import { Request, Response, NextFunction } from 'express';
+import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 export interface RequestContext {
   requestId: string;
@@ -3435,10 +3445,10 @@ interface AuthenticatedRequest extends Request {
 @Injectable()
 export class RequestContextMiddleware implements NestMiddleware {
   use(req: Request, res: Response, next: NextFunction) {
-    const requestId = (req.headers["x-request-id"] as string) || randomUUID();
+    const requestId = (req.headers['x-request-id'] as string) || randomUUID();
     const candidateUserId = (req as AuthenticatedRequest).user?.id;
     const userId =
-      typeof candidateUserId === "string" && candidateUserId.trim()
+      typeof candidateUserId === 'string' && candidateUserId.trim()
         ? candidateUserId
         : undefined;
 
@@ -3451,7 +3461,7 @@ export class RequestContextMiddleware implements NestMiddleware {
     };
 
     // Set request ID header for response
-    res.setHeader("X-Request-Id", requestId);
+    res.setHeader('X-Request-Id', requestId);
 
     requestContextStorage.run(context, () => {
       next();

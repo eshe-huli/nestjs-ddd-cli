@@ -144,6 +144,98 @@ describe('Bounded provider JSON HTTP', () => {
       }).get(['admin']),
     ).rejects.toMatchObject({ reason: 'timeout' });
   });
+  it('denies synchronous zero-byte streams before a starved timeout callback can run', async () => {
+    const cancelled = jest.fn();
+    const transport = jest.fn(() => {
+      // Finite fallback bounds the failing baseline fixture without relying on
+      // the very timer-starvation behavior this regression is checking.
+      const until = performance.now() + 40;
+      return Promise.resolve(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              if (performance.now() < until)
+                controller.enqueue(new Uint8Array());
+              else {
+                controller.enqueue(new TextEncoder().encode('{}'));
+                controller.close();
+              }
+            },
+            cancel: cancelled,
+          }),
+        ),
+      );
+    });
+    await expect(
+      create({ timeoutMs: 10, transport }).get(['resource']),
+    ).rejects.toMatchObject({ reason: 'timeout' });
+    expect(cancelled).toHaveBeenCalledTimes(1);
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares the original cutoff after delayed transport and a timer-starving body', async () => {
+    const cancelled = jest.fn();
+    const transport = jest.fn(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 70));
+      const until = performance.now() + 100;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (performance.now() < until) controller.enqueue(new Uint8Array());
+            else {
+              controller.enqueue(new TextEncoder().encode('{}'));
+              controller.close();
+            }
+          },
+          cancel: cancelled,
+        }),
+      );
+    });
+    const before = performance.now();
+    await expect(
+      create({ timeoutMs: 120, transport }).postJson(['resource'], {}),
+    ).rejects.toMatchObject({ reason: 'timeout' });
+    expect(performance.now() - before).toBeLessThan(165);
+    expect(cancelled).toHaveBeenCalledTimes(1);
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it('denies late headers even when synchronous response processing starves its timer', async () => {
+    const response = new Response('{}');
+    const realHeaders = new Headers(response.headers);
+    jest.spyOn(response.headers, 'get').mockImplementation((name) => {
+      const until = performance.now() + 30;
+      while (performance.now() < until) {
+        /* emulate delayed transport headers */
+      }
+      return realHeaders.get(name);
+    });
+    const transport = jest.fn(() => Promise.resolve(response));
+    await expect(
+      create({ timeoutMs: 10, transport }).get(['resource']),
+    ).rejects.toMatchObject({ reason: 'timeout' });
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it('snapshots reusable response chunks before subsequent reads mutate them', async () => {
+    const bytes = new TextEncoder().encode('{"v":1}');
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes);
+        },
+        async pull(controller) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 5));
+          bytes[5] = 57;
+          controller.close();
+        },
+      }),
+    );
+    await expect(
+      create({ transport: () => Promise.resolve(response) }).get(['resource']),
+    ).resolves.toEqual({ v: 1 });
+  });
+
   it('does not turn arbitrary JSON into a session or permission grant', async () => {
     const result = await create({
       transport: () =>
@@ -257,16 +349,24 @@ describe('Bounded provider JSON HTTP', () => {
       void _url;
       void _init;
       return Promise.resolve(
-        new Response('{"redirect_to":"https://provider.example.test/oauth2/auth"}'),
+        new Response(
+          '{"redirect_to":"https://provider.example.test/oauth2/auth"}',
+        ),
       );
     });
     const requestHeaders = { authorization: 'PRIVATE' };
-    const options = { origin: 'https://provider.example.test', requestHeaders, transport };
+    const options = {
+      origin: 'https://provider.example.test',
+      requestHeaders,
+      transport,
+    };
     const client = create(options);
     options.origin = 'https://evil.example';
     requestHeaders.authorization = 'changed';
     const payload = { subject: 'identity', context: { session: 'original' } };
-    const query = { login_challenge: 'challenge&redirect=https://evil.example/#fragment' };
+    const query = {
+      login_challenge: 'challenge&redirect=https://evil.example/#fragment',
+    };
     const request = client.putJson(
       ['admin', 'oauth2', 'auth', 'requests', 'login', 'accept'],
       payload,
@@ -275,7 +375,9 @@ describe('Bounded provider JSON HTTP', () => {
     payload.context.session = 'changed';
     query.login_challenge = 'changed';
     const response = await request;
-    expect(response).toEqual({ redirect_to: 'https://provider.example.test/oauth2/auth' });
+    expect(response).toEqual({
+      redirect_to: 'https://provider.example.test/oauth2/auth',
+    });
     expect(Object.isFrozen(response)).toBe(true);
     expect(transport).toHaveBeenCalledTimes(1);
     expect(transport.mock.calls[0]?.[0]).toBe(
@@ -295,7 +397,9 @@ describe('Bounded provider JSON HTTP', () => {
     expect(transport.mock.calls[0]?.[1].signal?.aborted).toBe(true);
     expect(JSON.stringify(client)).not.toContain('PRIVATE');
     await client.putJson(['decisions'], { accepted: false });
-    expect(transport.mock.calls[1]?.[0]).toBe('https://provider.example.test/decisions');
+    expect(transport.mock.calls[1]?.[0]).toBe(
+      'https://provider.example.test/decisions',
+    );
   });
 
   it('rejects unsafe PUT paths and challenge queries before dispatch', async () => {
@@ -315,9 +419,9 @@ describe('Bounded provider JSON HTTP', () => {
       },
     ];
     for (const { segments, query } of invalidRequests) {
-      await expect(client.putJson(segments, { safe: true }, query)).rejects.toThrow(
-        'Invalid provider request configuration',
-      );
+      await expect(
+        client.putJson(segments, { safe: true }, query),
+      ).rejects.toThrow('Invalid provider request configuration');
     }
     expect(transport).not.toHaveBeenCalled();
   });
@@ -326,7 +430,10 @@ describe('Bounded provider JSON HTTP', () => {
     const transport = jest.fn(() => Promise.resolve(new Response('{}')));
     const client = create({ transport });
     const getter = jest.fn(() => 'PRIVATE');
-    const accessor = Object.defineProperty({}, 'secret', { enumerable: true, get: getter });
+    const accessor = Object.defineProperty({}, 'secret', {
+      enumerable: true,
+      get: getter,
+    });
     const cyclic: { child?: unknown } = {};
     cyclic.child = cyclic;
     let deep: unknown = 'value';
@@ -340,9 +447,9 @@ describe('Bounded provider JSON HTTP', () => {
       accessor,
       { message: 'é'.repeat(140000) },
     ]) {
-      expect(() => client.putJson(['decisions'], payload, { challenge: 'safe' })).toThrow(
-        'Invalid provider request configuration',
-      );
+      expect(() =>
+        client.putJson(['decisions'], payload, { challenge: 'safe' }),
+      ).toThrow('Invalid provider request configuration');
     }
     expect(getter).not.toHaveBeenCalled();
     expect(transport).not.toHaveBeenCalled();
@@ -351,7 +458,9 @@ describe('Bounded provider JSON HTTP', () => {
   it.each([401, 404, 410, 503])(
     'holds failed PUT status %s without retry or provider disclosure',
     async (status) => {
-      const transport = jest.fn(() => Promise.resolve(new Response('PRIVATE-BODY', { status })));
+      const transport = jest.fn(() =>
+        Promise.resolve(new Response('PRIVATE-BODY', { status })),
+      );
       const error: unknown = await create({ transport })
         .putJson(['decision'], { accepted: true })
         .catch((error: unknown) => error);
@@ -367,7 +476,10 @@ describe('Bounded provider JSON HTTP', () => {
 
   it('rejects PUT redirects and malformed or oversized response data without retries', async () => {
     for (const response of [
-      new Response('PRIVATE', { status: 302, headers: { location: 'https://evil.example' } }),
+      new Response('PRIVATE', {
+        status: 302,
+        headers: { location: 'https://evil.example' },
+      }),
       new Response('PRIVATE-NOT-JSON'),
       new Response(new Uint8Array([0xff])),
       new Response('x'.repeat(129)),
@@ -400,11 +512,16 @@ describe('Bounded provider JSON HTTP', () => {
   });
 
   it('sanitizes a PUT network failure and never retries the uncertain decision', async () => {
-    const transport = jest.fn(() => Promise.reject(new Error('PRIVATE-HEADER-BODY')));
+    const transport = jest.fn(() =>
+      Promise.reject(new Error('PRIVATE-HEADER-BODY')),
+    );
     const error: unknown = await create({ transport })
       .putJson(['decision'], {})
       .catch((error: unknown) => error);
-    expect(error).toMatchObject({ reason: 'network', message: 'Provider validation unavailable' });
+    expect(error).toMatchObject({
+      reason: 'network',
+      message: 'Provider validation unavailable',
+    });
     expect(String(error)).not.toContain('PRIVATE');
     expect(transport).toHaveBeenCalledTimes(1);
   });

@@ -40,7 +40,7 @@ describe('emitted internal service credential redaction', () => {
         path.join(target, 'src/shared/logging/request-context.ts'),
         'utf8',
       );
-      expect(source).toContain('import { randomUUID } from "node:crypto"');
+      expect(source).toContain("import { randomUUID } from 'node:crypto'");
       expect(source).not.toMatch(/from ["']uuid["']/);
       await symlink(path.join(process.cwd(), 'node_modules'), path.join(target, 'node_modules'));
       const emitted = path.join(target, 'request-context.cjs');
