@@ -10,6 +10,8 @@ export const KAFKA_CONSUMER_OPTIONS = Symbol('KAFKA_CONSUMER_OPTIONS');
 export const KAFKA_TRANSACTIONAL_HANDLER = Symbol('KAFKA_TRANSACTIONAL_HANDLER');
 
 export interface KafkaConsumerOptions {
+  /** Existing callers default to enabled; held rollouts explicitly set false. */
+  enabled?: boolean;
   kafka: KafkaConfig;
   groupId: string;
   topics: string[];
@@ -74,6 +76,10 @@ export class KafkaConsumerLifecycle implements OnApplicationBootstrap, OnApplica
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
+    if (this.options.enabled !== undefined && typeof this.options.enabled !== "boolean") {
+      throw new Error("Kafka enabled must be an explicit boolean");
+    }
+    if (this.options.enabled === false) return;
     if (!/^[A-Za-z0-9._-]{1,200}$/.test(this.options.groupId) ||
         this.options.topics.length === 0 ||
         this.options.topics.some(topic => !/^[A-Za-z0-9._-]{1,249}$/.test(topic)) ||

@@ -155,3 +155,5 @@ shutdown. Also prove the concrete provider adapter's
 create/update/delete/readback behavior and its own target-ordering requirements.
 Alert on old `pending`, `retry_wait`, `uncertain`, `blocked`, expired
 `processing`, attempt count, and worker poll failures.
+
+Rollback refuses deletion of retained operations or target heads. Keep pending, uncertain and applied history through binary rollback; use accepted restore or reviewed forward recovery.
