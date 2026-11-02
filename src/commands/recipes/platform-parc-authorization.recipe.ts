@@ -72,6 +72,7 @@ export interface ParcDecisionResponse {
   allowed: boolean;
   decisionReference: string;
   decisionId?: string;
+  decidedAt: string;
 }
 
 export interface ParcAccessDecisionReceipt extends ParcDecisionResponse {
@@ -126,6 +127,7 @@ export class ParcAuthorizationClient {
     try {
       const response = await fetch(baseUrl + "/v1/decisions/check", {
         method: "POST",
+        redirect: "error",
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
@@ -139,7 +141,7 @@ export class ParcAuthorizationClient {
         throw new Error("PARC decision request failed");
       }
 
-      const decision = this.parseDecision(await response.json());
+      const decision = this.parseDecision(await response.json(), authorizationRequest);
       if (!decision.allowed) {
         throw new Error("PARC denied the requested capability");
       }
@@ -149,20 +151,30 @@ export class ParcAuthorizationClient {
         allowed: true,
         decisionReference: decision.decisionReference,
         ...(decision.decisionId ? { decisionId: decision.decisionId } : {}),
-        decidedAt: new Date().toISOString(),
+        decidedAt: decision.decidedAt,
       };
     } catch {
       throw this.denied();
     }
   }
 
-  private parseDecision(payload: unknown): ParcDecisionResponse {
+  private parseDecision(payload: unknown, request: ParcDecisionCheckRequest): ParcDecisionResponse {
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
       throw this.denied();
     }
 
     const record = payload as Record<string, unknown>;
     if (typeof record.allowed !== "boolean") {
+      throw this.denied();
+    }
+
+    for (const key of ["subjectId", "businessId", "clientAppId", "service", "permission"] as const) {
+      if (record[key] !== request[key]) throw this.denied();
+    }
+    if (record.action !== (request.action ?? null)) throw this.denied();
+    const decidedAt = this.requiredString(record.decidedAt);
+    const instant = new Date(decidedAt);
+    if (!Number.isFinite(instant.getTime()) || instant.toISOString() !== decidedAt) {
       throw this.denied();
     }
 
@@ -176,6 +188,7 @@ export class ParcAuthorizationClient {
       allowed: record.allowed,
       decisionReference,
       ...(decisionId ? { decisionId } : {}),
+      decidedAt,
     };
   }
 
@@ -305,6 +318,9 @@ The trusted actor subject comes from \`request.platformContext.actor.subjectId\`
 The target may narrow business and application scope; otherwise the actor's
 trusted platform context supplies them. Missing context, required scope, PARC
 configuration, transport success, or a valid allow receipt denies access.
+The response must echo the exact subject, business, application, service,
+permission and action requested. The receipt preserves PARC's canonical
+decision timestamp; redirects and responses with missing scope are rejected.
 
 ## Ownership And Audit
 
