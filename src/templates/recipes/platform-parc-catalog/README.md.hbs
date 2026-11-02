@@ -1,0 +1,30 @@
+# Service-owned PARC catalog
+
+Keep a reviewed manifest in your service's source. It contains `service`, a
+consecutive integer `version`, `permissions`, and `roles`. Each permission has
+`key` (`<service>.<action>`), `action`, `description`, `surface` and concrete
+Service Access `capabilities`. Each role has `key`, `description` and an explicit
+subset of the permission keys. Define read-only/operator/admin templates from
+actual routes; do not infer grants from names or use wildcards. Administrative
+`access.*` and `permission-catalog.*` permissions cannot be self-published.
+
+Call `new CatalogPublisher(parcHttpsOrigin, serviceKey).publish(manifest,
+{ lease, credential })` from a separately admitted publication path. Obtain a
+fresh, correctly scoped Service Access lease for `<service>.permission-catalog.publish`.
+The publisher does not issue, inspect, consume or log credentials. PARC consumes
+the lease. Do not reuse a request's already consumed lease or auto-publish on
+application startup. Do not use browser tokens or a shared API key.
+
+PARC owns canonical validation and persistence. Identical retries of the current
+version are idempotent, but require fresh authority. Transport errors can follow
+a successful commit: reconcile with PARC before advancing the version. The
+client never retries automatically and verifies the acknowledgement's exact
+service, version and canonical digest. Catalog publication never assigns roles.
+Existing role assignments retain their selected catalog version; adoption is a
+separate authorized operation. Compliance and business invariants still belong
+to their domain services.
+
+The recipe does not edit existing authorization recipes, application startup,
+configuration, manifests or package dependencies. It rejects differing generated
+files and symlink targets; identical regeneration is safe. PARC's catalog API
+must be deployed and enabled through its release gates before publication.

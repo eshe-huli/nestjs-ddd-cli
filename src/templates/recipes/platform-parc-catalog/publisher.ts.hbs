@@ -1,0 +1,85 @@
+import { CatalogManifestService } from './catalog-manifest';
+
+export interface CatalogPublicationAuthority {
+  lease: string;
+  credential: string;
+}
+export interface CatalogPublicationResult {
+  service: string;
+  version: number;
+  digest: string;
+  changed: boolean;
+}
+
+/** Invoke from an admitted operator/publisher path, never automatically on startup. */
+export class CatalogPublisher {
+  private readonly endpoint: string;
+  private readonly manifests = new CatalogManifestService();
+  constructor(origin: string, private readonly service: string) {
+    const url = new URL(origin);
+    if (url.protocol !== 'https:' || url.username || url.password || url.search ||
+        url.hash || url.pathname !== '/' || !/^[a-z][a-z0-9-]{0,62}$/.test(service)) {
+      throw new Error('PARC catalog requires an HTTPS origin and exact service key');
+    }
+    this.endpoint = new URL('/v1/service-catalogs', url).href;
+  }
+
+  async publish(input: unknown, authority: CatalogPublicationAuthority): Promise<CatalogPublicationResult> {
+    const manifest = this.manifests.parse(input);
+    if (manifest.service !== this.service) throw new Error('Catalog service does not match publisher');
+    const digest = this.manifests.digest(manifest);
+    const body = JSON.stringify(manifest);
+    if (Buffer.byteLength(body) > 1048576) throw new Error('Catalog exceeds publication body limit');
+    for (const value of [authority?.lease, authority?.credential]) {
+      if (typeof value !== 'string' || !value || value.length > 4096 || /\s/.test(value))
+        throw new Error('Current Service Access publication authority required');
+    }
+    // No pre-consumption and no automatic retries: the receiving PARC guard consumes once.
+    let response: Response;
+    try {
+      response = await fetch(this.endpoint, {
+        method: 'POST', redirect: 'error', cache: 'no-store',
+        signal: AbortSignal.timeout(5000),
+        headers: {
+          'content-type': 'application/json',
+          'x-request-context-lease': authority.lease,
+          'x-service-access-credential': authority.credential,
+        },
+        body,
+      });
+    } catch {
+      throw new Error('PARC catalog transport failed; outcome unknown, reconcile with fresh authority');
+    }
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error(`PARC catalog publication rejected (HTTP ${response.status})`);
+    }
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('PARC catalog acknowledgement missing');
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    let result: unknown;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.length;
+        if (size > 4096) throw new Error();
+        chunks.push(value);
+      }
+      result = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    } catch {
+      throw new Error('PARC catalog acknowledgement invalid; outcome unknown');
+    } finally {
+      await reader.cancel().catch(() => undefined);
+    }
+    const receipt = result as CatalogPublicationResult;
+    if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) ||
+        Object.keys(receipt).sort().join(',') !== 'changed,digest,service,version' ||
+        receipt.service !== manifest.service || receipt.version !== manifest.version ||
+        receipt.digest !== digest || typeof receipt.changed !== 'boolean') {
+      throw new Error('PARC catalog acknowledgement does not bind the published manifest');
+    }
+    return receipt;
+  }
+}
