@@ -123,7 +123,7 @@ export class CatalogManifestService {
   ): string {
     if (typeof value !== 'string' || !pattern.test(value))
       this.invalid('identifier');
-    return value as string;
+    return value;
   }
   private description(value: unknown): string {
     if (
@@ -134,7 +134,7 @@ export class CatalogManifestService {
       /[\p{Cc}\p{Cf}]/u.test(value)
     )
       this.invalid('description');
-    return value as string;
+    return value;
   }
   private unique(values: string[]): void {
     if (new Set(values).size !== values.length) this.invalid('duplicate entry');
