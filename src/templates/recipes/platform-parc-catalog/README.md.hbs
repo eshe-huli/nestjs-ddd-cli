@@ -13,7 +13,9 @@ Call `new CatalogPublisher(parcHttpsOrigin, serviceKey).publish(manifest,
 fresh, correctly scoped Service Access lease for `<service>.permission-catalog.publish`.
 The publisher does not issue, inspect, consume or log credentials. PARC consumes
 the lease. Do not reuse a request's already consumed lease or auto-publish on
-application startup. Do not use browser tokens or a shared API key.
+application startup. Do not use browser tokens or a shared API key. TLS verification must
+remain enabled, including if process configuration changes after client creation.
+Install the approved CA trust instead of setting `NODE_TLS_REJECT_UNAUTHORIZED=0`.
 
 PARC owns canonical validation and persistence. Identical retries of the current
 version are idempotent, but require fresh authority. Transport errors can follow
