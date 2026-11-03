@@ -26,11 +26,41 @@ const receipt = await parc.check({
 // Persist decisionReference with the owner transaction and its audit/outbox.
 ```
 
-Select permission/action/resource and expected scope from the owner route and
-persisted domain facts, never caller-supplied role or identity headers. Supply
+Select permission/action/resource from the owner route and persisted domain
+facts, never caller-supplied role or identity headers. Supply
 `expected.subjectId` when independently verified and required by the operation.
 The returned subject is PARC's canonical actor, not a locally reconstructed one.
 The operation digest must cover the owner-verified material being authorized.
+
+For multi-tenant create/quote intake, use a required tenant selector in the route
+as `expected.businessId`. It is a claim to check, not authenticated scope: do not
+introspect the single-use lease to derive it. `check` returns only after PARC's
+canonical business exactly matches that selector. Use the returned `businessId`,
+`subjectId` and `clientAppId` as authorized scope. No static tenant configuration
+or optional-business mode is needed. An application selector, when the service
+accepts several admitted applications, is likewise untrusted until exact receipt
+matching; route-specific application restrictions remain the owner's concern.
+Include the selected tenant and operation inputs in the digest, constrain every
+existing-resource lookup to that tenant, and reject any conflicting tenant in
+the body. Do not expose tenant data or make side effects before authorization.
+
+The client checks freshness when the HTTP response arrives, not when a later
+owner transaction commits. Preserve `expiresAt` alongside the immutable receipt;
+after Contract resolution and database lock waits, check it immediately before
+the protected write and again before committing. Expiry means rollback, not an
+extended TTL or reuse of the consumed lease. A SQL expiry predicate must use a
+current wall clock, not a transaction-start timestamp. For flows likely to exceed
+five seconds, resolve through an independently authorized reader first, then
+consume a fresh lease for the final decision bound to the resolved immutable
+terms/version and mutation inputs. Revalidate those inputs in the transaction;
+an earlier decision cannot authorize changed terms. If both preliminary and
+final authorization are required, they need distinct fresh leases.
+
+This recipe authorizes one owner operation. It does not issue downstream
+delegated authority, turn a decision reference into a Contract credential, or
+make caller-supplied realm/session headers trustworthy. A Billing-to-Contract
+reader needs its own supported governed authority contract; this recipe alone
+does not complete that integration.
 
 The lease carries authentication context to PARC. Its Service Access adapter
 validates the canonical actor, issuer/consumer grants, audience and membership.

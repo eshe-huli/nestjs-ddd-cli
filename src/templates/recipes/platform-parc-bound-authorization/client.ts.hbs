@@ -10,7 +10,7 @@ export interface ParcBoundRequest {
   resource: { type: string; id: string };
   /** SHA-256 of the owner-verified operation material. */
   contextDigest: string;
-  /** Expected owner scope, never copied blindly from request bodies or identity headers. */
+  /** Persisted owner scope or an untrusted route selector; trusted only after exact receipt matching. */
   expected: { businessId: string; clientAppId: string; subjectId?: string };
 }
 
@@ -56,6 +56,7 @@ export class ParcBoundAuthorizationClient {
     } catch { throw new ParcBoundAuthorizationError('invalid_request'); }
   }
 
+  /** Checks freshness on receipt only; the owner must recheck expiresAt at its write/commit boundary. */
   async check(input: ParcBoundRequest): Promise<Readonly<ParcBoundReceipt>> {
     this.requireTls();
     // Snapshot validated material before the asynchronous request.
