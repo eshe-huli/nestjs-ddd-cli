@@ -66,8 +66,20 @@ The lease carries authentication context to PARC. Its Service Access adapter
 validates the canonical actor, issuer/consumer grants, audience and membership.
 For shared IAM external authentication PARC preserves realm/session evidence,
 requires its enabled current relationship adapter and fresh IAM evaluation,
-and excludes staff-managed assignments. Historical ZITADEL authority follows
-PARC's supported bound staff path. Neither issuer label grants permission.
+and excludes staff-managed assignments. This shared-external contract is not
+the internal staff contract: it accepts only `SHARED_EXTERNAL`,
+`shared-external-v2`, and issuer `https://id.joonalabs.com`.
+
+For ZITADEL-issued staff tokens verified through IAM, Identity retains the
+original ZITADEL issuer. SA's governed staff readback requires provider `zitadel`
+and internal actor/organization scope; it emits `authenticatedBy: 'zitadel'`
+without shared-external authentication provenance. PARC accepts that through its
+existing bound staff path. Do not relabel staff as `iam-orchestrator` or require
+the shared-external relationship path for this flow. A legacy consumer that
+accepts this canonical ZITADEL context is not blocked merely because IAM did the
+upstream verification; adopting this recipe is not a new staff-release gate.
+Neither issuer label grants permission. Source compatibility does not establish
+governed reader admission or prove a real staff login through deployed owners.
 The receipt is PARC decision evidence; it does not independently prove an IAM
 login or expose the session/realm evidence retained in PARC's decision record.
 
