@@ -1,3 +1,9 @@
+## [3.3.1](https://github.com/eshe-huli/nestjs-ddd-cli/compare/v3.3.0...v3.3.1) (2026-11-03)
+
+### Bug Fixes
+
+* **release:** upload one installable package archive ([9eda21e](https://github.com/eshe-huli/nestjs-ddd-cli/commit/9eda21ec304be0378dc2f926491698e35b9aae5a))
+
 ## [3.3.0](https://github.com/eshe-huli/nestjs-ddd-cli/compare/v3.2.2...v3.3.0) (2026-11-03)
 
 ### ⚠ BREAKING CHANGES
