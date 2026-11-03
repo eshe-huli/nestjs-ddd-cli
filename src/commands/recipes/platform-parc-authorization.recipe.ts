@@ -111,6 +111,11 @@ export class ParcAuthorizationClient {
     target: ParcAuthorizationTarget,
   ): Promise<ParcAccessDecisionReceipt> {
     const actor = request.platformContext?.actor;
+    // IAM authority requires PARC's bound relationship path. This legacy
+    // endpoint cannot carry its realm, session or current relationship proof.
+    if (actor?.authenticatedBy === "iam-orchestrator") {
+      throw this.denied();
+    }
     const authorizationRequest: ParcDecisionCheckRequest = {
       subjectId: this.requiredString(actor?.subjectId),
       businessId: this.requiredString(target.businessId ?? actor?.businessId),
@@ -302,6 +307,10 @@ Import \`PlatformParcAuthorizationModule\`, then decorate a controller or handle
 \`\`\`
 
 The trusted actor subject comes from \`request.platformContext.actor.subjectId\`.
+This legacy decision transport rejects \`iam-orchestrator\` actors before sending
+any request. IAM authority requires PARC's bound decision integration with its
+realm, session and current relationship evidence; changing the actor label or
+falling back to this endpoint is not supported.
 The target may narrow business and application scope; otherwise the actor's
 trusted platform context supplies them. Missing context, required scope, PARC
 configuration, transport success, or a valid allow receipt denies access.

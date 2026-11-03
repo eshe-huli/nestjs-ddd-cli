@@ -31,6 +31,12 @@ actor's bearer token. A response is trusted only when it is well formed,
 revoked, and replayed leases. Non-2xx responses, malformed bodies, audience
 mismatches, and Service Access failures deny in enforce mode.
 
+This recipe supports the legacy ZITADEL principal only. IAM-authenticated
+principals and responses carrying `provenance.authentication` are rejected,
+rather than discarding their realm/session proof. They require PARC's bound
+decision integration and its current IAM relationship checks. Do not relabel
+an IAM actor or fall back to the legacy decision endpoint.
+
 ## Environment Contract
 
 - `SERVICE_ACCESS_URL`: Service Access base URL, without `/api/v1`.

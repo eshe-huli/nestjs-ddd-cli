@@ -51,6 +51,11 @@ function parsePrincipal(value: unknown): ServiceAccessVerifiedPrincipal {
   const principal = requiredRecord(value);
   const actor = requiredRecord(principal["actor"]);
   const machine = requiredRecord(principal["machine"]);
+  // This recipe models the legacy ZITADEL lease only. Do not flatten a
+  // realm-bound IAM principal into a legacy authorization context.
+  if (actor["authenticatedBy"] !== "zitadel") {
+    throw invalidResponse();
+  }
   const sessionId = optionalString(actor["sessionId"]);
   const tokenId = optionalString(actor["tokenId"]);
   const serviceInstanceId = optionalString(machine["serviceInstanceId"]);
@@ -78,7 +83,8 @@ function parseProvenance(value: unknown): ServiceAccessRequestContextProvenance 
   const provenance = requiredRecord(value);
   if (
     provenance["identityAuthority"] !== "identity-manager" ||
-    provenance["credentialAuthority"] !== "service-access"
+    provenance["credentialAuthority"] !== "service-access" ||
+    provenance["authentication"] !== undefined
   ) {
     throw invalidResponse();
   }
