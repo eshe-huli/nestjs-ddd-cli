@@ -25,6 +25,7 @@ describe('CLI release runtime', () => {
       contents: 'write',
       issues: 'write',
       'pull-requests': 'write',
+      'id-token': 'write',
     });
   });
 

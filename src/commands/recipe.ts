@@ -18,6 +18,7 @@ import { applyKafkaConsumerRecipe } from './recipes/kafka-consumer.recipe';
 import { applyPlatformServiceRuntimeRecipe } from './recipes/platform-service-runtime.recipe';
 import { applyPlatformContextRecipe } from './recipes/platform-context.recipe';
 import { applyPlatformServiceAccessRequestContextRecipe } from './recipes/platform-service-access-request-context.recipe';
+import { applyPlatformParcBoundAuthorizationRecipe } from './recipes/platform-parc-bound-authorization.recipe';
 import { applyPlatformParcAuthorizationRecipe } from './recipes/platform-parc-authorization.recipe';
 import { applyBanklinkConnectorContractRecipe } from './recipes/banklink-connector-contract.recipe';
 import { applyOidcDashboardRecipe } from './recipes/oidc-dashboard.recipe';
@@ -53,12 +54,14 @@ async function applyDryRunRecipe(
     'oauth2-token-introspection': () => applyOAuth2TokenIntrospectionRecipe(basePath, true),
     'kafka-consumer': () => applyKafkaConsumerRecipe(basePath, true),
     'jest-cjs-compat': () => applyJestCommonJsCompatibilityRecipe(basePath, true),
+    'platform-parc-bound-authorization': () =>
+      applyPlatformParcBoundAuthorizationRecipe(basePath, true),
     'bounded-json-http': () => applyBoundedJsonHttpRecipe(basePath, true),
   };
   const handler = handlers[recipeName];
   if (!handler) {
     throw new Error(
-      'Dry-run is currently supported only by external-projection-worker, oidc-resource-server, oauth2-token-introspection, oauth2-client-credentials, oidc-bff-session, kafka-consumer, jest-cjs-compat, and bounded-json-http',
+      'Dry-run is currently supported only by external-projection-worker, oidc-resource-server, oauth2-token-introspection, oauth2-client-credentials, oidc-bff-session, kafka-consumer, jest-cjs-compat, platform-parc-bound-authorization, and bounded-json-http',
     );
   }
   await handler();
@@ -77,6 +80,13 @@ async function installRecipeDependencies(
 }
 
 const AVAILABLE_RECIPES = {
+  'platform-parc-bound-authorization': {
+    name: 'PARC bound authorization',
+    description:
+      'Single-use lease authorization with exact owner scope and current PARC relationship checks',
+    dependencies: [],
+    devDependencies: [],
+  },
   'bounded-json-http': {
     name: 'Bounded JSON HTTP transport',
     description:
@@ -408,6 +418,7 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
     'platform-context': applyPlatformContextRecipe,
     'platform-service-access-request-context': applyPlatformServiceAccessRequestContextRecipe,
     'platform-parc-authorization': applyPlatformParcAuthorizationRecipe,
+    'platform-parc-bound-authorization': applyPlatformParcBoundAuthorizationRecipe,
     'banklink-connector-contract': applyBanklinkConnectorContractRecipe,
     'oidc-dashboard': applyOidcDashboardRecipe,
     'oidc-resource-server': applyOidcResourceServerRecipe,

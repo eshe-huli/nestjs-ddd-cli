@@ -1,0 +1,142 @@
+import { BoundedJsonHttpClient } from '../../auth/oauth2-token-introspection/bounded-json-http.client';
+
+export interface ParcBoundRequest {
+  /** Fresh opaque SA lease. PARC consumes it; do not introspect it first. */
+  lease: string;
+  /** This consuming service's admitted machine credential, from private configuration. */
+  credential: string;
+  permission: string;
+  action: string;
+  resource: { type: string; id: string };
+  /** SHA-256 of the owner-verified operation material. */
+  contextDigest: string;
+  /** Persisted owner scope or an untrusted route selector; trusted only after exact receipt matching. */
+  expected: { businessId: string; clientAppId: string; subjectId?: string };
+}
+
+export interface ParcBoundReceipt {
+  decisionReference: string;
+  allowed: true;
+  subjectId: string;
+  businessId: string;
+  clientAppId: string;
+  service: string;
+  permission: string;
+  action: string;
+  resource: Readonly<{ type: string; id: string }>;
+  contextDigest: string;
+  decidedAt: string;
+  expiresAt: string;
+}
+
+export class ParcBoundAuthorizationError extends Error {
+  constructor(readonly reason: 'invalid_request' | 'denied' | 'unavailable' | 'invalid_receipt') {
+    super('PARC bound authorization ' + reason);
+    this.name = 'ParcBoundAuthorizationError';
+  }
+}
+
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const identifier = /^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/;
+
+/** No actor reconstruction, role assignment, retry, cache or legacy fallback. */
+export class ParcBoundAuthorizationClient {
+  private readonly origin: string;
+  private readonly service: string;
+
+  constructor(origin: string, service: string) {
+    this.requireTls();
+    try {
+      const url = new URL(origin);
+      if (url.protocol !== 'https:' || url.username || url.password ||
+          url.pathname !== '/' || origin.includes('?') || origin.includes('#') ||
+          !/^[a-z][a-z0-9-]{0,62}$/.test(service)) throw new Error();
+      this.origin = url.origin;
+      this.service = service;
+    } catch { throw new ParcBoundAuthorizationError('invalid_request'); }
+  }
+
+  /** Checks freshness on receipt only; the owner must recheck expiresAt at its write/commit boundary. */
+  async check(input: ParcBoundRequest): Promise<Readonly<ParcBoundReceipt>> {
+    this.requireTls();
+    // Snapshot validated material before the asynchronous request.
+    const lease = this.authority(input?.lease);
+    const credential = this.authority(input?.credential);
+    const permission = this.token(input?.permission, 200, 3);
+    if (!permission.startsWith(this.service + '.')) this.invalid();
+    const request = {
+      permission,
+      action: this.token(input?.action, 200),
+      resource: {
+        type: this.token(input?.resource?.type, 100),
+        id: this.token(input?.resource?.id, 200),
+      },
+      contextDigest: input?.contextDigest,
+    };
+    if (typeof request.contextDigest !== 'string' ||
+        !/^[a-f0-9]{64}$/.test(request.contextDigest)) this.invalid();
+    const expected = {
+      businessId: this.id(input?.expected?.businessId),
+      clientAppId: this.id(input?.expected?.clientAppId),
+      subjectId: input?.expected?.subjectId === undefined
+        ? undefined : this.id(input.expected.subjectId),
+    };
+    const startedAt = Date.now();
+    let value: unknown;
+    try {
+      value = await new BoundedJsonHttpClient({
+        origin: this.origin,
+        timeoutMs: 5000,
+        maxResponseBytes: 16384,
+        requestHeaders: {
+          'x-request-context-lease': lease,
+          'x-service-access-credential': credential,
+        },
+      }).postJson(['v1', 'decisions', 'check-bound'], request);
+    } catch { throw new ParcBoundAuthorizationError('unavailable'); }
+    this.requireTls();
+    const fail = (): never => { throw new ParcBoundAuthorizationError('invalid_receipt'); };
+    if (!value || typeof value !== 'object' || Array.isArray(value)) fail();
+    const r = value as Record<string, unknown>;
+    const keys = ['decisionReference', 'allowed', 'subjectId', 'businessId', 'clientAppId',
+      'service', 'permission', 'action', 'resource', 'contextDigest', 'decidedAt', 'expiresAt'];
+    if (Object.keys(r).length !== keys.length || keys.some(k => !Object.hasOwn(r, k))) fail();
+    const resource = r.resource as Record<string, unknown> | undefined;
+    if (typeof r.allowed !== 'boolean' || typeof r.subjectId !== 'string' || !uuid.test(r.subjectId) ||
+        r.businessId !== expected.businessId || r.clientAppId !== expected.clientAppId ||
+        (expected.subjectId !== undefined && r.subjectId !== expected.subjectId) ||
+        r.service !== this.service || r.permission !== request.permission || r.action !== request.action ||
+        r.contextDigest !== request.contextDigest || !resource || Array.isArray(resource) ||
+        Object.keys(resource).sort().join(',') !== 'id,type' ||
+        resource.type !== request.resource.type || resource.id !== request.resource.id ||
+        typeof r.decisionReference !== 'string' || !/^PARC-BND-[A-Za-z0-9_-]{24}$/.test(r.decisionReference)) fail();
+    const date = (v: unknown): number => {
+      if (typeof v !== 'string') return fail();
+      const time = Date.parse(v);
+      if (!Number.isFinite(time) || new Date(time).toISOString() !== v) return fail();
+      return time;
+    };
+    const decided = date(r.decidedAt), expires = date(r.expiresAt), now = Date.now();
+    if (decided < startedAt - 1000 || decided > now + 1000 || expires <= now ||
+        expires <= decided || expires - decided > 5000) fail();
+    if (!r.allowed) throw new ParcBoundAuthorizationError('denied');
+    return Object.freeze({ ...r, resource: Object.freeze({ ...resource }) }) as unknown as Readonly<ParcBoundReceipt>;
+  }
+
+  private requireTls(): void {
+    if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') this.invalid();
+  }
+  private token(value: unknown, max: number, min = 1): string {
+    if (typeof value !== 'string' || value.length < min || value.length > max || !identifier.test(value)) this.invalid();
+    return value as string;
+  }
+  private authority(value: unknown): string {
+    if (typeof value !== 'string' || !value || value.length > 4096 || /[\s\u0000-\u001f\u007f]/.test(value)) this.invalid();
+    return value as string;
+  }
+  private id(value: unknown): string {
+    if (typeof value !== 'string' || !uuid.test(value)) this.invalid();
+    return value as string;
+  }
+  private invalid(): never { throw new ParcBoundAuthorizationError('invalid_request'); }
+}
