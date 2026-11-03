@@ -110,7 +110,7 @@
         "changelogFile": "CHANGELOG.md"
       }
     ],
-    "@semantic-release/npm",
+    "./node_modules/@semantic-release/npm/index.js",
     [
       "@semantic-release/github",
       {
