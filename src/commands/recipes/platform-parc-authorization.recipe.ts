@@ -120,7 +120,7 @@ export class ParcAuthorizationClient {
       permission: this.requiredString(target.capability),
       action: this.optionalString(target.action),
     };
-    const baseUrl = this.requiredConfig("PARC_URL").replace(/\\/+$/, "");
+    const baseUrl = this.baseUrl();
     const internalApiKey = this.requiredConfig("PARC_INTERNAL_API_KEY");
     const timeoutMs = this.timeoutMs();
 
@@ -190,6 +190,21 @@ export class ParcAuthorizationClient {
       ...(decisionId ? { decisionId } : {}),
       decidedAt,
     };
+  }
+
+  private baseUrl(): string {
+    if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") throw this.denied();
+    const value = this.requiredConfig("PARC_URL").replace(/\\/+$/, "");
+    let parsed: URL;
+    try {
+      parsed = new URL(value);
+    } catch {
+      throw this.denied();
+    }
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash) {
+      throw this.denied();
+    }
+    return value;
   }
 
   private requiredConfig(name: "PARC_URL" | "PARC_INTERNAL_API_KEY"): string {
@@ -321,6 +336,10 @@ configuration, transport success, or a valid allow receipt denies access.
 The response must echo the exact subject, business, application, service,
 permission and action requested. The receipt preserves PARC's canonical
 decision timestamp; redirects and responses with missing scope are rejected.
+\`PARC_URL\` must use HTTPS without embedded credentials, a query or a fragment.
+Certificate verification must remain enabled, including on each decision call.
+For a private CA, configure \`NODE_EXTRA_CA_CERTS\` before starting Node;
+\`NODE_TLS_REJECT_UNAUTHORIZED=0\` is rejected before sending credentials.
 
 ## Ownership And Audit
 
