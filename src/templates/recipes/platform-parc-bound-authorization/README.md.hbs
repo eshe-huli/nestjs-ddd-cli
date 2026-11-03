@@ -1,0 +1,50 @@
+# PARC bound authorization
+
+Generate with `ddd recipe platform-parc-bound-authorization --dry-run`, then
+without `--dry-run`. Existing differing files and symlinks are refused. No
+dependency installation, role assignment, application wiring or activation occurs.
+
+This integration uses the current `POST /v1/decisions/check-bound` contract.
+PARC consumes a fresh opaque Service Access lease with this service's admitted
+machine credential. Do **not** place the legacy Service Access introspection
+guard before this call: leases are single-use. Do not decode the lease, construct
+an actor, relabel IAM as ZITADEL, forward browser bearer/cookie headers, or fall
+back to `/v1/decisions/check`. The client makes one request and does not retry.
+
+```typescript
+const parc = new ParcBoundAuthorizationClient(config.parcHttpsOrigin, 'owner-service');
+const receipt = await parc.check({
+  lease: opaqueLease,
+  credential: config.admittedServiceCredential,
+  permission: 'owner-service.records.update',
+  action: 'update',
+  resource: { type: 'record', id: record.id },
+  contextDigest: ownerVerifiedOperationDigest,
+  expected: { businessId: record.businessId, clientAppId: configuredApplicationId },
+});
+// Enforce owner invariants and receipt expiry immediately before the mutation.
+// Persist decisionReference with the owner transaction and its audit/outbox.
+```
+
+Select permission/action/resource and expected scope from the owner route and
+persisted domain facts, never caller-supplied role or identity headers. Supply
+`expected.subjectId` when independently verified and required by the operation.
+The returned subject is PARC's canonical actor, not a locally reconstructed one.
+The operation digest must cover the owner-verified material being authorized.
+
+The lease carries authentication context to PARC. Its Service Access adapter
+validates the canonical actor, issuer/consumer grants, audience and membership.
+For shared IAM external authentication PARC preserves realm/session evidence,
+requires its enabled current relationship adapter and fresh IAM evaluation,
+and excludes staff-managed assignments. Historical ZITADEL authority follows
+PARC's supported bound staff path. Neither issuer label grants permission.
+The receipt is PARC decision evidence; it does not independently prove an IAM
+login or expose the session/realm evidence retained in PARC's decision record.
+
+Missing admission, disabled relationships, revoked scope or upstream failure
+denies access. No generic key or legacy fallback is provided. HTTPS verification
+must remain enabled; use `NODE_EXTRA_CA_CERTS` for private CAs. Response bodies
+are bounded at 16 KiB under a five-second deadline; redirects are refused.
+Receipts must bind the exact scope, operation and resource and expire within
+PARC's five-second bound. Never cache/reuse them as durable permissions. A failed
+request may already have consumed its lease; obtain fresh authority explicitly.
