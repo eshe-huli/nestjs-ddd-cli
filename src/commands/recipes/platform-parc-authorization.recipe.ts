@@ -138,10 +138,11 @@ export class ParcAuthorizationClient {
       });
 
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         throw new Error("PARC decision request failed");
       }
 
-      const decision = this.parseDecision(await response.json(), authorizationRequest);
+      const decision = this.parseDecision(await this.readResponse(response), authorizationRequest);
       if (!decision.allowed) {
         throw new Error("PARC denied the requested capability");
       }
@@ -155,6 +156,28 @@ export class ParcAuthorizationClient {
       };
     } catch {
       throw this.denied();
+    }
+  }
+
+  private async readResponse(response: Response): Promise<unknown> {
+    const reader = response.body?.getReader();
+    if (!reader) throw this.denied();
+    try {
+      if (Number(response.headers.get("content-length") || 0) > 65536) {
+        throw this.denied();
+      }
+      const chunks: Uint8Array[] = [];
+      let bytes = 0;
+      for (;;) {
+        const part = await reader.read();
+        if (part.done) break;
+        bytes += part.value.byteLength;
+        if (bytes > 65536) throw this.denied();
+        chunks.push(part.value);
+      }
+      return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    } finally {
+      await reader.cancel().catch(() => undefined);
     }
   }
 
