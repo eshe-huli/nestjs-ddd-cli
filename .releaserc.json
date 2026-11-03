@@ -110,14 +110,19 @@
         "changelogFile": "CHANGELOG.md"
       }
     ],
-    "./node_modules/@semantic-release/npm/index.js",
+    [
+      "./node_modules/@semantic-release/npm/index.js",
+      {
+        "tarballDir": "release"
+      }
+    ],
     [
       "@semantic-release/github",
       {
         "assets": [
           {
-            "path": "dist/**",
-            "label": "Distribution files"
+            "path": "release/*.tgz",
+            "label": "Installable npm package"
           }
         ]
       }
