@@ -201,7 +201,7 @@ export class ParcAuthorizationClient {
     } catch {
       throw this.denied();
     }
-    if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password || value.includes("?") || value.includes("#")) {
       throw this.denied();
     }
     return value;
