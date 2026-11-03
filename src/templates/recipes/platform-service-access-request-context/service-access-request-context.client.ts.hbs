@@ -27,15 +27,38 @@ export class ServiceAccessRequestContextClient {
       );
 
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         throw new Error("Service Access request-context introspection failed");
       }
 
       return parseActiveRequestContextIntrospection(
-        await response.json(),
+        await this.readResponse(response),
         config.expectedAudience,
       );
     } catch {
       throw this.denied();
+    }
+  }
+
+  private async readResponse(response: Response): Promise<unknown> {
+    const reader = response.body?.getReader();
+    if (!reader) throw this.denied();
+    try {
+      if (Number(response.headers.get("content-length") || 0) > 65536) {
+        throw this.denied();
+      }
+      const chunks: Uint8Array[] = [];
+      let bytes = 0;
+      for (;;) {
+        const part = await reader.read();
+        if (part.done) break;
+        bytes += part.value.byteLength;
+        if (bytes > 65536) throw this.denied();
+        chunks.push(part.value);
+      }
+      return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    } finally {
+      await reader.cancel().catch(() => undefined);
     }
   }
 

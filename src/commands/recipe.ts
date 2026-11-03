@@ -1,3 +1,4 @@
+import { applyPlatformParcCatalogRecipe } from './recipes/platform-parc-catalog.recipe';
 import * as path from 'node:path';
 import chalk from 'chalk';
 import { ensureDir, writeFile } from '../utils/file.utils';
@@ -47,6 +48,7 @@ async function applyDryRunRecipe(
         dryRun: true,
         migrationTimestamp: options.migrationTimestamp,
       }),
+    'platform-parc-catalog': () => applyPlatformParcCatalogRecipe(basePath, true),
     'oidc-resource-server': () => applyOidcResourceServerRecipe(basePath, true),
     'oauth2-client-credentials': () => applyOAuth2ClientCredentialsRecipe(basePath, true),
     'oidc-bff-session': () => applyOidcBffSessionRecipe(basePath, true),
@@ -326,6 +328,12 @@ const AVAILABLE_RECIPES = {
     dependencies: [],
     devDependencies: [],
   },
+  'platform-parc-catalog': {
+    name: 'Platform PARC Catalog',
+    description: 'Versioned service permission manifests and governed catalog publication',
+    dependencies: [],
+    devDependencies: [],
+  },
   'platform-parc-authorization': {
     name: 'Platform PARC Authorization',
     description:
@@ -407,6 +415,7 @@ export async function applyRecipe(recipeName: string, options: RecipeOptions) {
     'platform-service-runtime': applyPlatformServiceRuntimeRecipe,
     'platform-context': applyPlatformContextRecipe,
     'platform-service-access-request-context': applyPlatformServiceAccessRequestContextRecipe,
+    'platform-parc-catalog': applyPlatformParcCatalogRecipe,
     'platform-parc-authorization': applyPlatformParcAuthorizationRecipe,
     'banklink-connector-contract': applyBanklinkConnectorContractRecipe,
     'oidc-dashboard': applyOidcDashboardRecipe,
