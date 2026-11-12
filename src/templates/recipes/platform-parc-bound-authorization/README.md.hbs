@@ -90,3 +90,33 @@ are bounded at 16 KiB under a five-second deadline; redirects are refused.
 Receipts must bind the exact scope, operation and resource and expire within
 PARC's five-second bound. Never cache/reuse them as durable permissions. A failed
 request may already have consumed its lease; obtain fresh authority explicitly.
+
+## Scoped grant shadow comparison
+
+Deploy a PARC version accepting optional `shadowContext` before opting a consumer
+into `shadowFacts`. Omit the option for unchanged wire compatibility with older
+PARC installations. The receipt, allow/deny decision, expiry and owner commit
+checks remain unchanged. There is no client-side grant evaluator.
+
+```typescript
+const receipt = await parc.check({
+  // ...the existing lease, credential, permission, action, resource and expected scope
+  contextDigest: digestOfOwnerVerifiedOperation,
+  shadowFacts: { amountMinor: persistedOperation.amountMinor, currency: persistedOperation.currency },
+});
+```
+
+The operation digest must cover these exact facts and the resource/version being
+authorized. Read them from persisted or independently verified owner state, never
+copy amount, currency or policy claims from browser headers. PARC accepts facts
+only from the admitted service owning the permission. Amounts are canonical
+unsigned integer strings of at most 38 digits; currency is three uppercase
+letters. Invalid optional facts produce an invalid shadow observation and do not
+change the existing decision. No facts are included in the returned receipt.
+
+PARC compares imported grants against legacy decisions separately from proposed
+resource, amount and expiry restrictions. Intentional proposal differences are
+not compatibility failures. Reports include unobserved decisions; an empty
+window, missing observations or only denied requests cannot prove full parity.
+Role/proposal administration stays in the governed PARC console, never this
+consumer client. Keep legacy enforcement until the scoped rollout is proven.
