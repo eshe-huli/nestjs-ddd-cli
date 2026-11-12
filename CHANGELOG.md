@@ -1,3 +1,9 @@
+## [3.4.0](https://github.com/eshe-huli/nestjs-ddd-cli/compare/v3.3.1...v3.4.0) (2026-11-12)
+
+### Features
+
+* **parc:** carry owner facts for scoped grant shadow comparisons ([#22](https://github.com/eshe-huli/nestjs-ddd-cli/issues/22)) ([83cacda](https://github.com/eshe-huli/nestjs-ddd-cli/commit/83cacda513c4ea5a9601adc7e40190ae535f3cb6))
+
 ## [3.3.1](https://github.com/eshe-huli/nestjs-ddd-cli/compare/v3.3.0...v3.3.1) (2026-11-03)
 
 ### Bug Fixes
