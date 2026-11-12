@@ -129,7 +129,21 @@ describe('Confidential OIDC BFF session recipe', () => {
       types: ['node'],
       noEmit: true,
     };
-    const program = ts.createProgram([path.join(sourceDir, 'index.ts')], compilerOptions);
+    const caller = path.join(sourceDir, 'caller-contract.ts');
+    await fs.writeFile(
+      caller,
+      `
+import { OpaqueSessionStore, type SessionCommands } from './index';
+export function configured(commands: SessionCommands, externalEpoch: string) {
+  // @ts-expect-error A former caller cannot omit the external restore epoch.
+  new OpaqueSessionStore(commands, 'held-client');
+  return new OpaqueSessionStore(commands, 'held-client', undefined, {}, {
+    restoreEpoch: externalEpoch,
+  });
+}
+`,
+    );
+    const program = ts.createProgram([path.join(sourceDir, 'index.ts'), caller], compilerOptions);
     expect(
       ts.formatDiagnosticsWithColorAndContext(ts.getPreEmitDiagnostics(program), {
         getCanonicalFileName: (fileName) => fileName,

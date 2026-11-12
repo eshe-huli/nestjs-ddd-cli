@@ -1,5 +1,7 @@
+import { createHash, randomUUID } from 'node:crypto';
 import { expect, test } from 'bun:test';
-import { OpaqueSessionStore } from './opaque-session-store';
+import { OpaqueSessionStore, type OpaqueSessionNamespace } from './opaque-session-store';
+const namespaceOptions = { restoreEpoch: randomUUID() };
 
 test('invalid handles and return paths never touch storage', async () => {
   let accesses = 0;
@@ -11,6 +13,9 @@ test('invalid handles and return paths never touch storage', async () => {
       },
     },
     'synthetic-client',
+    undefined,
+    {},
+    namespaceOptions,
   );
   expect(await store.read('raw.access.token', 'a'.repeat(43))).toBeNull();
   expect(
@@ -37,6 +42,7 @@ test('settings are immutable, bounded and preserve custody beyond the configured
           'client',
           undefined,
           settings,
+          namespaceOptions,
         ),
     ).toThrow('duration configuration');
   }
@@ -52,6 +58,7 @@ test('settings are immutable, bounded and preserve custody beyond the configured
     'synthetic-client',
     () => 1000,
     settings,
+    namespaceOptions,
   );
   settings.tokenRetentionSeconds = 1;
   await store.beginLogin({ next: '/' });
@@ -62,6 +69,8 @@ test('retirement requires at least one safe credential, while access admission r
     { eval: () => Promise.resolve(null) },
     'synthetic-client',
     () => 1000,
+    {},
+    namespaceOptions,
   );
   for (const tokens of [
     { expiresAt: 1 },
@@ -74,6 +83,7 @@ test('retirement requires at least one safe credential, while access admission r
     'retirement record',
   );
   const pending = {
+    epoch: createHash('sha256').update(namespaceOptions.restoreEpoch).digest('hex'),
     browser: 'a'.repeat(64),
     generation: 'b'.repeat(43),
     state: 'c'.repeat(43),
@@ -84,4 +94,128 @@ test('retirement requires at least one safe credential, while access admission r
   };
   expect(await store.completeLogin(pending, { accessToken: 'access', expiresAt: 1000 })).toBeNull();
   expect(await store.completeLogin(pending, { accessToken: 'access', expiresAt: 4601 })).toBeNull();
+});
+
+test('a missing or noncanonical external epoch holds construction before storage access', () => {
+  let accesses = 0;
+  const commands = {
+    eval: () => {
+      accesses++;
+      return Promise.resolve(null);
+    },
+  };
+  for (const namespace of [
+    undefined,
+    {},
+    { restoreEpoch: '' },
+    { restoreEpoch: ' legacy ' },
+    { restoreEpoch: 'AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA' },
+    {
+      restoreEpoch:
+        namespaceOptions.restoreEpoch.slice(0, 14) + '1' + namespaceOptions.restoreEpoch.slice(15),
+    },
+    { restoreEpoch: ` ${namespaceOptions.restoreEpoch}` },
+    { restoreEpoch: `${namespaceOptions.restoreEpoch}\n` },
+    { restoreEpoch: `${namespaceOptions.restoreEpoch}\r\n` },
+    { restoreEpoch: 1 },
+  ]) {
+    expect(
+      () =>
+        new OpaqueSessionStore(
+          commands,
+          'held',
+          undefined,
+          {},
+          namespace as OpaqueSessionNamespace,
+        ),
+    ).toThrow('external restore epoch configuration');
+  }
+  expect(accesses).toBe(0);
+});
+
+test('the external epoch is snapshotted and only active state depends on it', async () => {
+  const namespace = { restoreEpoch: randomUUID() };
+  const epoch = createHash('sha256').update(namespace.restoreEpoch).digest('hex');
+  const seen: string[][] = [];
+  const store = new OpaqueSessionStore(
+    {
+      eval: (_script, command) => {
+        seen.push(command.keys);
+        return Promise.resolve(null);
+      },
+    },
+    'immutable',
+    undefined,
+    {},
+    namespace,
+  );
+  namespace.restoreEpoch = randomUUID();
+  const begin = store.beginLogin({ next: '/' });
+  await begin;
+  const keys = seen[0]!;
+  expect(keys[0]).toContain(`:active:${epoch}:browser:`);
+  expect(keys[1]).toContain(`:active:${epoch}:pending:`);
+  expect(keys[2]).toContain(`:active:${epoch}:current:`);
+  expect(keys[3]).not.toContain(':active:');
+  expect(keys.join(';')).not.toContain(namespace.restoreEpoch);
+});
+
+test('old-epoch pending and retirement claims cannot complete through a new owner', async () => {
+  let accesses = 0;
+  const store = new OpaqueSessionStore(
+    {
+      eval: () => {
+        accesses++;
+        return Promise.resolve(null);
+      },
+    },
+    'same-client',
+    () => 1000,
+    {},
+    namespaceOptions,
+  );
+  const epoch = createHash('sha256').update(randomUUID()).digest('hex');
+  const pending = {
+    epoch,
+    browser: 'a'.repeat(64),
+    generation: 'b'.repeat(43),
+    state: 'c'.repeat(43),
+    verifier: 'd'.repeat(43),
+    nonce: 'e'.repeat(43),
+    next: '/',
+    startedAt: 1000,
+  };
+  expect(
+    await store.completeLogin(pending, { accessToken: 'synthetic', expiresAt: 2000 }),
+  ).toBeNull();
+  expect(
+    await store.settleRevocation(
+      {
+        epoch,
+        ticket: 'a'.repeat(43),
+        lease: 'b'.repeat(43),
+        tokens: { refreshToken: 'synthetic', expiresAt: 1 },
+      },
+      true,
+    ),
+  ).toBe(false);
+  expect(accesses).toBe(0);
+});
+
+test('the configured external epoch is read exactly once before validation and hashing', () => {
+  let reads = 0;
+  const namespace = {
+    get restoreEpoch() {
+      reads++;
+      return namespaceOptions.restoreEpoch;
+    },
+  };
+  new OpaqueSessionStore(
+    { eval: () => Promise.resolve(null) },
+    'snapshot',
+    undefined,
+    {},
+    namespace,
+  );
+  expect(reads).toBe(1);
 });

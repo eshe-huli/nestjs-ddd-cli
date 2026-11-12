@@ -4,6 +4,9 @@ Run `ddd recipe oidc-bff-session --path <app> --dry-run` before applying the sam
 command without `--dry-run`. Generated files live in `src/shared/oidc-bff`.
 Generation preflights every target, rejects symlinks/different owner content,
 preserves identical reruns and rolls back only unchanged files it created.
+The recipe honors `.dddrc.json` `features.tests` (default false). It creates no
+spec files unless that existing option is explicitly enabled; existing specs
+are never removed. Automated checks belong to final project validation.
 No module, route, cookie, environment variable, business policy, package manifest,
 lockfile or provider configuration is changed automatically.
 
@@ -46,7 +49,32 @@ immediate revocation. A wholly malformed/oversize response cannot safely
 disclose token material; it is rejected without session admission.
 
 `OpaqueSessionStore` accepts injected `SessionCommands`, a trusted stable client
-namespace, optional clock (integer seconds) and immutable duration settings.
+namespace, optional clock (integer seconds), immutable duration settings and a
+**mandatory fifth argument** `OpaqueSessionNamespace` containing `restoreEpoch`
+and `recordEncryption`.
+The epoch must be a canonical lowercase UUIDv4 held outside the Redis persistence
+and backup failure domain. There is no default, generated operator value or
+legacy namespace fallback. Missing/invalid configuration rejects construction
+before any storage command. Existing callers must pass their explicit trusted
+epoch after the clock/settings arguments (use `undefined` and `{}` when omitted).
+For example, the application-owned wrapper supplies its already validated
+external setting:
+
+```ts
+new OpaqueSessionStore(commands, clientId, undefined, settings, {
+  restoreEpoch: externallyCustodiedRestoreEpoch,
+  recordEncryption: parseSessionEncryptionKeyRing(externallyCustodiedKeyRingJson),
+});
+```
+
+The constructor snapshots the epoch into a hash. Active browser, pending,
+claim, current-session and session keys include that hash within the client's
+existing Redis Cluster slot. Pending/session records also carry hash provenance.
+Retirement rows, index, leases and non-admissible markers remain client-only;
+rotation does not hide restored queued credentials. `RevocationClaim.epoch` is
+hash provenance, not an operator value or permission. The lease itself binds
+that provenance, so changing the returned claim cannot settle an old-epoch
+lease through a new-epoch owner.
 Browser cookies contain only random handles; pending PKCE and token material
 remain server-side. Client-hashed Redis Cluster slots isolate keys. Lua owns
 one-time pending claim/completion, browser/generation/client binding, fresh
@@ -55,7 +83,7 @@ durable revocation enqueue/lease/ack/retry. Only successful exact pending and
 pair commit removes the staged ticket. Once any worker claims retirement, a
 durable non-admissible marker prevents later session commit through retries or
 expired leases; only completed retirement removes that marker. Expired access retains refresh custody.
-Restart uses the same backend/client namespace; there is no local fallback.
+Restart requires the same backend/client namespace and external epoch; there is no local fallback.
 
 Defaults: session 3300s, pending 600s, browser generation 1 year, provider access
 maximum 3600s, provider refresh maximum 86400s, token custody 90000s, lease 30s,
@@ -81,16 +109,106 @@ admission. Provider traits, JWT subject or an existing browser session are not
 business permissions. Per-app token retirement leaves shared provider SSO;
 global logout requires its explicitly owned provider operation.
 
-Run generated unit cases with `bun test src/shared/oidc-bff`. Actual Lua proof
-additionally requires `OIDC_BFF_TEST_VALKEY_URL` pointing to a disposable Redis
-database with a separately authorized profile. Tests use random client
-namespaces and never flush, stop or alter the server. Unit/source evidence is
-separate from CI, deployed provider behavior, browser and authorized actor proof.
+Implement and operate the actual CLI/store/application flow first. Preserve
+existing suites and defer their execution to final project validation; no
+per-edit suites or new tests are required by generation.
 
-Storage custody: key hashing and Redis Cluster hash tags do not encrypt the JSON
-values. Access/refresh credentials and PKCE material are plaintext within the
-server store. Production activation requires authenticated app-scoped Redis
-ACLs, verified private/TLS transport, and verified encryption/access controls
-for persistent storage and backups. An unauthenticated shared Redis instance is
-not a suitable production deployment. This recipe does not provision or prove
-those operator controls.
+## Encrypted session custody
+
+`parseSessionEncryptionKeyRing` accepts an explicit JSON string with exactly
+`activeKeyId` and `keys`. `keys` maps 1–8 unique key IDs (1–32 URL-safe ASCII
+characters) to canonical unpadded base64url encodings of 32 random bytes. Supply
+it from approved application-scoped secret custody outside Redis persistence
+and backups. No example key, generated operator value, default, permissive
+parser, plaintext fallback or environment lookup exists in the shared recipe.
+The consuming app owns the server-only environment name and projection.
+
+`SessionRecordEncryption` snapshots the ring. AES-256-GCM uses an independent
+random 12-byte IV and a 16-byte authentication tag for every record. HKDF-SHA256
+separates the encryption and token-pair HMAC keys. The envelope is versioned
+and identifies the key; decoding requires canonical encodings and bounded
+sizes. Authentication must succeed before decrypted bytes are exposed. Errors
+have fixed messages, without bodies, credentials, key IDs or raw exceptions.
+Crypto API contract: [Node crypto](https://nodejs.org/api/crypto.html).
+
+State, PKCE verifier, nonce and return path are encrypted in pending records;
+only the state hash and necessary routing metadata stay visible to Lua.
+Access/refresh credentials are encrypted in active and retirement records.
+Authenticated context binds the client, record purpose, original epoch,
+session/pending ID, browser, generation, expiry and pair binding where present.
+Lua retains atomic one-time claiming, exact-pair custody transfer and logout.
+The callback's authenticated pending object is held in a per-store WeakMap;
+completion uses the original encrypted claim bytes, never randomized
+reencryption. A fabricated or copied pending object cannot commit a session.
+The caller must use the same store instance for taking and completing a callback.
+
+Moved session records keep their original authenticated context when Lua queues
+retirement. A new epoch can decrypt and retire these records while old active
+handles remain fenced. Retain every old decryption key until all affected live
+records, queued tokens, restore backups and provider-lifetime reconciliation
+are retired. Deploy a ring containing both old and new keys before switching
+`activeKeyId` consistently across replicas. Mixed active keys can safely refuse
+in-flight pair transfer; keep queued credentials and restart fresh login rather
+than admitting an unmatched pair. Encryption-key rotation and restore-epoch
+rotation are different operations.
+
+No legacy plaintext record is accepted or silently converted. This is a held
+pre-activation format change. An existing deployment needs an explicitly owned
+quiescence, credential retirement/lifetime cutoff, epoch advance and rollout;
+do not delete old queues or introduce a plaintext admission fallback. Existing
+spec fixtures that omitted a key ring need owner adaptation at final validation;
+historical plaintext proof does not cover this format.
+
+Record bounds are 70,000 plaintext bytes and 100,000 stored/command characters,
+allowing both existing 16 KiB token fields with JSON escaping and envelope expansion. Payload
+encryption does not encrypt routing metadata or protect record deletion,
+rollback, Redis administration, key custody or transport. Production still
+requires authenticated app-scoped ACLs, verified private/TLS transport,
+persistence/backup access controls, recovery reconciliation and exact operator
+provenance. An unauthenticated shared Redis instance remains held. This recipe
+does not provision or prove those controls.
+
+
+## Restore and retirement acceptance
+
+A normal independent application logout rotates only that browser's generation.
+Changing the external restore epoch is an operator recovery boundary, not an
+ordinary logout or shared-provider SSO logout. Current provider/canonical checks
+remain required; they cannot prove that a restored local logout generation was
+not rolled back.
+
+Before restoring Redis persistence, hold every affected application and its
+retirement workers. The operator must advance each affected client's externally
+custodied UUIDv4 outside the restored dataset and confirm the value cannot be
+restored from the same backup. Reusing a previous epoch permits pre-logout
+session/callback replay. Keep the held state until recovery reconciliation and
+storage controls are verified, then start every owner with the same current
+per-client epoch. A sibling client's epoch and keys remain independent.
+
+Under the advanced epoch, old cookies, pending callbacks and already claimed
+callbacks cannot resume admission; consumers must take the current pending
+record before exchanging a provider code. Same-epoch process/connection restart
+still works. This is explicit operator fencing, not automatic rollback detection:
+a process left running with the old epoch can still address old active keys.
+
+Retirement custody from the restored backup remains visible to the new owner.
+Existing leases expire normally; old-epoch acknowledgements through a new owner
+are refused and marker fences remain. A current owner can then lease and settle
+retirement after the provider operation succeeds. Restored active token rows in
+an abandoned epoch are not automatically enqueued or swept by this recipe.
+The operator must explicitly reconcile them before service resumes.
+
+Epoch rotation does **not** revoke provider tokens and cannot reconstruct token
+material minted, queued or deleted after the backup snapshot. A stale snapshot
+can lose those credentials and retirement tickets altogether. Recovery therefore
+also requires an independently proven provider cleanup/revocation or conservative
+provider-lifetime cutoff and externally held custody reconciliation. Never call
+browser denial a successful provider retirement. This recipe creates no operator
+epoch, secret, worker schedule or recovery-provider call.
+
+The opt-in disposable Redis suite uses native `DUMP`/`RESTORE` on only random
+synthetic client keys to reproduce stale snapshot rollback. It demonstrates the
+unsafe reused-epoch control, rotated-epoch denial before an exchange seam,
+client isolation, same-epoch restart, cross-epoch retirement visibility and
+stale lease acknowledgement refusal. It does not prove deployed AOF recovery,
+external custody, operator quiescence, provider cleanup or authorized actors.

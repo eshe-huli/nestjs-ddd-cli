@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { createClient } from '@redis/client';
+import { createClient, RESP_TYPES } from '@redis/client';
 import { createValkeySessionCommands } from './valkey-session-store';
 import { createHash, randomUUID } from 'node:crypto';
 import {
@@ -9,6 +9,7 @@ import {
   type PendingLogin,
 } from './opaque-session-store';
 
+const namespaceOptions = { restoreEpoch: randomUUID() };
 const address = process.env.OIDC_BFF_TEST_VALKEY_URL;
 const integration = address ? test : test.skip;
 const client = createClient({
@@ -28,7 +29,13 @@ const commands = {
     client.withAbortSignal(AbortSignal.timeout(1000)).eval(script, options),
 };
 function fixture() {
-  return new OpaqueSessionStore(commands, `synthetic-${randomUUID()}`);
+  return new OpaqueSessionStore(
+    commands,
+    `synthetic-${randomUUID()}`,
+    undefined,
+    {},
+    namespaceOptions,
+  );
 }
 function pair() {
   return {
@@ -237,12 +244,12 @@ integration(
 
 integration('another BFF instance can read a session with bounded absolute expiry', async () => {
   const id = `synthetic-${randomUUID()}`;
-  const store = new OpaqueSessionStore(commands, id);
+  const store = new OpaqueSessionStore(commands, id, undefined, {}, namespaceOptions);
   const flow = await login(store);
-  const restarted = new OpaqueSessionStore(commands, id);
+  const restarted = new OpaqueSessionStore(commands, id, undefined, {}, namespaceOptions);
   expect((await restarted.read(flow.sid, flow.generation))?.accessToken).toBe(pair().accessToken);
   const keys = await client.keys(
-    `oidc:bff:{${createHash('sha256').update(id).digest('hex')}}:session:*`,
+    `oidc:bff:{${createHash('sha256').update(id).digest('hex')}}:active:${createHash('sha256').update(namespaceOptions.restoreEpoch).digest('hex')}:session:*`,
   );
   const ttls = await Promise.all(keys.map((key) => client.ttl(key)));
   expect(ttls.every((ttl) => ttl > 0 && ttl <= TOKEN_RETENTION_SECONDS)).toBe(true);
@@ -250,9 +257,17 @@ integration('another BFF instance can read a session with bounded absolute expir
     commands,
     id,
     () => Math.floor(Date.now() / 1000) + SESSION_SECONDS,
+    {},
+    namespaceOptions,
   );
   expect(await logicalExpiry.read(flow.sid, flow.generation)).toBeNull();
-  const expired = new OpaqueSessionStore(commands, id, () => pair().expiresAt + 1);
+  const expired = new OpaqueSessionStore(
+    commands,
+    id,
+    () => pair().expiresAt + 1,
+    {},
+    namespaceOptions,
+  );
   expect(await expired.read(flow.sid, flow.generation)).toBeNull();
 });
 
@@ -260,7 +275,7 @@ integration(
   'logout atomically retains own tokens for restart-safe revocation without clearing sibling applications',
   async () => {
     const id = `synthetic-${randomUUID()}`;
-    const store = new OpaqueSessionStore(commands, id);
+    const store = new OpaqueSessionStore(commands, id, undefined, {}, namespaceOptions);
     const siblingStore = fixture();
     const firstFlow = await login(store),
       sibling = await login(siblingStore);
@@ -269,7 +284,7 @@ integration(
     expect(await store.read(firstFlow.sid, firstFlow.generation)).toBeNull();
     expect(await siblingStore.claimRevocation(retired.revocationTicket!)).toBeNull();
     expect(await siblingStore.read(sibling.sid, sibling.generation)).not.toBeNull();
-    const restarted = new OpaqueSessionStore(commands, id);
+    const restarted = new OpaqueSessionStore(commands, id, undefined, {}, namespaceOptions);
     const claims = await Promise.all(
       Array.from({ length: 6 }, () => restarted.claimRevocation(retired.revocationTicket!)),
     );
@@ -320,9 +335,15 @@ integration(
 
 integration('an expired browser session retains refresh custody until its own logout', async () => {
   const id = `synthetic-${randomUUID()}`;
-  const store = new OpaqueSessionStore(commands, id);
+  const store = new OpaqueSessionStore(commands, id, undefined, {}, namespaceOptions);
   const flow = await login(store);
-  const later = new OpaqueSessionStore(commands, id, () => pair().expiresAt + 1);
+  const later = new OpaqueSessionStore(
+    commands,
+    id,
+    () => pair().expiresAt + 1,
+    {},
+    namespaceOptions,
+  );
   expect(await later.read(flow.sid, flow.generation)).toBeNull();
   const retired = (await later.logout(flow.browser, flow.sid))!;
   const claim = (await later.claimRevocation(retired.revocationTicket!))!;
@@ -338,6 +359,9 @@ integration('storage outages fail closed and do not manufacture an anonymous ses
       },
     },
     'outage',
+    undefined,
+    {},
+    namespaceOptions,
   );
   await expect(store.beginLogin({ next: '/' })).rejects.toThrow('synthetic unavailable');
   await expect(store.read(`v3.${'a'.repeat(43)}`, 'b'.repeat(43))).rejects.toThrow(
@@ -355,6 +379,9 @@ test('malformed handles and external return paths are rejected without storage a
       },
     },
     'safe-input',
+    undefined,
+    {},
+    namespaceOptions,
   );
   expect(await store.read('signed.access.token', 'a'.repeat(43))).toBeNull();
   expect(
@@ -370,20 +397,32 @@ integration(
   'expired leases are reclaimable after restart while stale owners cannot acknowledge successors',
   async () => {
     const id = `synthetic-${randomUUID()}`;
-    const store = new OpaqueSessionStore(commands, id, undefined, {
-      leaseSeconds: 1,
-      retrySeconds: 1,
-    });
+    const store = new OpaqueSessionStore(
+      commands,
+      id,
+      undefined,
+      {
+        leaseSeconds: 1,
+        retrySeconds: 1,
+      },
+      namespaceOptions,
+    );
     const ticket = await store.queueRevocation({
       refreshToken: 'synthetic-refresh-only',
       expiresAt: 1,
     });
     const first = (await store.claimRevocation(ticket))!;
     await new Promise((resolve) => setTimeout(resolve, 1100));
-    const restarted = new OpaqueSessionStore(commands, id, undefined, {
-      leaseSeconds: 1,
-      retrySeconds: 1,
-    });
+    const restarted = new OpaqueSessionStore(
+      commands,
+      id,
+      undefined,
+      {
+        leaseSeconds: 1,
+        retrySeconds: 1,
+      },
+      namespaceOptions,
+    );
     const successor = (await restarted.claimRevocation(ticket))!;
     expect(successor.lease).not.toBe(first.lease);
     expect(await store.settleRevocation(first, true)).toBe(false);
@@ -415,13 +454,13 @@ integration(
     const first = createValkeySessionCommands({ url: address!, trustedInternalPlaintext: true });
     const second = createValkeySessionCommands({ url: address!, trustedInternalPlaintext: true });
     try {
-      const initial = new OpaqueSessionStore(first, namespace);
+      const initial = new OpaqueSessionStore(first, namespace, undefined, {}, namespaceOptions);
       const ticket = await initial.queueRevocation({
         refreshToken: 'synthetic_refresh_only',
         expiresAt: 1,
       });
       first.close();
-      const restarted = new OpaqueSessionStore(second, namespace);
+      const restarted = new OpaqueSessionStore(second, namespace, undefined, {}, namespaceOptions);
       const claim = await restarted.claimRevocation(ticket);
       expect(claim?.tokens.refreshToken).toBe('synthetic_refresh_only');
       expect(claim?.tokens.accessToken).toBeUndefined();
@@ -460,7 +499,13 @@ integration(
 
 integration('expired retirement leases cannot restore session admissibility', async () => {
   const namespace = `synthetic-fencing-${randomUUID()}`;
-  const store = new OpaqueSessionStore(commands, namespace, undefined, { leaseSeconds: 1 });
+  const store = new OpaqueSessionStore(
+    commands,
+    namespace,
+    undefined,
+    { leaseSeconds: 1 },
+    namespaceOptions,
+  );
   const start = (await store.beginLogin({ next: '/', fresh: true }))!;
   const pending = (await store.takeLogin(
     start.pendingHandle,
@@ -478,3 +523,114 @@ integration('expired retirement leases cannot restore session admissibility', as
   expect(await store.settleRevocation(claim, true)).toBe(false);
   expect(await store.settleRevocation(nextClaim, true)).toBe(true);
 });
+
+integration(
+  'a restored native snapshot cannot resurrect old sessions or pending callbacks after external epoch rotation',
+  async () => {
+    const id = `synthetic-restore-${randomUUID()}`;
+    const oldNamespace = { restoreEpoch: randomUUID() };
+    const newNamespace = { restoreEpoch: randomUUID() };
+    const original = new OpaqueSessionStore(commands, id, undefined, {}, oldNamespace);
+    const flow = await login(original);
+    const pending = (await original.beginLogin({
+      browser: flow.browser,
+      generation: flow.generation,
+      next: '/',
+    }))!;
+    const exchanging = (await original.beginLogin({ next: '/' }))!;
+    const claim = (await original.takeLogin(
+      exchanging.pendingHandle,
+      exchanging.browser,
+      exchanging.generation,
+      exchanging.pending.state,
+    ))!;
+    const retainedTicket = await original.queueRevocation({
+      refreshToken: 'synthetic-pre-snapshot',
+      expiresAt: 1,
+    });
+    const sibling = fixture();
+    const siblingFlow = await login(sibling);
+    const prefix = `oidc:bff:{${createHash('sha256').update(id).digest('hex')}}:`;
+    const snapshot = [];
+    // Actual Redis native serialization; all rows belong only to this random synthetic client.
+    const binaryClient = client.withTypeMapping({ [RESP_TYPES.BLOB_STRING]: Buffer });
+    for (const key of await client.keys(`${prefix}*`)) {
+      const data = await binaryClient.dump(key);
+      const ttl = await client.pTTL(key);
+      if (!data || ttl === -2 || ttl === 0) throw new Error('Synthetic snapshot capture failed');
+      snapshot.push({ key, data, ttl: ttl === -1 ? 0 : ttl });
+    }
+    expect(snapshot.length).toBeGreaterThanOrEqual(8);
+    const logout = (await original.logout(flow.browser, flow.sid, pending.pendingHandle))!;
+    await original.logout(exchanging.browser);
+    expect(await original.read(flow.sid, flow.generation)).toBeNull();
+    expect(await original.revocationPending(logout.revocationTicket!)).toBe(true);
+    // Replacing only these captured client rows reproduces rollback, never server-wide flush.
+    const changedKeys = await client.keys(`${prefix}*`);
+    if (changedKeys.length) await client.del(changedKeys);
+    for (const row of snapshot) await client.restore(row.key, row.ttl, row.data);
+    const unchangedEpoch = new OpaqueSessionStore(commands, id, undefined, {}, oldNamespace);
+    expect(await unchangedEpoch.read(flow.sid, flow.generation)).not.toBeNull();
+    const rotated = new OpaqueSessionStore(commands, id, undefined, {}, newNamespace);
+    const restarted = new OpaqueSessionStore(commands, id, undefined, {}, newNamespace);
+    expect(await rotated.read(flow.sid, flow.generation)).toBeNull();
+    expect(await restarted.read(flow.sid, flow.generation)).toBeNull();
+    let exchanges = 0;
+    const taken = await rotated.takeLogin(
+      pending.pendingHandle,
+      pending.browser,
+      pending.generation,
+      pending.pending.state,
+    );
+    if (taken) exchanges++;
+    expect(taken).toBeNull();
+    expect(exchanges).toBe(0);
+    expect(await rotated.completeLogin(claim, pair())).toBeNull();
+    expect(await rotated.revocationPending(retainedTicket)).toBe(true);
+    // Rotation denies browser admission; it cannot recover credentials first queued after backup.
+    expect(await rotated.revocationPending(logout.revocationTicket!)).toBe(false);
+    expect(await sibling.read(siblingFlow.sid, siblingFlow.generation)).not.toBeNull();
+    const fresh = await login(rotated);
+    expect(await restarted.read(fresh.sid, fresh.generation)).not.toBeNull();
+    expect(await unchangedEpoch.read(fresh.sid, fresh.generation)).toBeNull();
+  },
+);
+
+integration(
+  'rotation keeps client-only retirement custody and markers while fencing old worker acknowledgements',
+  async () => {
+    const id = `synthetic-retirement-epoch-${randomUUID()}`;
+    const beforeNamespace = { restoreEpoch: randomUUID() };
+    const afterNamespace = { restoreEpoch: randomUUID() };
+    const settings = { leaseSeconds: 1 };
+    const before = new OpaqueSessionStore(commands, id, undefined, settings, beforeNamespace);
+    const start = (await before.beginLogin({ next: '/' }))!;
+    const pending = (await before.takeLogin(
+      start.pendingHandle,
+      start.browser,
+      start.generation,
+      start.pending.state,
+    ))!;
+    const tokens = pair();
+    const ticket = await before.queueRevocation(tokens, 600);
+    const oldClaim = (await before.claimRevocation(ticket))!;
+    const after = new OpaqueSessionStore(commands, id, undefined, settings, afterNamespace);
+    expect(await after.revocationPending(ticket)).toBe(true);
+    expect(await after.settleRevocation(oldClaim, true)).toBe(false);
+    // Tampering only the returned provenance cannot acknowledge a lease from the old epoch.
+    const newEpoch = createHash('sha256').update(afterNamespace.restoreEpoch).digest('hex');
+    expect(await after.settleRevocation({ ...oldClaim, epoch: newEpoch }, true)).toBe(false);
+    expect(await after.claimRevocation(ticket)).toBeNull();
+    expect(await after.completeLogin(pending, tokens, ticket)).toBeNull();
+    expect(await before.completeLogin(pending, tokens, ticket)).toBeNull();
+    expect(await fixture().claimRevocation(ticket)).toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const successor = (await after.claimRevocation(ticket))!;
+    expect(successor.epoch).toBe(newEpoch);
+    expect(successor.tokens).toEqual(tokens);
+    expect(await after.settleRevocation(oldClaim, true)).toBe(false);
+    const restart = new OpaqueSessionStore(commands, id, undefined, settings, afterNamespace);
+    expect(await restart.settleRevocation(successor, true)).toBe(true);
+    expect(await restart.revocationPending(ticket)).toBe(false);
+  },
+);
