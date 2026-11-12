@@ -1,0 +1,56 @@
+{
+  "hash": "53ca0a9f7c946e0617708deae2915e96de52acc1",
+  "message": "feat(generator)!: deliver verified identity recipes for maintained Node runtimes\n\nPublish the reviewed additive identity recipes and already-accepted generator baseline through the existing registry workflow. The missing v3.2.2 tag is restored at the published package's verified gitHead, 978a49abe04b4daeebed6a6d7b06bd2a421eb070, after checking registry metadata, archive integrity, source version and ancestry. The current exact PR head passes all four Node CI matrix jobs; isolated consumer/runtime proof and the separate inherited full-order Bun fixture failure remain recorded.\n\nBREAKING CHANGE: The next published CLI requires Node >=18 instead of the previously published package's Node >=14. This matches the existing checked-in maintained-runtime contract. Node 14/16 users must retain version 3.2.2; this release must use the next major version rather than silently changing their supported runtime in a minor update.",
+  "published": {
+    "gitHead": "978a49abe04b4daeebed6a6d7b06bd2a421eb070",
+    "version": "3.2.2",
+    "engines": {
+      "node": ">=14.0.0"
+    }
+  },
+  "parentAnalyzer": {
+    "preset": "conventionalcommits",
+    "releaseRules": [
+      {
+        "type": "feat",
+        "release": "minor"
+      },
+      {
+        "type": "fix",
+        "release": "patch"
+      },
+      {
+        "type": "perf",
+        "release": "patch"
+      },
+      {
+        "type": "revert",
+        "release": "patch"
+      },
+      {
+        "type": "docs",
+        "release": "patch"
+      },
+      {
+        "type": "chore",
+        "release": false
+      },
+      {
+        "type": "refactor",
+        "release": "patch"
+      },
+      {
+        "type": "test",
+        "release": false
+      },
+      {
+        "type": "build",
+        "release": false
+      },
+      {
+        "type": "ci",
+        "release": false
+      }
+    ]
+  }
+}
