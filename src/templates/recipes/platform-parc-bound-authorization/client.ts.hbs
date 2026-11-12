@@ -1,5 +1,18 @@
 import { BoundedJsonHttpClient } from '../../auth/oauth2-token-introspection/bounded-json-http.client';
 
+export interface ParcShadowFacts {
+  /** Canonical integer string, never a floating-point amount. */
+  amountMinor: string;
+  currency: string;
+}
+
+/** Optional diagnostic facts. They cannot alter or replace the bound receipt. */
+function shadowContext(facts: ParcShadowFacts, contextDigest: string) {
+  if (!facts || typeof facts.amountMinor !== 'string' || !/^(0|[1-9][0-9]{0,37})$/.test(facts.amountMinor) ||
+      typeof facts.currency !== 'string' || !/^[A-Z]{3}$/.test(facts.currency)) return null;
+  return { contractVersion: 1, contextDigest, facts: { amountMinor: facts.amountMinor, currency: facts.currency } };
+}
+
 export interface ParcBoundRequest {
   /** Fresh opaque SA lease. PARC consumes it; do not introspect it first. */
   lease: string;
@@ -10,6 +23,9 @@ export interface ParcBoundRequest {
   resource: { type: string; id: string };
   /** SHA-256 of the owner-verified operation material. */
   contextDigest: string;
+  /** Opt-in shadow comparison only. Read from the same owner material covered by contextDigest.
+   * Enable only after the receiving PARC API supports shadowContext. */
+  shadowFacts?: ParcShadowFacts;
   /** Persisted owner scope or an untrusted route selector; trusted only after exact receipt matching. */
   expected: { businessId: string; clientAppId: string; subjectId?: string };
 }
@@ -75,6 +91,10 @@ export class ParcBoundAuthorizationClient {
     };
     if (typeof request.contextDigest !== 'string' ||
         !/^[a-f0-9]{64}$/.test(request.contextDigest)) this.invalid();
+    // Invalid optional facts are recorded as invalid shadow context without changing enforcement.
+    const payload = input.shadowFacts === undefined ? request : {
+      ...request, shadowContext: shadowContext(input.shadowFacts, request.contextDigest),
+    };
     const expected = {
       businessId: this.id(input?.expected?.businessId),
       clientAppId: this.id(input?.expected?.clientAppId),
@@ -92,7 +112,7 @@ export class ParcBoundAuthorizationClient {
           'x-request-context-lease': lease,
           'x-service-access-credential': credential,
         },
-      }).postJson(['v1', 'decisions', 'check-bound'], request);
+      }).postJson(['v1', 'decisions', 'check-bound'], payload);
     } catch { throw new ParcBoundAuthorizationError('unavailable'); }
     this.requireTls();
     const fail = (): never => { throw new ParcBoundAuthorizationError('invalid_receipt'); };
