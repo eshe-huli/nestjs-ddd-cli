@@ -11,10 +11,13 @@ this recipe does not replace an existing outbox or enable a live consumer.
    `KafkaTransactionalHandler`, declare/export it in its owning Nest module,
    then use `KafkaConsumerModule.register(options, Handler, [HandlerOwnerModule])`.
    Do not redeclare the handler provider in the consumer module.
-4. Supply KafkaConfig from validated application configuration, with TLS/SASL
+4. Set `enabled: false` for held source rollouts; this makes no broker connection.
+   Omitted `enabled` preserves the existing startup behavior. Enable only after
+   schema installation, producer/topic authorization and replay policy are accepted.
+5. Supply KafkaConfig from validated application configuration, with TLS/SASL
    where required. Never embed credentials. Set explicit topics, a stable group
    per independently maintained projection and a deliberate `fromBeginning` value.
-5. Enable Nest shutdown hooks. Keep database handlers within the session timeout.
+6. Enable Nest shutdown hooks. Keep database handlers within the session timeout.
 
 ## Debezium contract
 
