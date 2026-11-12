@@ -1,0 +1,145 @@
+import { createHash } from 'node:crypto';
+
+export type CatalogPermission = {
+  key: string;
+  action: string;
+  description: string;
+  surface: 'private-admin' | 'internal-api' | 'public-api';
+  capabilities: string[];
+};
+export type CatalogRole = {
+  key: string;
+  description: string;
+  permissions: string[];
+};
+export type CatalogManifest = {
+  service: string;
+  version: number;
+  permissions: CatalogPermission[];
+  roles: CatalogRole[];
+};
+
+/** Catalog declarations describe authority; they never assign it. */
+export class CatalogManifestService {
+  parse(input: unknown): CatalogManifest {
+    const raw = this.record(input, [
+      'service',
+      'version',
+      'permissions',
+      'roles',
+    ]);
+    const service = this.identifier(raw.service, /^[a-z][a-z0-9-]{0,62}$/);
+    if (
+      !Number.isInteger(raw.version) ||
+      (raw.version as number) < 1 ||
+      (raw.version as number) > 2147483647
+    )
+      this.invalid('version');
+    const permissions = this.array(raw.permissions, 500).map((value) => {
+      const p = this.record(value, [
+        'key',
+        'action',
+        'description',
+        'surface',
+        'capabilities',
+      ]);
+      const key = this.identifier(p.key);
+      const action = this.identifier(p.action);
+      if (
+        key !== `${service}.${action}` ||
+        action.startsWith('permission-catalog.') ||
+        action.startsWith('access.')
+      )
+        this.invalid('permission namespace or reserved administrative action');
+      if (
+        !['private-admin', 'internal-api', 'public-api'].includes(
+          p.surface as string,
+        )
+      )
+        this.invalid('surface');
+      const capabilities = this.array(p.capabilities, 50).map((v) =>
+        this.identifier(v),
+      );
+      this.unique(capabilities);
+      return {
+        key,
+        action,
+        description: this.description(p.description),
+        surface: p.surface as CatalogPermission['surface'],
+        capabilities: capabilities.sort(),
+      };
+    });
+    if (!permissions.length) this.invalid('permissions');
+    this.unique(permissions.map((p) => p.key));
+    const keys = new Set(permissions.map((p) => p.key));
+    const roles = this.array(raw.roles, 50).map((value) => {
+      const r = this.record(value, ['key', 'description', 'permissions']);
+      const key = this.identifier(r.key, /^[a-z][a-z0-9-]{0,62}$/);
+      const grants = this.array(r.permissions, 500).map((v) =>
+        this.identifier(v),
+      );
+      if (!grants.length || grants.some((p) => !keys.has(p)))
+        this.invalid('role permissions');
+      this.unique(grants);
+      return {
+        key,
+        description: this.description(r.description),
+        permissions: grants.sort(),
+      };
+    });
+    this.unique(roles.map((r) => r.key));
+    return {
+      service,
+      version: raw.version as number,
+      permissions: permissions.sort((a, b) =>
+        a.key < b.key ? -1 : a.key > b.key ? 1 : 0,
+      ),
+      roles: roles.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)),
+    };
+  }
+
+  digest(manifest: CatalogManifest): string {
+    return createHash('sha256').update(JSON.stringify(manifest)).digest('hex');
+  }
+
+  private record(value: unknown, keys: string[]): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      this.invalid('object');
+    const r = value as Record<string, unknown>;
+    if (
+      Object.keys(r).length !== keys.length ||
+      keys.some((k) => !Object.prototype.hasOwnProperty.call(r, k))
+    )
+      this.invalid('fields');
+    return r;
+  }
+  private array(value: unknown, max: number): unknown[] {
+    if (!Array.isArray(value) || value.length > max) this.invalid('array');
+    return value as unknown[];
+  }
+  private identifier(
+    value: unknown,
+    pattern = /^[a-z][a-z0-9._-]{0,199}$/,
+  ): string {
+    if (typeof value !== 'string' || !pattern.test(value))
+      this.invalid('identifier');
+    return value;
+  }
+  private description(value: unknown): string {
+    if (
+      typeof value !== 'string' ||
+      !value.trim() ||
+      value !== value.trim() ||
+      value.length > 1000 ||
+      /[\p{Cc}\p{Cf}]/u.test(value)
+    )
+      this.invalid('description');
+    return value;
+  }
+  private unique(values: string[]): void {
+    if (new Set(values).size !== values.length) this.invalid('duplicate entry');
+  }
+  private invalid(field: string): never {
+    throw new Error(`Invalid service catalog: ${field}`);
+  }
+}

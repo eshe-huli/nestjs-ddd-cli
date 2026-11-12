@@ -72,6 +72,7 @@ export interface ParcDecisionResponse {
   allowed: boolean;
   decisionReference: string;
   decisionId?: string;
+  decidedAt: string;
 }
 
 export interface ParcAccessDecisionReceipt extends ParcDecisionResponse {
@@ -124,13 +125,14 @@ export class ParcAuthorizationClient {
       permission: this.requiredString(target.capability),
       action: this.optionalString(target.action),
     };
-    const baseUrl = this.requiredConfig("PARC_URL").replace(/\\/+$/, "");
+    const baseUrl = this.baseUrl();
     const internalApiKey = this.requiredConfig("PARC_INTERNAL_API_KEY");
     const timeoutMs = this.timeoutMs();
 
     try {
       const response = await fetch(baseUrl + "/v1/decisions/check", {
         method: "POST",
+        redirect: "error",
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
@@ -141,10 +143,11 @@ export class ParcAuthorizationClient {
       });
 
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         throw new Error("PARC decision request failed");
       }
 
-      const decision = this.parseDecision(await response.json());
+      const decision = this.parseDecision(await this.readResponse(response), authorizationRequest);
       if (!decision.allowed) {
         throw new Error("PARC denied the requested capability");
       }
@@ -154,20 +157,52 @@ export class ParcAuthorizationClient {
         allowed: true,
         decisionReference: decision.decisionReference,
         ...(decision.decisionId ? { decisionId: decision.decisionId } : {}),
-        decidedAt: new Date().toISOString(),
+        decidedAt: decision.decidedAt,
       };
     } catch {
       throw this.denied();
     }
   }
 
-  private parseDecision(payload: unknown): ParcDecisionResponse {
+  private async readResponse(response: Response): Promise<unknown> {
+    const reader = response.body?.getReader();
+    if (!reader) throw this.denied();
+    try {
+      if (Number(response.headers.get("content-length") || 0) > 65536) {
+        throw this.denied();
+      }
+      const chunks: Uint8Array[] = [];
+      let bytes = 0;
+      for (;;) {
+        const part = await reader.read();
+        if (part.done) break;
+        bytes += part.value.byteLength;
+        if (bytes > 65536) throw this.denied();
+        chunks.push(part.value);
+      }
+      return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    } finally {
+      await reader.cancel().catch(() => undefined);
+    }
+  }
+
+  private parseDecision(payload: unknown, request: ParcDecisionCheckRequest): ParcDecisionResponse {
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
       throw this.denied();
     }
 
     const record = payload as Record<string, unknown>;
     if (typeof record.allowed !== "boolean") {
+      throw this.denied();
+    }
+
+    for (const key of ["subjectId", "businessId", "clientAppId", "service", "permission"] as const) {
+      if (record[key] !== request[key]) throw this.denied();
+    }
+    if (record.action !== (request.action ?? null)) throw this.denied();
+    const decidedAt = this.requiredString(record.decidedAt);
+    const instant = new Date(decidedAt);
+    if (!Number.isFinite(instant.getTime()) || instant.toISOString() !== decidedAt) {
       throw this.denied();
     }
 
@@ -181,7 +216,23 @@ export class ParcAuthorizationClient {
       allowed: record.allowed,
       decisionReference,
       ...(decisionId ? { decisionId } : {}),
+      decidedAt,
     };
+  }
+
+  private baseUrl(): string {
+    if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") throw this.denied();
+    const value = this.requiredConfig("PARC_URL").replace(/\\/+$/, "");
+    let parsed: URL;
+    try {
+      parsed = new URL(value);
+    } catch {
+      throw this.denied();
+    }
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password || value.includes("?") || value.includes("#")) {
+      throw this.denied();
+    }
+    return value;
   }
 
   private requiredConfig(name: "PARC_URL" | "PARC_INTERNAL_API_KEY"): string {
@@ -314,6 +365,13 @@ falling back to this endpoint is not supported.
 The target may narrow business and application scope; otherwise the actor's
 trusted platform context supplies them. Missing context, required scope, PARC
 configuration, transport success, or a valid allow receipt denies access.
+The response must echo the exact subject, business, application, service,
+permission and action requested. The receipt preserves PARC's canonical
+decision timestamp; redirects and responses with missing scope are rejected.
+\`PARC_URL\` must use HTTPS without embedded credentials, a query or a fragment.
+Certificate verification must remain enabled, including on each decision call.
+For a private CA, configure \`NODE_EXTRA_CA_CERTS\` before starting Node;
+\`NODE_TLS_REJECT_UNAUTHORIZED=0\` is rejected before sending credentials.
 
 ## Ownership And Audit
 
